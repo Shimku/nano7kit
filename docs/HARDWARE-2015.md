@@ -2,7 +2,7 @@
 
 | iPod | Mac | Result |
 |---|---|---|
-| Mid-2015 nano 7G (MKN52, 16 GB) | Intel, macOS 13.5, through a USB-A hub | 1.0 on nano7-untethered, then 1.1 on NanoApps 1.0 (flashed with `nabase flash`): apps, music, Mario 64, Temple Run, PvZ Portable and the PocketJS apps work. Fruit Ninja opens and its menu works, but swipes in a round are unreliable on 1.1 |
+| Mid-2015 nano 7G (MKN52, 16 GB) | Intel, macOS 13.5, through a USB-A hub | 1.0 on nano7-untethered, then 1.1 on NanoApps 1.0 (flashed with `nabase flash`): apps, music, Mario 64, PvZ Portable, Temple Run and the PocketJS apps work. Fruit Ninja opens and its menu works, but swipes in a round are unreliable on 1.1 |
 | 2012 nano 7G, 16 GB | Linux (nano7-untethered) | Tested upstream, not with nano7kit |
 
 The Mid-2015 model runs the same firmware 1.1.2 (39A10023) as the 2012 model but

@@ -17,7 +17,7 @@ nano7-untethered
   fetched=yes, file hashes in upstream/lock.json, local changes in upstream/nano7-untethered.patch
 
 ipod_sun_untethered (as bundled in nano7-untethered)
-  url=https://github.com/nfzerox/ipod_sun_untethered
+  url=https://github.com/nfzerox/ipod_sun_untethered (404 as of Nov 2026; the copy inside nano7-untethered is used)
   bundled_commit_recorded_in_release_json=5383f7f87b87c861f7063d201b3b19d075538fba
   licence=GPL-3.0
 

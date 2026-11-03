@@ -1,14 +1,13 @@
 # Porting games and apps to the iPod nano 7G
 
-Everything here runs on your Mac. Only the Disk Mode copy at the end writes to the
-iPod ([BUTTONS.md](BUTTONS.md)). Ports need your own copy of the game: a recipe
-checks your file and writes everything derived from it to ignored folders (`build/`,
-`untether/artifacts/extra/Data/<Game>`). Never commit a ROM, an `.ipa` or game data.
-olievans123's port repos state no licence: fetch them at a pinned commit, credit
-him, and don't copy them in.
+All of this runs on the Mac. Only the final Disk Mode copy writes to the iPod. A port
+takes the user's own copy of the game, checks it, and writes everything derived from it
+to ignored folders (`build/`, `untether/artifacts/extra/Data/<Game>`). Don't commit ROMs,
+`.ipa` files or game data. olievans123's port repos have no licence, so fetch them at a
+pinned commit and credit him rather than copying them in.
 
-Three ways in, from least to most work: a NanoApps app in C, a PocketJS app in
-TypeScript, or a native port of a big game.
+From least to most work: a NanoApps app in C, a PocketJS app in TypeScript, or a native
+port of a big game. The case studies below are in order of how well they run today.
 
 ## A NanoApps app
 
@@ -57,7 +56,7 @@ See [POCKETJS.md](POCKETJS.md).
    reads addresses from one build, so any other is refused
    (`inspect_payload` in `host/fruitninja_rc.py` and `host/templerun.py`).
 2. **Pick the route.** If there is source (an open engine or a decompilation), port
-   its platform layer: PvZ Portable and Mario 64. If there is only the iOS binary,
+   its platform layer: Mario 64 and PvZ Portable. If there is only the iOS binary,
    recompile it to C: Temple Run and Fruit Ninja. Each original function becomes a
    C function, registers become locals, guest memory is one block, and calls into
    iOS libraries go to a small runtime you write.
@@ -74,56 +73,6 @@ See [POCKETJS.md](POCKETJS.md).
 6. **Check before writing.** `./start apps add 'Fruit Ninja' --ipa FILE --plan`
    (also Temple Run and PvZ Portable with `--payload`) checks the file, the tools and
    the memory, and writes nothing. `./start port budget FILE.hbapp` checks the size.
-
-### Fruit Ninja (iOS, recompiled by nano7kit)
-
-Files: `games/fruitninja`, `host/fruitninja_rc.py`. The approach follows
-olievans123's Temple Run port; none of its code is used.
-
-- **Input:** decrypted Fruit Ninja 1.0, `com.Halfbrick.Fruit`, thin armv6 executable
-  `67754af4...bd7d61`.
-- **Recompiler** (`tools/recomp.py`, `tools/macho.py`): Thumb to C, starting from the
-  engine's `IPhoneInterface` entry points (start-up, update, draw, touch). OpenFeint,
-  Facebook and OAuth code is left out. The music call is stubbed, so it is silent.
-- **Runtime** (`rt/`): guest memory and dispatch (`rt_core.c`), the iOS calls the
-  engine makes (`rt_imports.c`; the 8.6 MB `fileArcive.bin` is never loaded whole),
-  and OpenGL ES 1.1 state with transform and clipping on the CPU (`fngl.c`).
-- **Nano side** (`nano/`): the frame loop takes one 2.4 to 3.0 MB guest block
-  (`fn_nano.c`); the landscape game fills the panel with the iPod held sideways;
-  `be_nano.c` batches triangles and drops ones the driver can't take;
-  `plat_nano.c` reads the archive in 128 KB pieces.
-- **Host harness** (`host/`): runs the engine headless with a software rasterizer,
-  writes frames and plays a scripted swipe. Measured there: guest heap peak
-  1,075,216 bytes, at most 691 triangles a frame.
-- **Touch, learned on hardware** (comments in `nano/fn_nano.c`, `nano/touch_pick.h`):
-  reading the launcher's touch mailbox once a frame turned swipes into taps, so it
-  reads the OS touch queues as Temple Run's port does. The OS empties those queues
-  after each touch event, so a game that polls them once a frame can miss samples.
-  In 1.1 the launcher copies each queue's newest sample at every touch event into a
-  snapshot after the SDK's shared block (`nanoapps/system/silver_resident_na/touch_latch.h`),
-  and Fruit Ninja and PocketJS read it when their own poll comes back empty. That
-  fixed two-finger input in PocketJS on hardware. Fruit Ninja's menu works, but
-  swipes during a round are still unreliable on 1.1; a fix is in progress.
-- **Writes:** `Fruit Ninja.hbapp` (about 920 KB) and `/Apps/Data/FruitNinja` (about 9.2 MB).
-
-### Temple Run (iOS, olievans123's port with nano7kit memory changes)
-
-Files: `host/templerun.py`, `host/templerun_patch.py`.
-
-- **Port:** [nano-templerun](https://github.com/olievans123/nano-templerun) at
-  `b73a3d43` (`host/ports.py`), fetched at build time. It recompiles the armv7 half
-  of Temple Run 1.0 (`91d85b35...afe01392`, 1,439,184 bytes) to C and converts your
-  textures and models.
-- **Why the changes:** with 11 apps and music, the heap read about 6.6 MB free and
-  4.0 MB largest. The port's arena clamp then gave it about 1.7 MB, the engine
-  needs about 3.1 MB, and it stopped under the splash screen.
-- **The changes** (applied to the fetched tree, each anchored on a line of the pinned
-  commit, so a moved pin stops the build): ask for the full arena first, stepping down
-  64 KB at a time to a 3.125 MB floor; a triangle budget of 400 to 1,300 from live
-  free memory; the three 1024 scenery sheets at 256; a memory pre-flight with the
-  NOT ENOUGH MEMORY screen; and the shared texture clean-up from Fruit Ninja.
-- NanoApps lists the same port as experimental: it ran out of memory at the loading
-  screen on their fully loaded test device (NanoApps `tools/build_ios_game.py`).
 
 ### Mario 64 (N64, olievans123's port)
 
@@ -161,6 +110,56 @@ an iOS port: it uses the PC Game of the Year `main.pak` and `properties/` folder
   adventure levels by itself (`engine/nano7/bot.cpp`) measured the arena it needs:
   3.0 MB for 1-1, 3.2 MB through 1-10.
 - The 800x600 game is drawn at 0.4 with the iPod held sideways (`nano/pvz_nano.c`).
+
+### Temple Run (iOS, olievans123's port with nano7kit memory changes)
+
+Files: `host/templerun.py`, `host/templerun_patch.py`.
+
+- **Port:** [nano-templerun](https://github.com/olievans123/nano-templerun) at
+  `b73a3d43` (`host/ports.py`), fetched at build time. It recompiles the armv7 half
+  of Temple Run 1.0 (`91d85b35...afe01392`, 1,439,184 bytes) to C and converts your
+  textures and models.
+- **Why the changes:** with 11 apps and music, the heap read about 6.6 MB free and
+  4.0 MB largest. The port's arena clamp then gave it about 1.7 MB, the engine
+  needs about 3.1 MB, and it stopped under the splash screen.
+- **The changes** (applied to the fetched tree, each anchored on a line of the pinned
+  commit, so a moved pin stops the build): ask for the full arena first, stepping down
+  64 KB at a time to a 3.125 MB floor; a triangle budget of 400 to 1,300 from live
+  free memory; the three 1024 scenery sheets at 256; a memory pre-flight with the
+  NOT ENOUGH MEMORY screen; and the shared texture clean-up from Fruit Ninja.
+- NanoApps lists the same port as experimental: it ran out of memory at the loading
+  screen on their fully loaded test device (NanoApps `tools/build_ios_game.py`).
+
+### Fruit Ninja (iOS, recompiled by nano7kit)
+
+Files: `games/fruitninja`, `host/fruitninja_rc.py`. The approach follows
+olievans123's Temple Run port; none of its code is used.
+
+- **Input:** decrypted Fruit Ninja 1.0, `com.Halfbrick.Fruit`, thin armv6 executable
+  `67754af4...bd7d61`.
+- **Recompiler** (`tools/recomp.py`, `tools/macho.py`): Thumb to C, starting from the
+  engine's `IPhoneInterface` entry points (start-up, update, draw, touch). OpenFeint,
+  Facebook and OAuth code is left out. The music call is stubbed, so it is silent.
+- **Runtime** (`rt/`): guest memory and dispatch (`rt_core.c`), the iOS calls the
+  engine makes (`rt_imports.c`; the 8.6 MB `fileArcive.bin` is never loaded whole),
+  and OpenGL ES 1.1 state with transform and clipping on the CPU (`fngl.c`).
+- **Nano side** (`nano/`): the frame loop takes one 2.4 to 3.0 MB guest block
+  (`fn_nano.c`); the landscape game fills the panel with the iPod held sideways;
+  `be_nano.c` batches triangles and drops ones the driver can't take;
+  `plat_nano.c` reads the archive in 128 KB pieces.
+- **Host harness** (`host/`): runs the engine headless with a software rasterizer,
+  writes frames and plays a scripted swipe. Measured there: guest heap peak
+  1,075,216 bytes, at most 691 triangles a frame.
+- **Touch, learned on hardware** (comments in `nano/fn_nano.c`, `nano/touch_pick.h`):
+  reading the launcher's touch mailbox once a frame turned swipes into taps, so it
+  reads the OS touch queues as Temple Run's port does. The OS empties those queues
+  after each touch event, so a game that polls them once a frame can miss samples.
+  In 1.1 the launcher copies each queue's newest sample at every touch event into a
+  snapshot after the SDK's shared block (`nanoapps/system/silver_resident_na/touch_latch.h`),
+  and Fruit Ninja and PocketJS read it when their own poll comes back empty. That
+  fixed two-finger input in PocketJS on hardware. Fruit Ninja's menu works, but
+  swipes during a round are still unreliable on 1.1; a fix is in progress.
+- **Writes:** `Fruit Ninja.hbapp` (about 920 KB) and `/Apps/Data/FruitNinja` (about 9.2 MB).
 
 ## Adding a game to nano7kit
 

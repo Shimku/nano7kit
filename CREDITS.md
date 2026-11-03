@@ -8,7 +8,7 @@ nano7kit is mostly integration work on top of these projects.
 |---|---|---|---|
 | [nano7-untethered](https://github.com/olievans123/nano7-untethered) | olievans123 | Untethered loader, Blocks, Game Boy, Probe, Mario 64 and Mario Kart 64 ports | none stated |
 | [nano-templerun](https://github.com/olievans123/nano-templerun), [nano-flappybird](https://github.com/olievans123/nano-flappybird), [nano-doodlejump](https://github.com/olievans123/nano-doodlejump) | olievans123 | Temple Run, Flappy Bird and Doodle Jump ports | none stated |
-| [ipod_sun_untethered](https://github.com/nfzerox/ipod_sun_untethered), [ipod_sun](https://github.com/CUB3D/ipod_sun) | nfzerox, CUB3D | Firmware exploit and builder | GPL-3.0 |
+| ipod_sun_untethered (bundled in nano7-untethered), [ipod_sun](https://github.com/CUB3D/ipod_sun) | nfzerox, CUB3D | Firmware exploit and builder | GPL-3.0 |
 | [wInd3x](https://github.com/freemyipod/wInd3x) | q3k and freemyipod | Recovery mode and flashing (patched for the Mid-2015 model) | GPL-2.0 |
 | [PocketJS](https://github.com/pocket-nexus/pocketjs) | pocket-nexus (Yifeng "Evan" Wang) | JavaScript and TypeScript runtime, pinned at `6ca9f914` | MIT |
 | [QuickJS](https://bellard.org/quickjs/) | Fabrice Bellard and Charlie Gordon | JavaScript engine in JS QuickJS | MIT |

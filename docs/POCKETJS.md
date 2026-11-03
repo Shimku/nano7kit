@@ -44,6 +44,26 @@ two buttons and a hit counter. Its manifest asks for a fixed 240x432 screen:
 "viewport": { "fixed": { "logical": [240, 432], "presentation": "native" } }
 ```
 
+A counter, cut down from `apps/nano7g-hero/app.tsx`:
+
+```tsx
+import { createSignal } from "solid-js";
+import { Text, View } from "@pocketjs/framework/solid/components";
+
+export default function App() {
+  const [count, setCount] = createSignal(0);
+  return (
+    <View class="w-full h-full flex-col items-center justify-center bg-slate-50">
+      <Text class="text-4xl font-bold text-slate-950">{count()}</Text>
+      <View class="w-[140] h-[56] items-center justify-center rounded-xl bg-blue-600"
+            focusable onPress={() => setCount(count() + 1)}>
+        <Text class="text-lg font-bold text-white">Tap +1</Text>
+      </View>
+    </View>
+  );
+}
+```
+
 1. `./start pocketjs build hero` fetches PocketJS at `6ca9f914` into
    `build/pocketjs-6ca9f914f6/` and applies `pocketjs/nano7g.patch`. It needs bun,
    rustup and `arm-none-eabi-gcc`.

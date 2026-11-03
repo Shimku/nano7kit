@@ -1,12 +1,11 @@
 # nano7kit on the NanoApps 1.0 base
 
-New in 1.1. Tested on one Mid-2015 nano (MKN52, 16 GB) that came from
-nano7-untethered: `nabase flash`, then `./install --nanoapps`. Music survived,
-and Probe read 6.9 MB free and a 4.0 MB largest block afterwards, as before.
-Not yet tried on hardware: a nano that got NanoApps from Finder (steps 1 and 2
-below with choice 1), a Mac-formatted disk, Finder music sync with our Launcher,
-and Finder's Check for Update after the flash. The nano7-untethered path
-([FAT32.md](FAT32.md)) still works as before.
+New in 1.1. I tested it on one Mid-2015 nano (MKN52, 16 GB) that came from
+nano7-untethered: `nabase flash`, then `./install --nanoapps`. Music survived and
+Probe still read 6.9 MB free and a 4.0 MB largest block. Not tried yet: a nano that got
+NanoApps from Finder, a Mac-formatted disk, Finder music sync with this launcher, and
+Finder's Check for Update after the flash. The nano7-untethered route
+([FAT32.md](FAT32.md)) still works.
 
 NanoApps 1.0 installs as a Finder update. Its firmware loads
 `/Library/resident.hbapp` from the iPod's disk if the file's checksum, ABI 2,
