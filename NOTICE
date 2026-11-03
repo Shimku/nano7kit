@@ -1,0 +1,43 @@
+nano7kit licensing
+==================
+
+nano7kit's own code is MIT (see LICENSE). That covers host/, install,
+start, scripts/, tests/, docs/, pocketjs/, games/fruitninja/, the
+nano7kit apps under nanoapps/ (Lap, Free RAM, JS Hero, JS Samples,
+JS QuickJS, JS Hello) and the installer.
+
+Exceptions:
+
+  games/pvz_portable/          LGPL-3.0-or-later (PvZ-Portable engine)
+  nanoapps/sdk/, nanoapps/vendor/, nanoapps/tools/,
+  nanoapps/system/silver_resident_na/
+                               NanoApps (nfzerox), MIT; the launcher fork
+                               keeps that licence and notice
+  upstream/*.patch             changes to nano7-untethered files (including
+                               the wInd3x patch, GPL-2.0); each hunk follows
+                               the licence of the file it changes
+  untether/artifacts/extra/    prebuilt apps; each keeps its source's
+                               licence (NanoApps MIT, PocketJS MIT, QuickJS
+                               MIT, Inter OFL-1.1, Font Awesome Free icons)
+
+Not in this repository, fetched at pinned commits (UPSTREAM.txt) when
+you install or build:
+
+  nano7-untethered (olievans123)   loader, Blocks, Game Boy, Probe and the
+                                   Mario 64 / Mario Kart 64 ports; no
+                                   licence stated, so not redistributed here
+  NanoApps (nfzerox)               MIT, inside nano7-untethered
+  ipod_sun_untethered (nfzerox)    GPL-3.0, inside nano7-untethered; the
+                                   firmware builder runs it on your Mac
+  wInd3x (freemyipod)              GPL-2.0, built from source
+  PvZ-Portable (wszqkzqk)          LGPL-3.0-or-later
+  PocketJS (pocket-nexus)          MIT
+  Temple Run, Flappy Bird and Doodle Jump ports (olievans123), no licence
+  stated, fetched only when you build that game
+
+nano7-untethered files are checked one by one against the sha256 list
+in upstream/lock.json.
+
+There is no Apple firmware, ROM, ipa or game data in this repository.
+The firmware builder downloads Apple's iPod nano 1.1.2 firmware from
+Apple on your machine. Games need your own files.

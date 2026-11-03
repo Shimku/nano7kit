@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>	<string>KIT_BUNDLE</string>
+	<key>CFBundleName</key>		<string>KIT_TITLE</string>
+	<key>CFBundleExecutable</key>	<string>KIT_FOLDER</string>
+	<key>HBAppKind</key>			<integer>1</integer>
+	<key>HBIconGlyph</key>		<string>KIT_GLYPH</string>
+	<key>HBIconColor</key>		<string>KIT_COLOR</string>
+</dict>
+</plist>

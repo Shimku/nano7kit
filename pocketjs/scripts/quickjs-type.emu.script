@@ -1,0 +1,22 @@
+# Type: menu row 5 (Type (QuickJS)); open the keyboard
+3
+3 120 248
+3
+40
+shot 01-type
+3 120 80
+3
+20
+shot 02-osk
+3 30 300
+3
+3 60 300
+3
+3 90 300
+3
+20
+shot 03-typed
+3 215 412
+3
+20
+shot 04-commit

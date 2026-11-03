@@ -1,0 +1,21 @@
+# Notes (QuickJS): menu row 9; data.fs in /Apps/Data/PocketJS/notes. Opens
+# (the launch count is read and rewritten), Save twice, Delete once. Run it
+# twice with the same --fs-dir: the second run starts with the count and
+# the note left by the first.
+3
+3 120 408
+3
+40
+shot 01-opened
+3 46 368
+3
+10
+shot 02-saved
+3 46 368
+3
+10
+shot 03-saved-again
+3 120 368
+3
+10
+shot 04-deleted

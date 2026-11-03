@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+"""nano7kit entry point. Run from the repo root: ./start"""
+
+import sys
+from pathlib import Path
+
+
+def require_python(minimum=(3, 10), *, version_info=None, executable=None, stream=None):
+    """Refuse old interpreters before importing host (3.10 type syntax, Pillow 12).
+
+    Anaconda 3.8 failed later on Pillow==12.1.1 with an obscure pip error.
+    """
+    info = version_info if version_info is not None else sys.version_info
+    exe = executable if executable is not None else sys.executable
+    out = stream if stream is not None else sys.stderr
+    if info >= minimum:
+        return 0
+    shown = ".".join(str(part) for part in tuple(info)[:3])
+    need = "%d.%d" % (minimum[0], minimum[1])
+    print(
+        "nano7kit needs Python %s or newer.\n"
+        "This interpreter is %s (%s).\n"
+        "Anaconda 3.8 and other old prefixes fail later on Pillow==12.1.1.\n"
+        "On Intel Mac without Homebrew: ./scripts/macos-intel-bootstrap.sh\n"
+        "then: source build/macos-intel/env.sh\n"
+        "See docs/MACOS.md."
+        % (need, shown, exe),
+        file=out,
+    )
+    return 2
+
+
+if __name__ == "__main__":
+    code = require_python()
+    if code:
+        raise SystemExit(code)
+    repo = Path(__file__).resolve().parent
+    sys.path.insert(0, str(repo))
+    from host.owner import restore_repo_owner  # noqa: E402
+
+    try:
+        if sys.argv[1:2] not in (["fetch"], ["-h"], ["--help"]):
+            from host import upstream  # noqa: E402
+            from host.compat import Refused  # noqa: E402
+
+            try:
+                upstream.ensure()
+            except Refused as exc:
+                print(f"Could not download third-party files: {exc}", file=sys.stderr)
+                print("Check your internet connection, then run: ./start fetch", file=sys.stderr)
+                raise SystemExit(2)
+        from host.cli import main  # noqa: E402
+
+        raise SystemExit(main())
+    finally:
+        # sudo -E ./start ...: hand anything root-owned in the checkout back
+        # to the user, so a later git merge never trips on root-owned files.
+        restore_repo_owner(repo)

@@ -1,0 +1,9 @@
+{
+  "1fef57067eedb26f804edc58b9ad789ccdcab1cc66204415df1f5599a94b1cf5": {
+    "name": "JS Samples",
+    "offsets": [
+      2158704
+    ],
+    "why": "baked font or image bytes equal to an old fixed address"
+  }
+}

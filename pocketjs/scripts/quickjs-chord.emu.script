@@ -1,0 +1,12 @@
+# Cafe: two fingers on the pad at once (Down and O): both keys light (a chord)
+3
+3 120 176
+3
+30
+shot 01-cafe
+4 70 102 110 403
+shot 02-chord
+4 70 102
+shot 03-one-key
+3
+shot 04-released

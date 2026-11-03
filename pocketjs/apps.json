@@ -1,0 +1,214 @@
+{
+  "commit": "6ca9f914f6aa0f0c66bcc1a3f0e15c3d22127746",
+  "patch": "nano7g.patch",
+  "samples": {
+    "jshero": {
+      "manifest": "apps/nano7g-hero/pocket.app.json",
+      "title": "JS Hero",
+      "from": "new for the 7G: the Hero scene (apps/ipodnano-hero, apps/hero) laid out for 240x432 touch"
+    },
+    "gbahero": {
+      "manifest": "apps/nano7g-samples/gba-hero.app.json",
+      "title": "GBA Hero",
+      "from": "upstream apps/gba-hero (240x160), on-screen pad below"
+    },
+    "nanohero": {
+      "manifest": "apps/nano7g-samples/ipodnano-hero.app.json",
+      "title": "Nano 2G Hero",
+      "from": "upstream apps/ipodnano-hero (176x132), scaled to 240 wide, pad below"
+    },
+    "hero": {
+      "manifest": "apps/nano7g-samples/hero.app.json",
+      "title": "Hero",
+      "from": "upstream apps/hero (480x272), landscape, pad drawn over it"
+    },
+    "solidlab": {
+      "manifest": "apps/nano7g-samples/solid-aot-lab.app.json",
+      "title": "Solid AOT Lab",
+      "from": "upstream apps/solid-aot-lab (480x272), landscape, pad and wheel keys"
+    },
+    "vuelab": {
+      "manifest": "apps/nano7g-samples/vue-sfc-lab.app.json",
+      "title": "Vue SFC Lab",
+      "from": "upstream apps/vue-sfc-lab (480x272, Vue SFC compiled ahead of time), landscape"
+    },
+    "tilt": {
+      "manifest": "apps/nano7g-tilt/pocket.app.json",
+      "title": "Tilt",
+      "from": "new for the 7G: MotionHandler fed by the accelerometer"
+    }
+  },
+  "apps": [
+    {
+      "key": "hero",
+      "name": "JS Hero",
+      "folder": "pjhero",
+      "samples": [
+        "jshero"
+      ],
+      "script": "scripts/hero.script",
+      "from": "one app, no menu: the 240x432 touch Hero",
+      "emu_script": "scripts/hero.script"
+    },
+    {
+      "key": "samples",
+      "name": "JS Samples",
+      "folder": "pjsamples",
+      "samples": [
+        "jshero",
+        "gbahero",
+        "nanohero",
+        "hero",
+        "solidlab",
+        "vuelab",
+        "tilt"
+      ],
+      "script": "scripts/samples.script",
+      "from": "one app with a menu: every PocketJS sample that compiles ahead of time, plus Tilt",
+      "emu_script": "scripts/samples.emu.script"
+    },
+    {
+      "key": "quickjs",
+      "name": "JS QuickJS",
+      "folder": "pjquickjs",
+      "samples": [
+        "tilt"
+      ],
+      "quickjs": true,
+      "packages": [
+        "hero",
+        "cafe",
+        "physics",
+        "type",
+        "fonts",
+        "gestures",
+        "vue",
+        "notes",
+        "home",
+        "notebook",
+        "motion",
+        "talk"
+      ],
+      "script": "scripts/quickjs.emu.script",
+      "from": "QuickJS runs PocketJS JavaScript packages from /Apps/Data/PocketJS; Tilt (AOT) is linked too",
+      "emu_script": "scripts/quickjs.emu.script"
+    }
+  ],
+  "quickjs": {
+    "repo": "https://github.com/pocket-nexus/quickjs-rs.git",
+    "commit": "a5cac5d8631bdc068b43af93355b9f82d666949e",
+    "dir": "libquickjs-sys/embed/quickjs",
+    "version": "2026-06-04",
+    "licence": "MIT (Fabrice Bellard, Charlie Gordon)",
+    "from": "the QuickJS PocketJS pins (Cargo.lock libquickjs-sys), not vendored",
+    "sha256": {
+      "quickjs.c": "9ec7245b6791b9b323109dda9d6b2e312970f478b8fab3704eff806e2e2a0496",
+      "quickjs.h": "92baa132a183d39c871e7e9f66b6277a500facb8f102d32314d82162af45b31d",
+      "cutils.c": "5efc57ccb035f879c7c265e89173662026b7686d9e40ddf33889591407770ec1",
+      "cutils.h": "d2da6d06a75b9e6c116c82b7a41df6bcc170c8b1779f374fa953ecf688eda647",
+      "libregexp.c": "9991ed26c61151c15702ca08f7fed97f1b5d7a0a630621cf89267fea22bf7dd0",
+      "libregexp.h": "f5c5ef1899f224dcc718422a22c789ef9d8b5b837b622818fcfaf681ae793446",
+      "libregexp-opcode.h": "2a98d646089f3a72f25480116297c5fdb5b28fd9f815447273951f4ade4a115e",
+      "libunicode.c": "ab9ff019fedfeb2793333fab0bca0bd09ef00c5739cd902fa8d79eda664cab32",
+      "libunicode.h": "ce310152bc80d7415dcb657e23abd9a40bf83e393c0d05d325dae384bb01d259",
+      "libunicode-table.h": "cf782bc7a07549e976f606bd3cb8555858482b279574554dcb8d46412986006c",
+      "dtoa.c": "d7f5c5333f5810b05d49548bfd3108f94e96e8bcbc540f3ce800899e3bf38731",
+      "dtoa.h": "462070f7678a894b9f3612422f280f4dce412eb360a5cc585a513f407fc23114",
+      "list.h": "181c6b25d9d0e4853315d36a6e6fab3b2c3554271693d898a439384ba0f67c2b",
+      "quickjs-atom.h": "342194359417664e652f54e7d682ee2ef91dd982e91f74decbde992a2c848236",
+      "quickjs-opcode.h": "a9c60a8c9366820733d9d2acbb805f48b2e9e2778df526e6bcb845fdb6b47834",
+      "LICENSE": "598fd7fc928e4350abce36e337ba5a1346923c5c692f5be92c3d8e29ddd7c18d"
+    }
+  },
+  "packages": {
+    "hero": {
+      "manifest": "apps/nano7g-hero/pocket.app.json",
+      "file": "hero.pocket",
+      "title": "JS Hero (QuickJS)",
+      "from": "the JS Hero manifest compiled as JavaScript (no --aot), 240x432"
+    },
+    "cafe": {
+      "manifest": "apps/nano7g-quickjs/cafe.app.json",
+      "file": "cafe.pocket",
+      "title": "Cafe (QuickJS)",
+      "from": "upstream apps/cafe (480x272, Solid, JavaScript), landscape with the pad"
+    },
+    "physics": {
+      "manifest": "apps/nano7g-physics/pocket.app.json",
+      "file": "physics.pocket",
+      "title": "Physics (QuickJS)",
+      "from": "nano7g sample: six balls in a box on ui.physics (core 2D bodies), Shake and Gravity buttons, hit count"
+    },
+    "type": {
+      "manifest": "apps/nano7g-type/pocket.app.json",
+      "file": "type.pocket",
+      "title": "Type (QuickJS)",
+      "from": "nano7g sample: a TextField and the PocketJS on-screen keyboard; typed text laid out live, lines kept in memory only"
+    },
+    "fonts": {
+      "manifest": "apps/nano7g-fonts/pocket.app.json",
+      "file": "fonts.pocket",
+      "title": "Fonts (QuickJS)",
+      "from": "nano7g sample: phrases read at run time (fonts/phrases.txt) drawn with glyphs streamed from fonts/intl.pjfa (Inter: Latin, Greek, Cyrillic at 16 and 24 px) by the device-local io.offload provider",
+      "data": [
+        {
+          "from": "apps/nano7g-fonts/phrases.txt",
+          "to": "fonts/phrases.txt"
+        }
+      ],
+      "bake": [
+        {
+          "script": "apps/nano7g-fonts/bake.ts",
+          "to": "fonts/intl.pjfa"
+        }
+      ]
+    },
+    "gestures": {
+      "manifest": "apps/nano7g-gestures/pocket.app.json",
+      "file": "gestures.pocket",
+      "title": "Gestures (QuickJS)",
+      "from": "nano7g sample: swipe four cards (pan with fling), pinch a ball with two fingers (the OS's per-finger lists), tap count, fingers down"
+    },
+    "vue": {
+      "manifest": "apps/nano7g-quickjs/vue.app.json",
+      "file": "vue.pocket",
+      "title": "Vue Lab (QuickJS)",
+      "from": "upstream apps/vue-sfc-lab (480x272, Vue Vapor single-file components) as JavaScript on QuickJS, landscape with the pad"
+    },
+    "notes": {
+      "manifest": "apps/nano7g-notes/pocket.app.json",
+      "file": "notes.pocket",
+      "title": "Notes (QuickJS)",
+      "from": "nano7g sample: data.fs in /Apps/Data/PocketJS/notes; a launch count that survives quitting, save, delete and clear note files, quota usage"
+    },
+    "home": {
+      "manifest": "apps/nano7g-home/pocket.app.json",
+      "file": "home.pocket",
+      "title": "Home",
+      "from": "new for the 7G: the PocketJS home screen (icon pages, dock, status bar, zoom open and close), 240x432",
+      "home_only": true
+    },
+    "notebook": {
+      "manifest": "apps/nano7g-notebook/pocket.app.json",
+      "file": "notebook.pocket",
+      "title": "Notes",
+      "from": "new for the 7G: notes with a landscape QWERTY keyboard (magnifier keys), saved in data.fs, 432x240",
+      "home_only": true
+    },
+    "motion": {
+      "manifest": "apps/nano7g-quickjs/motion.app.json",
+      "file": "motion.pocket",
+      "title": "Motion Lab",
+      "from": "upstream apps/motions (480x272, Solid, motion designs by yui540), landscape with the pad",
+      "home_only": true
+    },
+    "talk": {
+      "manifest": "apps/nano7g-talk/pocket.app.json",
+      "file": "talk.pocket",
+      "title": "Talk",
+      "from": "new for the 7G: a chat with bubbles and the Notes keyboard, 432x240",
+      "home_only": true
+    }
+  },
+  "packages_dir": "/Apps/Data/PocketJS"
+}

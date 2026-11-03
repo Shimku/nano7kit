@@ -1,0 +1,23 @@
+# Gestures: menu row 7 (Gestures (QuickJS)); swipe, pinch with two fingers, tap
+3
+3 120 328
+3
+40
+shot 01-gestures
+3 200 140
+8 200 140 to 40 140
+3
+15
+shot 02-swiped
+3 100 350 140 350
+shot 03-two-fingers
+8 100 350 140 350 to 50 350 190 350
+3 50 350 190 350
+shot 04-pinched
+3
+10
+shot 05-released
+2 120 140
+3
+6
+shot 06-tapped

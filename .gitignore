@@ -1,0 +1,75 @@
+/build/
+/lvgl/
+/.venv/
+/nanoapps/lvgl
+/nanoapps/lvgl/
+nanoapps/tools/dependencies/fontawesome/
+nanoapps/tools/dependencies/*/target/
+nanoapps/apps/*/build/
+nanoapps/apps/flappybird/
+nanoapps/apps/doodlejump/
+nanoapps/apps/templerun/
+nanoapps/harnesses/*/build/
+nanoapps/system/*/build/
+untether/build/
+untether/ipod_sun_untethered/iPod_1.1.2_39A10023_2012/
+untether/ipod_sun_untethered/target/
+*.ipsw
+*.MSE
+*.img
+*.img.sha256
+*.z64
+*.n64
+*.ipa
+*.gb
+*.gbc
+*.nes
+*.log
+*.o
+*.elf
+*.pyc
+__pycache__/
+.DS_Store
+.nano7kit-state/
+*.swp
+host/cmd/usbscsi/usbscsi
+
+# User-supplied ROMs / original iOS apps and anything derived from them.
+# olievans123 port trees state no OSS licence; do not redistribute these.
+untether/artifacts/extra/Data/SM64/
+untether/artifacts/extra/Data/MK64/
+untether/artifacts/extra/Data/TempleRun/
+untether/artifacts/extra/Data/FlappyBird/
+untether/artifacts/extra/Data/DoodleJump/
+untether/artifacts/extra/Data/FruitNinja/
+untether/artifacts/extra/Data/PvZ/
+untether/artifacts/extra/Executables/Mario 64.hbapp
+untether/artifacts/extra/Executables/Mario Kart.hbapp
+untether/artifacts/extra/Executables/Temple Run.hbapp
+untether/artifacts/extra/Executables/Flappy Bird.hbapp
+untether/artifacts/extra/Executables/Doodle Jump.hbapp
+untether/artifacts/extra/Executables/Fruit Ninja.hbapp
+untether/artifacts/extra/Executables/PvZ Portable.hbapp
+untether/artifacts/extra/Icons/Mario 64.bin
+untether/artifacts/extra/Icons/Mario Kart.bin
+untether/artifacts/extra/Icons/Temple Run.bin
+untether/artifacts/extra/Icons/Flappy Bird.bin
+untether/artifacts/extra/Icons/Doodle Jump.bin
+untether/artifacts/extra/Icons/PvZ Portable.bin
+# Fruit Ninja recompile: app shell staged at build time
+nanoapps/apps/fruitninja_rc/
+nanoapps/apps/pvz_portable/
+
+# Your own game files for ./install (never committed)
+/mygames/
+# Patched from the fetched residents on demand (host/cap.py, pinned hashes)
+/untether/artifacts/extra/Startup/
+# NanoApps-derived apps are built on your computer on first use, not shipped.
+untether/artifacts/extra/Executables/*.hbapp
+!untether/artifacts/extra/Executables/Free RAM.hbapp
+!untether/artifacts/extra/Executables/JS Hello.hbapp
+!untether/artifacts/extra/Executables/JS Hero.hbapp
+!untether/artifacts/extra/Executables/JS QuickJS.hbapp
+!untether/artifacts/extra/Executables/JS Samples.hbapp
+!untether/artifacts/extra/Executables/Lap.hbapp
+untether/artifacts/extra/Startup/na-backup/

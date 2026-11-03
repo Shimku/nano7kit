@@ -1,0 +1,56 @@
+# Host preview of JS Samples: each app mounted in turn (the preview switches
+# directly; samples.emu.script taps through the menu on the ARM build).
+# jshero: settle, two taps on "Tap +1"
+45
+shot jshero-0
+4 80 294
+4
+4 80 294
+6
+shot jshero-1
+sample gbahero
+40
+shot gbahero-0
+# pad Circle presses the focused "Press A", then a touch on it
+4 207 241
+4
+4 48 130
+8
+shot gbahero-1
+sample nanohero
+40
+shot nanohero-0
+4 207 251
+8
+shot nanohero-1
+sample hero
+60
+shot hero-0
+# landscape Circle (viewer 404,130 -> panel 109,404)
+4 109 404
+8
+shot hero-1
+sample solidlab
+40
+shot solidlab-0
+4 109 404
+4
+4 109 404
+4
+# wheel + (viewer 70,22 -> panel 217,70), held for two steps
+12 217 70
+8
+shot solidlab-1
+sample vuelab
+40
+shot vuelab-0
+4 109 404
+8
+shot vuelab-1
+sample tilt
+accel 0 0 65536
+10
+shot tilt-0
+accel 20000 50000 30000
+30
+shot tilt-1

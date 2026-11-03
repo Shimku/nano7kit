@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>org.nano7kit.fruitninja</string>
+<key>CFBundleName</key><string>Fruit Ninja</string>
+<key>CFBundleExecutable</key><string>fruitninja</string>
+<key>HBAppKind</key><integer>2</integer>
+<key>HBIconGlyph</key><string>lemon</string>
+<key>HBIconColor</key><string>#c44536</string>
+</dict></plist>

@@ -1,0 +1,41 @@
+NanoApps
+  url=https://github.com/nfzerox/NanoApps
+  commit=00d9fb3c988ea424452edc4cd78c4a6438be7a64 (release build-00d9fb3, "NanoApps 1.0")
+  date=2026-11-01
+  licence=MIT
+  used=launcher base, in nanoapps/vendor/nanoapps10 and nanoapps/system/silver_resident_na
+  apps=the NanoApps app sources come from the copy inside nano7-untethered (below),
+       with some files updated by upstream/nano7-untethered.patch
+  not used=the optional ports/ folder (Flappy Bird, Doodle Jump, Temple Run) added
+       after 1.0 in commit e1773ef; nano7kit builds those from olievans123's repos
+
+nano7-untethered
+  url=https://github.com/olievans123/nano7-untethered
+  commit=7a0f097650f50cf2fbd244984e340db8c04827e3
+  date=2026-10-01
+  licence=none stated (see CREDITS.md); fetched, not redistributed
+  fetched=yes, file hashes in upstream/lock.json, local changes in upstream/nano7-untethered.patch
+
+ipod_sun_untethered (as bundled in nano7-untethered)
+  url=https://github.com/nfzerox/ipod_sun_untethered
+  bundled_commit_recorded_in_release_json=5383f7f87b87c861f7063d201b3b19d075538fba
+  licence=GPL-3.0
+
+wInd3x
+  url=https://github.com/freemyipod/wInd3x
+  commit=7c7c4d83c8b923f29e7559585b2cdbbf4e028045
+  patch=untether/patches/wind3x-nano7.patch
+  licence=GPL-2.0
+
+nano-templerun / nano-flappybird / nano-doodlejump (olievans123)
+  commits pinned in host/ports.py, fetched only when you build that game
+
+PocketJS
+  url=https://github.com/pocket-nexus/pocketjs
+  commit=6ca9f914f6aa0f0c66bcc1a3f0e15c3d22127746 (host/const.py)
+  licence=MIT
+
+PvZ-Portable
+  url=https://github.com/wszqkzqk/PvZ-Portable
+  commit=98b659380014c89c3553fbb2839f5e5a84d6df3d
+  licence=LGPL-3.0-or-later

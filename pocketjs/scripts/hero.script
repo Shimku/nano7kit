@@ -1,0 +1,21 @@
+# settle, then three taps on "Tap +1", one on "-1", shots
+45
+shot 00-settled
+4 80 294
+shot 01-pressed
+4
+4 80 294
+4
+4 80 294
+4
+4 80 294
+4
+4 80 294
+6
+shot 02-count5
+4 196 294
+6
+shot 03-minus
+4 120 356
+8
+shot 04-reset

@@ -1,0 +1,3460 @@
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/Board.cpp pvzp-desk/src/Lawn/Board.cpp
+--- pvzp-desk-src/src/Lawn/Board.cpp	2026-10-31 01:08:38.411008812 +0000
++++ pvzp-desk/src/Lawn/Board.cpp	2026-10-31 21:31:47.221207924 +0000
+@@ -69,6 +69,21 @@
+ 
+ bool gShownMoreSunTutorial = false;
+ 
++#include "../../nano7/memtrack.h"
++
++#ifdef NANO7_DEVICE   // nano7 v34: breadcrumbs, written to log.txt and sync.txt at once (they survive a reboot)
++#include <cstdint>
++extern "C" void n7p_step(const char* what);
++extern "C" void n7p_step_a(const char* what, uint32_t a);
++#define N7CRUMB(s) n7p_step(s)
++#define N7CRUMB_A(s, a) n7p_step_a(s, (uint32_t)(a))
++#else
++#define N7CRUMB(s) ((void)0)
++#define N7CRUMB_A(s, a) ((void)0)
++#endif
++#ifdef NANO7_DEVICE
++#include "../../nano7/n7fx.h"
++#endif
+ Board::Board(LawnApp* theApp)
+ {
+ 	mApp = theApp;
+@@ -783,6 +798,7 @@
+ 
+ void Board::LoadBackgroundImages()
+ {
++	N7CRUMB_A("board: background images (a = background)", mBackground);
+ 	switch (mBackground)
+ 	{
+ 	case BackgroundType::BACKGROUND_1_DAY:
+@@ -1627,6 +1643,8 @@
+ 
+ void Board::StartLevel()
+ {
++	N7CRUMB("board: StartLevel");
++	Nano7FreeUnusedDefs(mApp);  // nano7: the intro animations are done with
+ 	mCoinBankFadeCount = 0;
+ 	mApp->mLastLevelStats->Reset();
+ 	mChallenge->StartLevel();
+@@ -5217,6 +5235,9 @@
+ 	{
+ 		if (!IsSurvivalStageWithRepick() && mApp->mGameMode != GameMode::GAMEMODE_CHALLENGE_LAST_STAND && !mApp->IsContinuousChallenge())
+ 		{
++#ifdef NANO7_DEVICE
++			if (!Nano7FxOn())  // nano7 v39: no Final Wave banner animation (the huge-wave text says it)
++#endif
+ 			mApp->AddReanimation(0, 30, MakeRenderOrder(RenderLayer::RENDER_LAYER_ABOVE_UI, 0, 0), ReanimationType::REANIM_FINAL_WAVE);
+ 			mFinalWaveSoundCounter = 60;
+ 		}
+@@ -5411,7 +5432,8 @@
+ 			}
+ 
+ 			int anAlpha = std::clamp(mIceTimer[aRow] / 10, 0, 255);
+-			aParticleIce->OverrideColor(nullptr, Color(255, 255, 255, anAlpha));
++			if (aParticleIce)  // nano7 v39: the trimmed ice sparkle is an empty system that can be gone already
++				aParticleIce->OverrideColor(nullptr, Color(255, 255, 255, anAlpha));
+ 		}
+ 	}
+ }
+@@ -5692,6 +5714,7 @@
+ 
+ void Board::Update()
+ {
++	{ static int sN7First = 1; if (sN7First) { sN7First = 0; N7CRUMB("board: first update"); } }
+ 	PvzpHesitationBracket aHesitation("Board::Update");
+ 
+ 	Widget::Update();
+@@ -6073,7 +6096,12 @@
+ 
+ void Board::DrawGameObjects(Graphics* g)
+ {
++#ifdef NANO7_DEVICE
++	// nano7 v32: 24 KB off the stack (made once, from the arena; this function is not re-entered)
++	static RenderItem* aRenderList = new RenderItem[MAX_RENDER_ITEMS];
++#else
+ 	RenderItem aRenderList[MAX_RENDER_ITEMS];
++#endif
+ 	int aRenderItemCount = 0;
+ 
+ 	{
+@@ -7437,6 +7465,7 @@
+ 
+ void Board::Draw(Graphics* g)
+ {
++	{ static int sN7First = 1; if (sN7First) { sN7First = 0; N7CRUMB("board: first frame drawn"); } }
+ 	if (mApp->GetDialog(Dialogs::DIALOG_STORE) || mApp->GetDialog(Dialogs::DIALOG_ALMANAC))
+ 		return;
+ 
+@@ -7465,6 +7494,9 @@
+ 
+ 	mDrawCount++;
+ 	DrawGameObjects(g);
++#ifdef NANO7_DEVICE
++	Nano7FxDraw(g);  // nano7 v39: explosion flashes (one rectangle each)
++#endif
+ }
+ 
+ void Board::SetMustacheMode(bool theEnableMustache)
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/Coin.cpp pvzp-desk/src/Lawn/Coin.cpp
+--- pvzp-desk-src/src/Lawn/Coin.cpp	2026-10-31 01:08:38.415008578 +0000
++++ pvzp-desk/src/Lawn/Coin.cpp	2026-10-31 19:40:54.944415118 +0000
+@@ -47,6 +47,11 @@
+ 	AttachmentDie(mAttachmentID);
+ }
+ 
++#ifdef NANO7_DEVICE
++void Nano7WatchFrames(const char* what, int a);   // n7main.cpp, v38
++#else
++#define Nano7WatchFrames(s, a) ((void)0)
++#endif
+ void Coin::CoinInitialize(int theX, int theY, CoinType theCoinType, CoinMotion theCoinMotion)
+ {
+ 	mPosX = theX;
+@@ -79,6 +84,10 @@
+ 		aSunReanim->SetPosition(mPosX + aPosX, mPosY + aPosY);
+ 		aSunReanim->mLoopType = ReanimLoopType::REANIM_LOOP;
+ 		aSunReanim->mAnimRate = 6.0f;
++#ifdef NANO7_DEVICE
++		aSunReanim->mAnimRate = 0.0f;  // nano7 v38: a still sun, no pulse
++		aSunReanim->AssignRenderGroupToTrack("Sun3", RENDER_GROUP_HIDDEN);  // nano7 v38: no outer glow
++#endif
+ 		AttachReanim(mAttachmentID, aSunReanim, aPosX, aPosY);
+ 	}
+ 	else if (mType == CoinType::COIN_SILVER)
+@@ -1157,6 +1166,7 @@
+ 
+ 	if (IsLevelAward())
+ 	{
++		Nano7WatchFrames("award: level award picked up (a = coin type)", (int)mType);   // nano7 v38
+ 		if (aIsEndlessAward)
+ 		{
+ 			if (mType == CoinType::COIN_AWARD_BAG_DIAMOND)
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/LawnMower.cpp pvzp-desk/src/Lawn/LawnMower.cpp
+--- pvzp-desk-src/src/Lawn/LawnMower.cpp	2026-10-31 01:08:38.415008578 +0000
++++ pvzp-desk/src/Lawn/LawnMower.cpp	2026-10-31 20:53:57.496786166 +0000
+@@ -26,6 +26,7 @@
+ #include "System/ReanimationLawn.h"
+ #include "../PvzpLib/PvzpFoley.h"
+ #include "../PvzpLib/Reanimator.h"
++#include "../../nano7/n7fx.h"
+ 
+ void LawnMower::LawnMowerInitialize(int theRow)
+ {
+@@ -395,6 +396,9 @@
+ 	else
+ 	{
+ 		aMowerReanim->mAnimRate = 70.0f;
++#ifdef NANO7_DEVICE
++		if (Nano7FxOn()) aMowerReanim->mAnimRate = 0.0f;  // nano7 v39: the mower slides as one still picture
++#endif
+ 		mApp->PlayFoley(FoleyType::FOLEY_LAWNMOWER);
+ 	}
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/MessageWidget.cpp pvzp-desk/src/Lawn/MessageWidget.cpp
+--- pvzp-desk-src/src/Lawn/MessageWidget.cpp	2026-10-31 01:08:38.415008578 +0000
++++ pvzp-desk/src/Lawn/MessageWidget.cpp	2026-10-31 20:24:48.326768367 +0000
+@@ -30,6 +30,9 @@
+ #include "../PvzpLib/PvzpStringFile.h"
+ #include <algorithm>
+ #include <SDL.h>
++#ifdef NANO7_DEVICE
++#include "../../nano7/n7fx.h"
++#endif
+ 
+ MessageWidget::MessageWidget(LawnApp* theApp)
+ {
+@@ -154,6 +157,9 @@
+ 		case MessageStyle::MESSAGE_STYLE_HUGE_WAVE:
+ 			mDuration = 750;
+ 			mReanimType = ReanimationType::REANIM_TEXT_FADE_ON;
++#ifdef NANO7_DEVICE
++			if (Nano7FxOn()) mReanimType = ReanimationType::REANIM_NONE;  // nano7 v39: plain text, no letter animation
++#endif
+ 			break;
+ 
+ 		case MessageStyle::MESSAGE_STYLE_SLOT_MACHINE:
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/Plant.cpp pvzp-desk/src/Lawn/Plant.cpp
+--- pvzp-desk-src/src/Lawn/Plant.cpp	2026-10-31 01:08:38.415008578 +0000
++++ pvzp-desk/src/Lawn/Plant.cpp	2026-10-31 19:37:58.182720898 +0000
+@@ -21,6 +21,9 @@
+ 
+ #include "Coin.h"
+ #include "Plant.h"
++#ifdef NANO7_DEVICE
++#include "../../nano7/n7bake.h"
++#endif
+ #include "Board.h"
+ #include "Zombie.h"
+ #include "Cutscene.h"
+@@ -736,6 +739,11 @@
+ 		return false;
+ 
+ 	EndBlink();
++#ifdef NANO7_DEVICE
++	const bool n7Still = Nano7BakeOn();  // nano7 v38: shooters stay one still picture (no shooting animation)
++#else
++	const bool n7Still = false;
++#endif
+ 	Reanimation* aBodyReanim = mApp->ReanimationTryToGet(mBodyReanimID);
+ 	Reanimation* aHeadReanim = mApp->ReanimationTryToGet(mHeadReanimID);
+ 
+@@ -745,7 +753,7 @@
+ 		aHeadReanim2->StartBlend(20);
+ 		aHeadReanim2->mLoopType = ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD;
+ 		aHeadReanim2->mAnimRate = 35.0f;
+-		aHeadReanim2->SetFramesForLayer("anim_splitpea_shooting");
++		if (!n7Still) aHeadReanim2->SetFramesForLayer("anim_splitpea_shooting");
+ 		mShootingCounter = 26;
+ 	}
+ 	else if (aHeadReanim && aHeadReanim->TrackExists("anim_shooting"))
+@@ -753,7 +761,7 @@
+ 		aHeadReanim->StartBlend(20);
+ 		aHeadReanim->mLoopType = ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD;
+ 		aHeadReanim->mAnimRate = 35.0f;
+-		aHeadReanim->SetFramesForLayer("anim_shooting");
++		if (!n7Still) aHeadReanim->SetFramesForLayer("anim_shooting");
+ 
+ 		mShootingCounter = 35;
+ 		if (mSeedType == SeedType::SEED_REPEATER || mSeedType == SeedType::SEED_SPLITPEA || mSeedType == SeedType::SEED_LEFTPEATER)
+@@ -769,22 +777,22 @@
+ 	}
+ 	else if (mState == PlantState::STATE_CACTUS_HIGH)
+ 	{
+-		PlayBodyReanim("anim_shootinghigh", ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD, 20, 35.0f);
++		if (!n7Still) PlayBodyReanim("anim_shootinghigh", ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD, 20, 35.0f);
+ 		mShootingCounter = 23;
+ 	}
+ 	else if (mSeedType == SeedType::SEED_GLOOMSHROOM)
+ 	{
+-		PlayBodyReanim("anim_shooting", ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD, 20, 14.0f);
++		if (!n7Still) PlayBodyReanim("anim_shooting", ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD, 20, 14.0f);
+ 		mShootingCounter = 200;
+ 	}
+ 	else if (mSeedType == SeedType::SEED_CATTAIL)
+ 	{
+-		PlayBodyReanim("anim_shooting", ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD, 20, 30.0f);
++		if (!n7Still) PlayBodyReanim("anim_shooting", ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD, 20, 30.0f);
+ 		mShootingCounter = 50;
+ 	}
+ 	else if (aBodyReanim && aBodyReanim->TrackExists("anim_shooting"))
+ 	{
+-		PlayBodyReanim("anim_shooting", ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD, 20, 35.0f);
++		if (!n7Still) PlayBodyReanim("anim_shooting", ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD, 20, 35.0f);
+ 
+ 		switch (mSeedType)
+ 		{
+@@ -829,26 +837,31 @@
+ 		Reanimation* aHeadReanim1 = mApp->ReanimationGet(mHeadReanimID);
+ 		Reanimation* aHeadReanim2 = mApp->ReanimationGet(mHeadReanimID2);
+ 		Reanimation* aHeadReanim3 = mApp->ReanimationGet(mHeadReanimID3);
++#ifdef NANO7_DEVICE
++		const bool n7Still = Nano7BakeOn();  // nano7 v38: shooters stay one still picture (fire timing unchanged)
++#else
++		const bool n7Still = false;
++#endif
+ 
+ 		if (mBoard->RowCanHaveZombies(rowBelow))
+ 		{
+ 			aHeadReanim1->StartBlend(10);
+ 			aHeadReanim1->mLoopType = ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD;
+ 			aHeadReanim1->mAnimRate = 20.0f;
+-			aHeadReanim1->SetFramesForLayer("anim_shooting1");
++			if (!n7Still) aHeadReanim1->SetFramesForLayer("anim_shooting1");
+ 		}
+ 
+ 		aHeadReanim2->StartBlend(10);
+ 		aHeadReanim2->mLoopType = ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD;
+ 		aHeadReanim2->mAnimRate = 20.0f;
+-		aHeadReanim2->SetFramesForLayer("anim_shooting2");
++		if (!n7Still) aHeadReanim2->SetFramesForLayer("anim_shooting2");
+ 
+ 		if (mBoard->RowCanHaveZombies(rowAbove))
+ 		{
+ 			aHeadReanim3->StartBlend(10);
+ 			aHeadReanim3->mLoopType = ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD;
+ 			aHeadReanim3->mAnimRate = 20.0f;
+-			aHeadReanim3->SetFramesForLayer("anim_shooting3");
++			if (!n7Still) aHeadReanim3->SetFramesForLayer("anim_shooting3");
+ 		}
+ 
+ 		mShootingCounter = 35;
+@@ -913,6 +926,9 @@
+ {
+ 	if (FindStarFruitTarget())
+ 	{
++#ifdef NANO7_DEVICE
++		if (!Nano7BakeOn())  // nano7 v38: shooters stay one still picture
++#endif
+ 		PlayBodyReanim("anim_shoot", ReanimLoopType::REANIM_PLAY_ONCE_AND_HOLD, 20, 28.0f);
+ 		mShootingCounter = 40;
+ 	}
+@@ -3014,6 +3030,10 @@
+ void Plant::DoBlink()
+ {
+ 	mBlinkCountdown = 400 + Rand(400);
++#ifdef NANO7_DEVICE
++	if (Nano7BakeOn())
++		return;  // nano7 v37: plants are still pictures (a blink would be two more textures)
++#endif
+ 
+ 	if (NotOnGround() || mShootingCounter != 0)
+ 		return;
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/System/Music.cpp pvzp-desk/src/Lawn/System/Music.cpp
+--- pvzp-desk-src/src/Lawn/System/Music.cpp	2026-10-31 01:08:38.419008345 +0000
++++ pvzp-desk/src/Lawn/System/Music.cpp	2026-10-31 01:25:41.731345890 +0000
+@@ -89,7 +89,9 @@
+ 
+ 	p_fseek(pFile, 0, SEEK_END);
+ 	int aSize = p_ftell(pFile);
++	{ extern unsigned long long nano7_music_bytes; nano7_music_bytes += aSize; }
+ 	p_fseek(pFile, 0, SEEK_SET);
++	if (getenv("NANO7_NO_MUSIC")) { p_fclose(pFile); return false; }
+ 	void* aData = operator new[](aSize);
+ 	p_fread(aData, sizeof(uint8_t), aSize, pFile);
+ 	p_fclose(pFile);
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/System/PlayerInfo.cpp pvzp-desk/src/Lawn/System/PlayerInfo.cpp
+--- pvzp-desk-src/src/Lawn/System/PlayerInfo.cpp	2026-10-31 01:08:38.419008345 +0000
++++ pvzp-desk/src/Lawn/System/PlayerInfo.cpp	2026-10-31 19:40:22.318317324 +0000
+@@ -73,6 +73,14 @@
+ 	theSync.SyncUInt32(mId);
+ }
+ 
++#ifdef NANO7_DEVICE
++void Nano7SaveNote(const char* what);   // n7main.cpp, v38
++static void Nano7SaveNoteF(const char* fmt, unsigned a, unsigned b, unsigned c)
++{
++	char m[160]; snprintf(m, sizeof m, fmt, a, b, c); Nano7SaveNote(m);
++}
++#endif
++
+ void PlayerInfo::SyncDetails(DataSync& theSync)
+ {
+ 	if (theSync.GetReader())
+@@ -220,6 +228,9 @@
+ 		std::string aFileName = GetAppDataPath(std::format("userdata/user{}.dat", mId));
+ 		if (!gSexyAppBase->ReadBufferFromFile(aFileName, &aBuffer, false))
+ 		{
++#ifdef NANO7_DEVICE
++			Nano7SaveNoteF("nano7 load userdata/user%u.dat: none (a new player)", (unsigned)mId, 0, 0);
++#endif
+ 			return;
+ 		}
+ 
+@@ -227,9 +238,15 @@
+ 		aReader.OpenMemory(aBuffer.GetDataPtr(), aBuffer.GetDataLen(), false);
+ 		DataSync aSync(aReader);
+ 		SyncDetails(aSync);
++#ifdef NANO7_DEVICE
++		Nano7SaveNoteF("nano7 load userdata/user%u.dat: %u bytes, adventure level %u", (unsigned)mId, (unsigned)aBuffer.GetDataLen(), (unsigned)mLevel);
++#endif
+ 	}
+ 	catch (DataReaderException&)
+ 	{
++#ifdef NANO7_DEVICE
++		Nano7SaveNoteF("nano7 load userdata/user%u.dat: unreadable, starting from level 1", (unsigned)mId, 0, 0);
++#endif
+ 		PvzpLogLn("Failed to player data, resetting it");
+ 		Reset();
+ 	}
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/System/PoolEffect.cpp pvzp-desk/src/Lawn/System/PoolEffect.cpp
+--- pvzp-desk-src/src/Lawn/System/PoolEffect.cpp	2026-10-31 01:08:38.419008345 +0000
++++ pvzp-desk/src/Lawn/System/PoolEffect.cpp	2026-10-31 16:11:18.259440688 +0000
+@@ -88,6 +88,7 @@
+ 
+ void PoolEffect::UpdateWaterEffect()
+ {
++	if (!mCausticImage) return;  // nano7 v35: NANO7_NO_POOL leaves the pool uninitialised (v34 rebooted here, null + 0x28)
+ 	const unsigned int aTimePool0 = mPoolCounter << 16;
+ 	const unsigned int aTimePool1 = ((mPoolCounter & 65535u) + 1u) << 16;
+ 	const unsigned int aTimePool1Over6 = aTimePool1 / 6;
+@@ -133,6 +134,7 @@
+ 
+ void PoolEffect::PoolEffectDraw(Sexy::Graphics* g, bool theIsNight)
+ {
++	if (!mCausticImage) return;  // nano7 v35: see UpdateWaterEffect
+ 	if (!mApp->Is3DAccelerated())
+ 	{
+ 		//skip if using software rendering, never true in this port
+@@ -205,7 +207,12 @@
+ 
+ 	int aIndexOffsetX[6] = { 0, 0, 1, 0, 1, 1 };
+ 	int aIndexOffsetY[6] = { 0, 1, 1, 0, 1, 0 };
++#ifdef NANO7_DEVICE
++	// nano7 v32: 29 KB off the stack (made the first time a pool is drawn)
++	static TriVertex (*aVertArray)[150][3] = new TriVertex[3][150][3];
++#else
+ 	TriVertex aVertArray[3][150][3];
++#endif
+ 
+ 	for (int x = 0; x < 15; x++)
+ 	{
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/System/ProfileMgr.cpp pvzp-desk/src/Lawn/System/ProfileMgr.cpp
+--- pvzp-desk-src/src/Lawn/System/ProfileMgr.cpp	2026-10-31 01:08:38.419008345 +0000
++++ pvzp-desk/src/Lawn/System/ProfileMgr.cpp	2026-10-31 19:40:22.318317324 +0000
+@@ -63,7 +63,13 @@
+ 			ulong aMaxUseSeq = 0;
+ 			for (int aProfileCount = aReader->ReadUInt16(); aProfileCount > 0; aProfileCount--)
+ 			{
++#ifdef NANO7_DEVICE
++				// nano7 v32: a PlayerInfo is about 18 KB; on the heap, not the stack
++				std::unique_ptr<PlayerInfo> aProfileBox(new PlayerInfo());
++				PlayerInfo& aProfile = *aProfileBox;
++#else
+ 				PlayerInfo aProfile;
++#endif
+ 				aProfile.SyncSummary(theSync);
+ 
+ 				if (aProfile.mId > aMaxProfileId)
+@@ -87,6 +93,9 @@
+ 	}
+ }
+ 
++#ifdef NANO7_DEVICE
++void Nano7SaveNote(const char* what);   // n7main.cpp, v38
++#endif
+ void ProfileMgr::Load()
+ {
+ 	Buffer aBuffer;
+@@ -101,9 +110,15 @@
+ 			DataSync aSync(aReader);
+ 			SyncState(aSync);
+ 		}
++#ifdef NANO7_DEVICE
++		{ char m[120]; snprintf(m, sizeof m, "nano7 load userdata/users.dat: %s, %u profile(s)", aBuffer.GetDataLen() ? "read" : "none", (unsigned)mProfileMap.size()); Nano7SaveNote(m); }
++#endif
+ 	}
+ 	catch (DataReaderException&)
+ 	{
++#ifdef NANO7_DEVICE
++		Nano7SaveNote("nano7 load userdata/users.dat: unreadable, no profiles");
++#endif
+ 		Clear();
+ 	}
+ }
+@@ -191,7 +206,11 @@
+ 
+ PlayerInfo* ProfileMgr::AddProfile(const std::string& theName)
+ {
++#ifdef NANO7_DEVICE
++	auto aRet = mProfileMap.try_emplace(theName);   // nano7 v32: made in place, no 18 KB temporary on the stack
++#else
+ 	auto aRet = mProfileMap.emplace(theName, PlayerInfo());
++#endif
+ 	if (aRet.second)
+ 	{
+ 		PlayerInfo* aProfile = &aRet.first->second;
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/System/ReanimationLawn.cpp pvzp-desk/src/Lawn/System/ReanimationLawn.cpp
+--- pvzp-desk-src/src/Lawn/System/ReanimationLawn.cpp	2026-10-31 01:08:38.419008345 +0000
++++ pvzp-desk/src/Lawn/System/ReanimationLawn.cpp	2026-10-31 19:41:36.765976778 +0000
+@@ -28,6 +28,9 @@
+ #include "../../PvzpLib/Reanimator.h"
+ #include "graphics/MemoryImage.h"
+ 
++#ifdef NANO7_DEVICE
++#include "../../../nano7/n7bake.h"
++#endif
+ void ReanimatorCache::UpdateReanimationForVariation(Reanimation* theReanim, DrawVariation theDrawVariation)
+ {
+ 	if (theDrawVariation >= DrawVariation::VARIATION_MARIGOLD_WHITE && theDrawVariation <= DrawVariation::VARIATION_MARIGOLD_LIGHT_GREEN)
+@@ -109,11 +112,19 @@
+ 		UpdateReanimationForVariation(&aReanim, theDrawVariation);
+ 	}
+ 
++#ifdef NANO7_DEVICE
++	Nano7CacheDrawBegin((int)theReanimationType, theTrackName, (int)theDrawVariation);   // nano7 v38: baked at the frame end
+ 	aReanim.Draw(g);
++	Nano7CacheDrawEnd();
++#else
++	aReanim.Draw(g);
++#endif
+ }
+ 
++#include "../../../nano7/memtrack.h"
+ std::unique_ptr<MemoryImage> ReanimatorCache::MakeBlankMemoryImage(int theWidth, int theHeight)
+ {
++	MT_TAG(MT_PIXELS);  // nano7: cached plant/mower frames are pixel buffers
+ 	auto aImage = std::make_unique<MemoryImage>();
+ 
+ 	int aBitsCount = theWidth * theHeight;
+@@ -353,6 +364,7 @@
+ }
+ 
+ 
++#ifndef NANO7_DEVICE
+ void ReanimatorCache::DrawCachedPlant(Graphics* g, float thePosX, float thePosY, SeedType theSeedType, DrawVariation theDrawVariation)
+ {
+ 	PVZP_ASSERT(theSeedType >= 0 && theSeedType < SeedType::NUM_SEED_TYPES);
+@@ -397,7 +409,10 @@
+ 	else
+ 		PvzpDrawImageScaledF(g, aImage, thePosX + (aOffsetX * g->mScaleX), thePosY + (aOffsetY * g->mScaleY), g->mScaleX, g->mScaleY);
+ }
++#endif
++
+ 
++#ifndef NANO7_DEVICE
+ void ReanimatorCache::DrawCachedMower(Graphics* g, float thePosX, float thePosY, LawnMowerType theMowerType)
+ {
+ 	PVZP_ASSERT(theMowerType >= 0 && theMowerType < LawnMowerType::NUM_MOWER_TYPES);
+@@ -406,7 +421,10 @@
+ 		mLawnMowers[theMowerType] = MakeCachedMowerFrame(theMowerType);
+ 	PvzpDrawImageScaledF(g, mLawnMowers[theMowerType].get(), thePosX - 20.0f, thePosY, g->mScaleX, g->mScaleY);
+ }
++#endif
++
+ 
++#ifndef NANO7_DEVICE
+ void ReanimatorCache::DrawCachedZombie(Graphics* g, float thePosX, float thePosY, ZombieType theZombieType)
+ {
+ 	PVZP_ASSERT(theZombieType >= 0 && theZombieType < ZombieType::NUM_CACHED_ZOMBIE_TYPES);
+@@ -415,3 +433,9 @@
+ 		mZombieImages[theZombieType] = MakeCachedZombieFrame(theZombieType);
+ 	PvzpDrawImageScaledF(g, mZombieImages[theZombieType].get(), thePosX, thePosY, g->mScaleX, g->mScaleY);
+ }
++#endif
++
++
++#ifdef NANO7_DEVICE
++#include "../../../nano7dev/n7cache_dev.inc"
++#endif
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/System/SaveGame.cpp pvzp-desk/src/Lawn/System/SaveGame.cpp
+--- pvzp-desk-src/src/Lawn/System/SaveGame.cpp	2026-10-31 01:08:38.419008345 +0000
++++ pvzp-desk/src/Lawn/System/SaveGame.cpp	2026-10-31 11:29:06.697700932 +0000
+@@ -1203,7 +1203,7 @@
+ 		bool aUseTemp = (theReanimation->mTrackInstances == nullptr);
+ 		if (theContext.mReading)
+ 		{
+-			theReanimation->mTrackInstances = reinterpret_cast<ReanimatorTrackInstance*>(
++			theReanimation->mTrackInstances = reinterpret_cast<ReanimatorTrackInstance*>(Nano7PlainAlloc() ? calloc(aCount, sizeof(ReanimatorTrackInstance)) :
+ 				FindGlobalAllocator(aCount * sizeof(ReanimatorTrackInstance))->Calloc(aCount * sizeof(ReanimatorTrackInstance)));
+ 			if (theReanimation->mTrackInstances == nullptr)
+ 			{
+@@ -1217,7 +1217,7 @@
+ 		else
+ 		{
+ 			PvzpAllocator* aAllocator = FindGlobalAllocator(aCount * sizeof(ReanimatorTrackInstance));
+-			if (aAllocator == nullptr || !aAllocator->IsPointerFromAllocator(theReanimation->mTrackInstances) || aAllocator->IsPointerOnFreeList(theReanimation->mTrackInstances))
++			if (Nano7PlainAlloc() ? theReanimation->mTrackInstances == nullptr : (aAllocator == nullptr || !aAllocator->IsPointerFromAllocator(theReanimation->mTrackInstances) || aAllocator->IsPointerOnFreeList(theReanimation->mTrackInstances)))
+ 			{
+ 				aUseTemp = true;
+ 			}
+@@ -2624,7 +2624,7 @@
+ 		int aSize = theReanimation->mDefinition->mTracks.count * sizeof(ReanimatorTrackInstance);
+ 		if (theContext.mReading)
+ 		{
+-			theReanimation->mTrackInstances = (ReanimatorTrackInstance*)FindGlobalAllocator(aSize)->Calloc(aSize);
++			theReanimation->mTrackInstances = (ReanimatorTrackInstance*)(Nano7PlainAlloc() ? calloc(1, aSize) : FindGlobalAllocator(aSize)->Calloc(aSize));
+ 		}
+ 		theContext.SyncBytes(theReanimation->mTrackInstances, aSize);
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/Widget/AwardScreen.cpp pvzp-desk/src/Lawn/Widget/AwardScreen.cpp
+--- pvzp-desk-src/src/Lawn/Widget/AwardScreen.cpp	2026-10-31 01:08:38.419008345 +0000
++++ pvzp-desk/src/Lawn/Widget/AwardScreen.cpp	2026-10-31 20:29:59.916601673 +0000
+@@ -81,7 +81,9 @@
+ 			mShowingAchievements = false;
+ 		}
+ 
++#ifndef NANO7_DEVICE   // nano7 v38: saved already at the level end (LawnApp::CheckForGameEnd)
+ 		mApp->WriteCurrentUserConfig();
++#endif
+ 	}
+ 
+ 	int aLevel = mApp->mPlayerInfo->GetLevel();
+@@ -603,7 +605,8 @@
+ 	g->FillRect(0, 0, mWidth, mHeight);
+ 	g->SetColorizeImages(false);
+ 
+-	g->DrawImage(IMAGE_CHALLENGE_BACKGROUND, 0, 0);
++	if (IMAGE_CHALLENGE_BACKGROUND) g->DrawImage(IMAGE_CHALLENGE_BACKGROUND, 0, 0);
++	else { g->SetColor(Color(28, 52, 28)); g->FillRect(0, 0, mWidth, mHeight); }   // nano7 v39: the challenge pictures are left out of the pack
+ 
+ 	PvzpDrawString(g, mApp->GetString("ACHIEVEMENTS_TITLE", "ACHIEVEMENTS"), BOARD_WIDTH / 2, 58, FONT_HOUSEOFTERROR28, Color(220, 220, 220), DS_ALIGN_CENTER);
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/Widget/CreditScreen.cpp pvzp-desk/src/Lawn/Widget/CreditScreen.cpp
+--- pvzp-desk-src/src/Lawn/Widget/CreditScreen.cpp	2026-10-31 01:08:38.423008112 +0000
++++ pvzp-desk/src/Lawn/Widget/CreditScreen.cpp	2026-10-31 01:33:17.108795914 +0000
+@@ -481,7 +481,7 @@
+ 		ReanimatorTrack* aTrack = &aMain2Def->mTracks.tracks[aTrackIndex];
+ 		for (int aTransIndex = 0; aTransIndex < aTrack->mTransforms.count; aTransIndex++)
+ 		{
+-			ReanimatorTransform& aTrans = aTrack->mTransforms.mTransforms[aTransIndex];
++			ReanimatorTransform& aTrans = ReanimTf(aTrack->mTransforms, aTransIndex);
+ 			if (aTransIndex < 124 && (strcmp(aTrack->mName, "Words") == 0 || strcmp(aTrack->mName, "Words2") == 0))
+ 			{
+ 				aTrans.mFont = FONT_BRIANNETOD32BLACK;
+@@ -494,7 +494,7 @@
+ 		ReanimatorTrack* aTrack = &aMain3Def->mTracks.tracks[aTrackIndex];
+ 		for (int aTransIndex = 0; aTransIndex < aTrack->mTransforms.count; aTransIndex++)
+ 		{
+-			ReanimatorTransform& aTrans = aTrack->mTransforms.mTransforms[aTransIndex];
++			ReanimatorTransform& aTrans = ReanimTf(aTrack->mTransforms, aTransIndex);
+ 			if (aTransIndex < 124 && (strcmp(aTrack->mName, "Words") == 0 || strcmp(aTrack->mName, "Words2") == 0))
+ 			{
+ 				aTrans.mFont = FONT_BRIANNETOD32BLACK;
+@@ -507,7 +507,7 @@
+ 		ReanimatorTrack* aTrack = &aUndeadDef->mTracks.tracks[aTrackIndex];
+ 		for (int aTransIndex = 0; aTransIndex < aTrack->mTransforms.count; aTransIndex++)
+ 		{
+-			ReanimatorTransform& aTrans = aTrack->mTransforms.mTransforms[aTransIndex];
++			ReanimatorTransform& aTrans = ReanimTf(aTrack->mTransforms, aTransIndex);
+ 			if (aTrans.mFont)
+ 			{
+ 				aTrans.mFont = FONT_BRIANNETOD32BLACK;
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/Widget/GameSelector.cpp pvzp-desk/src/Lawn/Widget/GameSelector.cpp
+--- pvzp-desk-src/src/Lawn/Widget/GameSelector.cpp	2026-10-31 01:08:38.423008112 +0000
++++ pvzp-desk/src/Lawn/Widget/GameSelector.cpp	2026-10-31 16:12:56.145733601 +0000
+@@ -46,6 +46,17 @@
+ #include <algorithm>
+ #include <format>
+ 
++#ifdef NANO7_DEVICE   // nano7 v34: breadcrumbs, written to log.txt and sync.txt at once (they survive a reboot)
++#include <cstdint>
++extern "C" void n7p_step(const char* what);
++extern "C" void n7p_step_a(const char* what, uint32_t a);
++#define N7CRUMB(s) n7p_step(s)
++#define N7CRUMB_A(s, a) n7p_step_a(s, (uint32_t)(a))
++#else
++#define N7CRUMB(s) ((void)0)
++#define N7CRUMB_A(s, a) ((void)0)
++#endif
++
+ static float gFlowerCenter[3][2] = { { 765.0f, 483.0f }, { 663.0f, 455.0f }, { 701.0f, 439.0f } };
+ 
+ void GameSelectorOverlay::Draw(Graphics* g)
+@@ -768,7 +779,12 @@
+ 				mApp->PreNewGame(GameMode::GAMEMODE_CHALLENGE_ICE, false);
+ 				return;
+ 			}
++#ifndef NANO7_DEVICE
+ 			if (mApp->IsFirstTimeAdventureMode() && mLevel == 1 && !mApp->SaveFileExists())
++#else   // nano7 v35: the first-run intro (game mode 72) is a pool lawn with 20+ animations; the nano goes straight to
++        // 1-1 (NANO7_INTRO, dry run only, keeps it to test the pool guard)
++			if (getenv("NANO7_INTRO") && mApp->IsFirstTimeAdventureMode() && mLevel == 1 && !mApp->SaveFileExists())
++#endif
+ 			{
+ 				mApp->PreNewGame(GameMode::GAMEMODE_INTRO, false);
+ 				return;
+@@ -1175,6 +1191,7 @@
+ 
+ void GameSelector::ButtonDepress(int theId)
+ {
++	N7CRUMB_A("menu: button clicked (a = id, 100 = Adventure)", theId);
+ 	if (mSlideCounter > 0)
+ 		return;
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/Lawn/Zombie.cpp pvzp-desk/src/Lawn/Zombie.cpp
+--- pvzp-desk-src/src/Lawn/Zombie.cpp	2026-10-31 01:08:38.427007879 +0000
++++ pvzp-desk/src/Lawn/Zombie.cpp	2026-10-31 20:24:48.322768600 +0000
+@@ -6683,7 +6683,7 @@
+ 		else if (aBodyReanim->TrackExists("_ground"))
+ 		{
+ 			ReanimatorTrack* aTrack = &aBodyReanim->mDefinition->mTracks.tracks[aBodyReanim->FindTrackIndex("_ground")];
+-			float aDistance = aTrack->mTransforms.mTransforms[aBodyReanim->mFrameStart + aBodyReanim->mFrameCount - 1].mTransX - aTrack->mTransforms.mTransforms[aBodyReanim->mFrameStart].mTransX;
++			float aDistance = ReanimTf(aTrack->mTransforms, aBodyReanim->mFrameStart + aBodyReanim->mFrameCount - 1).mTransX - ReanimTf(aTrack->mTransforms, aBodyReanim->mFrameStart).mTransX;
+ 			if (aDistance >= 1e-6f)
+ 			{
+ 				float aOneOverSpeed = aBodyReanim->mFrameCount / aDistance;
+@@ -7134,6 +7134,12 @@
+ 	}
+ }
+ 
++#ifdef NANO7_DEVICE
++void Nano7WatchFrames(const char* what, int a);   // n7main.cpp, v38: a crumb now and around the next 20 frames
++#endif
++#ifdef NANO7_DEVICE
++#include "../../nano7/n7fx.h"
++#endif
+ bool Zombie::TrySpawnLevelAward()
+ {
+ 	if (!IsOnBoard() || mBoard->HasLevelAwardDropped() || mBoard->mLevelComplete || mDroppedLoot)
+@@ -7267,6 +7273,9 @@
+ 	if (aCoinType != CoinType::COIN_NONE)
+ 	{
+ 		mApp->PlayFoley(FoleyType::FOLEY_SPAWN_SUN);
++#ifdef NANO7_DEVICE
++		Nano7WatchFrames("award: level award dropped (a = coin type)", (int)aCoinType);   // nano7 v38
++#endif
+ 		mBoard->AddCoin(aCenterX, aCenterY, aCoinType, aCoinMotion);
+ 	}
+ 
+@@ -8635,6 +8644,13 @@
+ 		mAltitude = 0.0f;
+ 	}
+ 
++#ifdef NANO7_DEVICE
++	if (Nano7FxOn())
++	{
++		DieWithLoot();  // nano7 v39: a mowed zombie vanishes (no flattened animation)
++		return;
++	}
++#endif
+ 	Reanimation* aMoweredReanim = mApp->AddReanimation(0.0f, 0.0f, mRenderOrder, ReanimationType::REANIM_LAWN_MOWERED_ZOMBIE);
+ 	aMoweredReanim->mAnimRate = 8.0f;
+ 	aMoweredReanim->mIsAttachment = false;
+@@ -8683,6 +8699,13 @@
+ 
+ 	AttachmentDetachCrossFadeParticleType(mAttachmentID, ParticleEffect::PARTICLE_ZAMBONI_SMOKE, nullptr);
+ 	BungeeDropPlant();
++#ifdef NANO7_DEVICE
++	if (Nano7FxOn())
++	{
++		DieWithLoot();  // nano7 v39: a burned zombie vanishes (no charred animation, no ash falling)
++		return;
++	}
++#endif
+ 
+ 	if (mZombiePhase == ZombiePhase::PHASE_ZOMBIE_DYING ||
+ 		mZombiePhase == ZombiePhase::PHASE_POLEVAULTER_IN_VAULT ||
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/LawnApp.cpp pvzp-desk/src/LawnApp.cpp
+--- pvzp-desk-src/src/LawnApp.cpp	2026-10-31 01:08:38.427007879 +0000
++++ pvzp-desk/src/LawnApp.cpp	2026-10-31 21:20:10.773059126 +0000
+@@ -74,6 +74,17 @@
+ #include "widget/Dialog.h"
+ #include "SexyAppFramework/resource.h"
+ 
++#ifdef NANO7_DEVICE   // nano7 v34: breadcrumbs, written to log.txt and sync.txt at once (they survive a reboot)
++#include <cstdint>
++extern "C" void n7p_step(const char* what);
++extern "C" void n7p_step_a(const char* what, uint32_t a);
++#define N7CRUMB(s) n7p_step(s)
++#define N7CRUMB_A(s, a) n7p_step_a(s, (uint32_t)(a))
++#else
++#define N7CRUMB(s) ((void)0)
++#define N7CRUMB_A(s, a) ((void)0)
++#endif
++
+ bool gIsPartnerBuild = false;
+ bool gSlowMo = false;
+ bool gFastMo = false;
+@@ -342,6 +353,7 @@
+ 	//	return;
+ 	//}
+ 
++	N7CRUMB_A("board: PreNewGame (a = game mode)", theGameMode);
+ 	mGameMode = theGameMode;
+ 	if (theLookForSavedGame && TryLoadGame())
+ 		return;
+@@ -355,7 +367,10 @@
+ 
+ void LawnApp::MakeNewBoard()
+ {
++	N7CRUMB("board: MakeNewBoard, freeing the last screen");
+ 	KillBoard();
++	Nano7LevelFree(this);  // nano7: drop animations and textures the last screen used
++	N7CRUMB("board: MakeNewBoard, new Board");
+ 	mBoard = new Board(this);
+ 	mBoard->Resize(0, 0, mWidth, mHeight);
+ 	mWidgetManager->AddWidget(mBoard);
+@@ -365,6 +380,7 @@
+ 
+ void LawnApp::StartPlaying()
+ {
++	N7CRUMB("board: StartPlaying (Let's Rock)");
+ 	KillSeedChooserScreen();
+ 	mBoard->StartLevel();
+ 	mGameScene = GameScenes::SCENE_PLAYING;
+@@ -426,16 +442,21 @@
+ 	mFirstTimeGameSelector = false;
+ 
+ 	MakeNewBoard();
++	N7CRUMB("board: InitLevel");
+ 	mBoard->InitLevel();
+ 	mBoardResult = BoardResult::BOARDRESULT_NONE;
+ 	mGameScene = GameScenes::SCENE_LEVEL_INTRO;
+ 
++	N7CRUMB("board: seed chooser");
+ 	ShowSeedChooserScreen();
++	N7CRUMB("board: level intro");
+ 	mBoard->mCutScene->StartLevelIntro();
++	N7CRUMB("board: NewGame done");
+ }
+ 
+ void LawnApp::ShowGameSelector()
+ {
++	N7CRUMB("menu: showing the main menu");
+ 	KillBoard();
+ 	//UpdateRegisterInfo();
+ 	if (mGameSelector)
+@@ -468,18 +489,21 @@
+ 
+ void LawnApp::ShowAwardScreen(AwardType theAwardType, bool theShowAchievements)
+ {
++	N7CRUMB_A("award screen: making it (a = award type)", theAwardType);
+ 	mGameScene = GameScenes::SCENE_AWARD;
+ 	mAwardScreen = std::make_unique<AwardScreen>(this, theAwardType, theShowAchievements);
+ 	mAwardScreen->Resize(0, 0, mWidth, mHeight);
+ 	mWidgetManager->AddWidget(mAwardScreen.get());
+ 	mWidgetManager->BringToBack(mAwardScreen.get());
+ 	mWidgetManager->SetFocus(mAwardScreen.get());
++	N7CRUMB("award screen: made");
+ }
+ 
+ void LawnApp::KillAwardScreen()
+ {
+ 	if (mAwardScreen)
+ 	{
++		N7CRUMB("award screen: closing");
+ 		mWidgetManager->RemoveWidget(mAwardScreen.get());
+ 		SafeDeleteWidget(mAwardScreen.release());
+ 	}
+@@ -1398,12 +1422,23 @@
+ 	if (mBoard == nullptr || !mBoard->mLevelComplete)
+ 		return;
+ 
++	N7CRUMB_A("level end: complete, updating the profile (a = level)", mBoard->mLevel);
+ 	bool aUnlockedNewChallenge = UpdatePlayerProfileForFinishingLevel();
++#ifdef NANO7_DEVICE
++	// nano7 v38: UpdatePlayerProfileForFinishingLevel saved user1.dat; users.dat too, before the board goes
++	// (the award screen no longer saves a second time)
++	if (mProfileMgr) mProfileMgr->Save();
++	N7CRUMB_A("level end: saved (a = adventure level now)", mPlayerInfo ? mPlayerInfo->mLevel : 0);
++#endif
+ 
+ 	if (IsAdventureMode())
+ 	{
+ 		int aLevel = mBoard->mLevel;
+ 		KillBoard();
++		N7CRUMB("level end: board killed");
++		ProcessSafeDeleteList();  // nano7kit: release the old board's resources before the next screen loads its own
++		Nano7LevelFree(this);
++		N7CRUMB("level end: level resources freed");
+ 
+ 		if (IsFirstTimeAdventureMode() && aLevel < 50)
+ 		{
+@@ -1595,6 +1630,7 @@
+ 		mMusic->MusicUpdate();
+ 
+ 		CheckForGameEnd();
++		{ extern void nano7_bot_update(LawnApp*); nano7_bot_update(this); }
+ 	}
+ }
+ 
+@@ -1680,7 +1716,7 @@
+ 	aTimer.Start();
+ 
+ 	mPoolEffect = std::make_unique<PoolEffect>();
+-	mPoolEffect->PoolEffectInitialize();
++	if (!getenv("NANO7_NO_POOL")) mPoolEffect->PoolEffectInitialize();  // nano7: day levels never draw the pool
+ 	mZenGarden = std::make_unique<ZenGarden>();
+ 	mReanimatorCache = std::make_unique<ReanimatorCache>();
+ 	mReanimatorCache->ReanimatorCacheInitialize();
+@@ -1708,6 +1744,112 @@
+ 	LoadGroup("LoadingSounds", 54);
+ }
+ 
++#ifdef NANO7_DEVICE
++extern "C" void n7p_step(const char* what);
++extern "C" void n7p_step_a(const char* what, uint32_t a);
++// nano7 v32: LoadingThreadProc (above), split so each OS frame callback does a slice of it: about 830 images, the
++// fonts, the particle and trail definitions and the sounds in one callback was many seconds on the iPod. Same order
++// and same checks; a breadcrumb before each stage. The title screen draws its progress bar in between.
++bool LawnApp::Nano7LoadStep()
++{
++	static const char* const kGroups[] = { "LoadingImages", "LoadingFonts", "LoadingSounds" };
++	static const int kPerFrame[] = { 24, 2, 8 }, kAveMs[] = { 9, 54, 54 };
++	static int sStage, sCount;
++	if (mShutdown || mCloseRequest || mLoadingFailed) return true;
++	int g = sStage <= 2 ? 0 : sStage <= 4 ? 1 : 2;
++	switch (sStage)
++	{
++	case 0:
++	{
++		n7p_step("loading: loader bar, strings, properties");
++		if (!PvzpLoadResources("LoaderBar")) return true;
++		PvzpStringListLoad("Properties/LawnStrings.txt");
++		PvzpStringListReadFile("Properties/ZombatarTOS.txt");
++		LoadProperties("properties/default.xml", false, false);
++		LoadProperties("properties/Layout.xml", false, false);
++		LoadProperties("properties/pvz-portable.xml", false, false);
++		if (mTitleScreen) mTitleScreen->mLoaderScreenIsLoaded = true;
++		for (int i = 0; i < 3; i++) mNumLoadingThreadTasks += mResourceManager->GetNumResources(kGroups[i]) * kAveMs[i];
++		mNumLoadingThreadTasks += 636;
++		mNumLoadingThreadTasks += GetNumPreloadingTasks();
++		mNumLoadingThreadTasks += Music::MUSIC_LOADING_TASKS;
++		sStage = 1;
++		return false;
++	}
++	case 1: case 3: case 10:
++		if (g == 2 && getenv("NANO7_NO_SOUND"))
++		{   // nano7 v34: silent build, no WAVs shipped; the sound ids stay unset and every sound call is a no-op
++			n7p_step("loading: sounds skipped (silent build)");
++			sStage = 12;
++			return true;
++		}
++		n7p_step_a(g == 0 ? "loading: images" : g == 1 ? "loading: fonts" : "loading: sounds", (uint32_t)mResourceManager->GetNumResources(kGroups[g]));
++		mResourceManager->StartLoadResources(kGroups[g]);
++		sCount = 0;
++		sStage++;
++		return false;
++	case 2: case 4: case 11:
++		for (int i = 0; i < kPerFrame[g]; i++)
++		{
++			if (mShutdown || mCloseRequest || mLoadingFailed) return true;
++			if (!PvzpLoadNextResource())
++			{
++				if (mResourceManager->HadError() || !ExtractResourcesByName(mResourceManager.get(), kGroups[g]))
++				{
++					n7p_step_a("loading: group FAILED", (uint32_t)g);
++					ShowResourceError();
++					mLoadingFailed = true;
++					return true;
++				}
++				n7p_step_a("loading: group done (a = resources)", (uint32_t)sCount);
++				if (g == 1) mDefaultFont = FONT_PICO129;
++				sStage++;
++				return sStage == 12;
++			}
++			mCompletedLoadingThreadTasks += kAveMs[g];
++			sCount++;
++		}
++		if (sCount % (kPerFrame[g] * 8) == 0) n7p_step_a("loading: resources so far", (uint32_t)sCount);
++		return false;
++	case 5:
++		n7p_step("loading: music init");
++		mMusic->MusicInit();
++		sStage++;
++		return false;
++	case 6:
++		n7p_step("loading: pool, zen garden, animation cache, sound effects");
++		mPoolEffect = std::make_unique<PoolEffect>();
++		if (!getenv("NANO7_NO_POOL")) mPoolEffect->PoolEffectInitialize();
++		mZenGarden = std::make_unique<ZenGarden>();
++		mReanimatorCache = std::make_unique<ReanimatorCache>();
++		mReanimatorCache->ReanimatorCacheInitialize();
++		PvzpFoleyInitialize(gLawnFoleyParamArray, LENGTH(gLawnFoleyParamArray));
++		sStage++;
++		return false;
++	case 7:
++		n7p_step("loading: trails");
++		TrailLoadDefinitions(gLawnTrailArray, LENGTH(gLawnTrailArray));
++		sStage++;
++		return false;
++	case 8:
++		n7p_step("loading: particles");
++		PvzpParticleLoadDefinitions(gLawnParticleArray, LENGTH(gLawnParticleArray));
++		sStage++;
++		return false;
++	case 9:
++		n7p_step("loading: preload for the player");
++		PreloadForUser();
++		if (mLoadingFailed || mShutdown || mCloseRequest) return true;
++		GetNumPreloadingTasks();
++		sStage++;
++		return false;
++	default:
++		n7p_step("loading: done");
++		return true;
++	}
++}
++#endif
++
+ void LawnApp::FastLoad(GameMode theGameMode)
+ {
+ 	if (!mShutdown)
+@@ -2301,6 +2443,9 @@
+ 	}
+ }
+ 
++#ifdef NANO7_DEVICE
++#include "../nano7/n7fx.h"
++#endif
+ Reanimation* LawnApp::AddReanimation(float theX, float theY, int theRenderOrder, ReanimationType theReanimationType)
+ {
+ 	return mEffectSystem->mReanimationHolder->AllocReanimation(theX, theY, theRenderOrder, theReanimationType);
+@@ -2308,11 +2453,21 @@
+ 
+ PvzpParticleSystem* LawnApp::AddPvzpParticle(float theX, float theY, int theRenderOrder, ParticleEffect theEffect)
+ {
++#ifdef NANO7_DEVICE
++	if (!Nano7FxParticleAllowed(theEffect))
++	{
++		// nano7 v39: no particles but the pick-up arrows. The system is still made, from the empty (never loaded)
++		// definition: no emitters, nothing drawn, dead at its first update, and every caller gets a real object.
++		Nano7FxParticleRefused(theEffect, theX, theY);
++	}
++#endif
+ 	return mEffectSystem->mParticleHolder->AllocParticleSystem(theX, theY, theRenderOrder, theEffect);
+ }
+ 
+ ParticleSystemID LawnApp::ParticleGetID(PvzpParticleSystem* theParticle)
+ {
++	if (theParticle == nullptr)
++		return ParticleSystemID::PARTICLESYSTEMID_NULL;  // nano7 v39: a refused effect
+ 	return (ParticleSystemID)mEffectSystem->mParticleHolder->mParticleSystems.DataArrayGetID(theParticle);
+ }
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/LawnApp.h pvzp-desk/src/LawnApp.h
+--- pvzp-desk-src/src/LawnApp.h	2026-10-31 01:08:38.427007879 +0000
++++ pvzp-desk/src/LawnApp.h	2026-10-31 14:27:19.667505458 +0000
+@@ -148,6 +148,9 @@
+ 	void							WriteToRegistry() override;
+ 	void							ReadFromRegistry() override;
+ 	void							LoadingThreadProc() override;
++#ifdef NANO7_DEVICE
++	bool							Nano7LoadStep() override;
++#endif
+ 	virtual void					LoadingCompleted();
+ 	void							LoadingThreadCompleted() override;
+ 	void							URLOpenFailed(const std::string& theURL) override;
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/DataArray.h pvzp-desk/src/PvzpLib/DataArray.h
+--- pvzp-desk-src/src/PvzpLib/DataArray.h	2026-10-31 01:08:38.427007879 +0000
++++ pvzp-desk/src/PvzpLib/DataArray.h	2026-10-31 01:25:41.727346123 +0000
+@@ -27,6 +27,7 @@
+ #include <new>
+ #include "PvzpDebug.h"
+ #include "PvzpCommon.h"
++#include "../../nano7/poolcap.h"
+ 
+ enum
+ {
+@@ -64,6 +65,8 @@
+ 	void DataArrayInitialize(unsigned int theMaxSize, const char* theName)
+ 	{
+ 		PVZP_ASSERT(mItems == nullptr);
++		theMaxSize = nano7_pool_cap(theName, theMaxSize, sizeof(DataArrayItem) + sizeof(unsigned int));
++		MtScope aPoolTag(MT_POOL);
+ 		mItems = std::make_unique<DataArrayItem[]>(theMaxSize);
+ 		mItemIds = std::make_unique<unsigned int[]>(theMaxSize);
+ 		mMaxSize = theMaxSize;
+@@ -160,7 +163,7 @@
+ 
+ 	T* DataArrayAlloc()
+ 	{
+-		PVZP_ASSERT(mSize < mMaxSize, "Data array full: {}", mName);
++		if (mSize >= mMaxSize) nano7_pool_full(mName, mMaxSize);
+ 		PVZP_ASSERT(mFreeListHead <= mMaxUsedCount, "DataArrayAlloc error in {}", mName);
+ 		unsigned int aNext = mMaxUsedCount;
+ 		if (mFreeListHead == mMaxUsedCount)
+@@ -175,6 +178,7 @@
+ 		mItemIds[aNext] = (mNextKey++ << DATA_ARRAY_KEY_SHIFT) | aNext;
+ 		if (mNextKey == DATA_ARRAY_MAX_SIZE) mNextKey = 1;
+ 		mSize++;
++		nano7_pool_note(mName, mSize);
+ 
+ 		return &aNewItem;
+ 	}
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/Definition.cpp pvzp-desk/src/PvzpLib/Definition.cpp
+--- pvzp-desk-src/src/PvzpLib/Definition.cpp	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/Definition.cpp	2026-10-31 15:07:55.341163088 +0000
+@@ -329,8 +329,15 @@
+ 	return aPtr;
+ }
+ 
++static bool DefinitionLoadImage_n7(Image** theImage, const std::string& theName);
+ bool DefinitionLoadImage(Image** theImage, const std::string& theName)
+ {
++	bool aOk = DefinitionLoadImage_n7(theImage, theName);
++	if (aOk) Nano7NoteImageName(*theImage, theName);
++	return aOk;
++}
++static bool DefinitionLoadImage_n7(Image** theImage, const std::string& theName)
++{
+ 	if (theName.empty())
+ 	{
+ 		*theImage = nullptr;
+@@ -367,6 +374,7 @@
+ {
+ 	_Font* aFont = gSexyAppBase->mResourceManager->LoadFont(theName);
+ 	*theFont = aFont;
++	Nano7NoteFontName(aFont, theName);
+ 	return aFont != nullptr;
+ }
+ 
+@@ -580,12 +588,17 @@
+ 	PerfTimer aTimer;
+ 	aTimer.Start();
+ 
++#ifdef NANO7_DEVICE
++	// nano7 v33: no cache32 on the device (it never compiles, so nothing writes one): the shipped file only
++	std::ifstream aFileStream(Sexy::PathFromU8(theCompiledFilePath), std::ios::binary);
++#else
+ 	std::string aFullCompiledPath = DefinitionGetCompiledCacheFullPath(theCompiledFilePath);
+ 	std::ifstream aFileStream(Sexy::PathFromU8(aFullCompiledPath), std::ios::binary);
+ 	if (!aFileStream)
+ 	{
+ 		aFileStream.open(Sexy::PathFromU8(theCompiledFilePath), std::ios::binary);
+ 	}
++#endif
+ 
+ 	if (!aFileStream) return false;
+ 
+@@ -1287,6 +1300,9 @@
+ 	return DefinitionWriteCompiledFile(theCompiledFilePath, theDefMap, theDefinition);
+ }
+ 
++#ifdef NANO7_DEVICE
++extern "C" void n7_fatal(const char* why);
++#endif
+ bool DefinitionCompileAndLoad(const std::string& theXMLFilePath, const DefMap* theDefMap, void* theDefinition)
+ {
+ #ifdef PVZ_DEBUG
+@@ -1303,6 +1319,17 @@
+ 		return true;
+ 	}
+ 
++#ifdef NANO7_DEVICE
++	// nano7 v33: the device never compiles a definition from XML at run time (slow, and a few hundred KB of heap);
++	// every definition it loads ships compiled (reanims as .n7r, particles and trails as compiled/particles)
++	extern bool gNano7AllowCompile;
++	if (!gNano7AllowCompile)
++	{
++		PvzpLogLn("nano7 refused to compile {} at run time: no usable compiled file", theXMLFilePath);
++		n7_fatal("a definition has no usable compiled file (see log.txt)");
++		return false;
++	}
++#endif
+ 	PerfTimer aTimer;
+ 	aTimer.Start();
+ 	bool aResult = DefinitionCompileFile(theXMLFilePath, aCompiledFilePath, theDefMap, theDefinition);
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/EffectSystem.cpp pvzp-desk/src/PvzpLib/EffectSystem.cpp
+--- pvzp-desk-src/src/PvzpLib/EffectSystem.cpp	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/EffectSystem.cpp	2026-10-31 16:11:18.263440455 +0000
+@@ -353,7 +353,9 @@
+ 
+ bool gPvzpTriangleDrawAdditive = false;
+ 
++#ifndef NANO7_NO_SWTRI
+ #include "PvzpDrawTriangleInc.inc"
++#endif
+ 
+ // Mixed blending preserves screen RGB but not destination alpha. Offscreen targets may be sampled later.
+ static bool CanMixTriangleDrawModes(Graphics* g)
+@@ -364,6 +366,23 @@
+ 	return anImage == anImage->mGLInterface->GetScreenImage();
+ }
+ 
++#ifdef NANO7_DEVICE
++#include <new>
++static constexpr int kN7GroupPool = 6;
++alignas(PvzpTriangleGroup) static unsigned char sN7GroupPool[kN7GroupPool][sizeof(PvzpTriangleGroup)];
++static int sN7GroupDepth;
++PvzpTriangleGroupLease::PvzpTriangleGroupLease()
++{
++	mHeap = sN7GroupDepth >= kN7GroupPool;
++	mGroup = mHeap ? new PvzpTriangleGroup() : new (sN7GroupPool[sN7GroupDepth++]) PvzpTriangleGroup();
++}
++PvzpTriangleGroupLease::~PvzpTriangleGroupLease()
++{
++	if (mHeap) delete mGroup;
++	else { mGroup->~PvzpTriangleGroup(); sN7GroupDepth--; }
++}
++#endif
++
+ PvzpTriangleGroup::PvzpTriangleGroup()
+ {
+ 	mImage = nullptr;
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/EffectSystem.h pvzp-desk/src/PvzpLib/EffectSystem.h
+--- pvzp-desk-src/src/PvzpLib/EffectSystem.h	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/EffectSystem.h	2026-10-31 16:11:18.263440455 +0000
+@@ -31,7 +31,13 @@
+ #include "graphics/Graphics.h"
+ using namespace Sexy;
+ 
++#ifdef NANO7_DEVICE
++// nano7 v32: a triangle group lives on the stack, and Reanimation::DrawRenderGroup nests (attachments), so 256
++// (15.6 KB a group) made a draw chain need about 50 KB of stack; 64 flushes more often and uses 4 KB.
++constexpr const int MAX_TRIANGLES = 64;
++#else
+ constexpr const int MAX_TRIANGLES = 256;
++#endif
+ 
+ class PvzpTriVertex
+ {
+@@ -58,6 +64,21 @@
+ 	void                        AddTriangle(Graphics* g, Image* theImage, const SexyMatrix3& theMatrix, const Rect& theClipRect, const Color& theColor, int theDrawMode, const Rect& theSrcRect);
+ 	int                         AppendTriangleDrawMode(int theDrawMode);
+ };
++#ifdef NANO7_DEVICE
++// nano7 v35: a 3.9 KB triangle group from a small static pool instead of the stack (draws nest through attachments,
++// always last in, first out); past the pool it comes from the heap
++struct PvzpTriangleGroupLease
++{
++	PvzpTriangleGroup* mGroup; bool mHeap;
++	PvzpTriangleGroupLease();
++	~PvzpTriangleGroupLease();
++	PvzpTriangleGroupLease(const PvzpTriangleGroupLease&) = delete;
++	PvzpTriangleGroupLease& operator=(const PvzpTriangleGroupLease&) = delete;
++};
++#define PVZP_TRIANGLE_GROUP(name) PvzpTriangleGroupLease name##Lease; PvzpTriangleGroup& name = *name##Lease.mGroup
++#else
++#define PVZP_TRIANGLE_GROUP(name) PvzpTriangleGroup name
++#endif
+ 
+ extern bool gPvzpTriangleDrawAdditive;
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/FilterEffect.cpp pvzp-desk/src/PvzpLib/FilterEffect.cpp
+--- pvzp-desk-src/src/PvzpLib/FilterEffect.cpp	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/FilterEffect.cpp	2026-10-31 12:31:52.350151143 +0000
+@@ -179,6 +179,9 @@
+ 
+ Image* FilterEffectGetImage(Image* theImage, FilterEffect theFilterEffect)
+ {
++#ifdef NANO7_DEVICE
++	if (((MemoryImage*)theImage)->mN7T) { (void)theFilterEffect; return theImage; }   // washed-out copies need CPU pixels
++#endif
+ 	PVZP_ASSERT(theFilterEffect >= 0 && theFilterEffect < FilterEffect::NUM_FILTER_EFFECTS);
+ 
+ 	ImageFilterMap& aFilterMap = gFilterMap[theFilterEffect];
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/PvzpCommon.cpp pvzp-desk/src/PvzpLib/PvzpCommon.cpp
+--- pvzp-desk-src/src/PvzpLib/PvzpCommon.cpp	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/PvzpCommon.cpp	2026-10-31 12:31:52.350151143 +0000
+@@ -40,6 +40,7 @@
+ 
+ void Pvzp_SWTri_AddAllDrawTriFuncs()
+ {
++#ifndef NANO7_NO_SWTRI
+ 	SWTri_AddDrawTriFunc(true, false, false, false, 0x8888, false, PvzpDrawTriangle_8888_TEX1_TALPHA0_MOD0_GLOB0_BLEND0);
+ 	SWTri_AddDrawTriFunc(true, false, false, false, 0x8888, true, PvzpDrawTriangle_8888_TEX1_TALPHA0_MOD0_GLOB0_BLEND1);
+ 	SWTri_AddDrawTriFunc(true, false, false, true, 0x8888, false, PvzpDrawTriangle_8888_TEX1_TALPHA0_MOD0_GLOB1_BLEND0);
+@@ -111,6 +112,7 @@
+ 	SWTri_AddDrawTriFunc(true, true, true, false, 0x0555, true, PvzpDrawTriangle_0555_TEX1_TALPHA1_MOD1_GLOB0_BLEND1);
+ 	SWTri_AddDrawTriFunc(true, true, true, true, 0x0555, false, PvzpDrawTriangle_0555_TEX1_TALPHA1_MOD1_GLOB1_BLEND0);
+ 	SWTri_AddDrawTriFunc(true, true, true, true, 0x0555, true, PvzpDrawTriangle_0555_TEX1_TALPHA1_MOD1_GLOB1_BLEND1);
++#endif
+ }
+ 
+ intptr_t PvzpPickFromWeightedArray(const PvzpWeightedArray* theArray, int theCount)
+@@ -419,7 +421,11 @@
+ 	g->DrawImage(theImageStrip, aDestRect, aSrcRect);
+ }
+ 
++#ifdef NANO7_SMALL_POOLS
++static const int POOL_SIZE = 512;   /* nano7kit: glyph commands per text draw */
++#else
+ static const int POOL_SIZE = 4096;
++#endif
+ static RenderCommand gRenderCommandPool[POOL_SIZE];
+ static RenderCommand* gRenderTail[256];
+ static RenderCommand* gRenderHead[256];
+@@ -657,6 +663,9 @@
+ 
+ void PvzpSandImageIfNeeded(Image* theImage)
+ {
++#ifdef NANO7_DEVICE
++	((MemoryImage*)theImage)->mRenderFlags &= ~RENDERIMAGEFLAG_SANDING; return;   // edge fix-up needs CPU pixels
++#endif
+ 	MemoryImage* aImage = (MemoryImage*)theImage;
+ 	/*if (TestBit(aImage->mRenderFlags, RENDERIMAGEFLAG_SANDING))*/ // UB shift by a billion
+ 	if (aImage->mRenderFlags & RENDERIMAGEFLAG_SANDING)
+@@ -861,6 +870,7 @@
+ 	return (aRed << 16) | (aGreen << 8) | (aBlue);
+ }
+ 
++#include "../../nano7/n7r.h"
+ void FixPixelsOnAlphaEdgeForBlending(Image* theImage)
+ {
+ 	MemoryImage* aImage = (MemoryImage*)theImage;
+@@ -893,7 +903,10 @@
+ 		PvzpLogLn("LOADING:Long sanding '{}' {} ms on {}", theImage->mFilePath, aDuration, LawnGetCurrentLevelName());
+ 	}
+ 
+-	aImage->mFilePath.clear();
++	if (getenv("NANO7_LAZY_IMAGES"))
++		Nano7NoteSanded(aImage);  // nano7: keep the path so the texture can be rebuilt (and sanded again)
++	else
++		aImage->mFilePath.clear();
+ }
+ 
+ void SexyMatrix3Transpose(const SexyMatrix3& m, SexyMatrix3 &r)
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/PvzpParticle.cpp pvzp-desk/src/PvzpLib/PvzpParticle.cpp
+--- pvzp-desk-src/src/PvzpLib/PvzpParticle.cpp	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/PvzpParticle.cpp	2026-10-31 20:24:48.318768833 +0000
+@@ -200,8 +200,13 @@
+ 	}
+ }
+ 
++#include "../../nano7/memtrack.h"
++#ifdef NANO7_DEVICE
++#include "../../nano7/n7fx.h"
++#endif
+ void PvzpParticleLoadDefinitions(const ParticleParams* theParticleParamArray, int theParticleParamArraySize)
+ {
++	MT_TAG(MT_PARTICLE);
+ 	PvzpHesitationBracket aHesitiation("PvzpParticleLoadDefinitions");
+ 	PVZP_ASSERT(!gParticleParamArray && !gParticleDefArray);
+ 	gParticleParamArraySize = theParticleParamArraySize;
+@@ -213,6 +218,13 @@
+ 	{
+ 		const ParticleParams& aParticleParams = gParticleParamArray[i];
+ 		PVZP_ASSERT(aParticleParams.mParticleEffect == i);
++#ifdef NANO7_DEVICE
++		if (!Nano7FxParticleAllowed(i))  // nano7 v39: never made, so never loaded (an empty definition)
++		{
++			gSexyAppBase->mCompletedLoadingThreadTasks += 6;
++			continue;
++		}
++#endif
+ 		if (!PvzpParticleLoadADef(&gParticleDefArray[i], aParticleParams.mParticleFileName))
+ 		{
+ 			PvzpErrorMessageBox(std::format("Failed to load particle '{}'", aParticleParams.mParticleFileName), "Error");
+@@ -1079,7 +1091,7 @@
+ 		(TestBit(mEmitterDef->mParticleFlags, static_cast<int>(ParticleFlags::PARTICLE_HARDWARE_ONLY)) && !aHardWare))
+ 		return;
+ 
+-	PvzpTriangleGroup aTriangleGroup;
++	PVZP_TRIANGLE_GROUP(aTriangleGroup);  // nano7 v35: not on the stack
+ 	for (PvzpListNode<ParticleID>* aNode = mParticleList.mHead; aNode != nullptr; aNode = aNode->mNext)
+ 		DrawParticle(g, mParticleSystem->mParticleHolder->mParticles.DataArrayGet(static_cast<unsigned int>(aNode->mValue)), &aTriangleGroup);
+ 	aTriangleGroup.DrawGroup(g);
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/PvzpStringFile.cpp pvzp-desk/src/PvzpLib/PvzpStringFile.cpp
+--- pvzp-desk-src/src/PvzpLib/PvzpStringFile.cpp	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/PvzpStringFile.cpp	2026-10-31 01:25:41.727346123 +0000
+@@ -153,8 +153,10 @@
+ 	return PvzpStringListReadItems(aFileContent.c_str());
+ }
+ 
++#include "../../nano7/memtrack.h"
+ void PvzpStringListLoad(const char* theFileName)
+ {
++	MT_TAG(MT_STRINGS);
+ 	if (!PvzpStringListReadFile(theFileName))
+ 		PvzpErrorMessageBox(std::format("Failed to load string list file '{}'", theFileName), "Error");
+ }
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/ReanimAtlas.cpp pvzp-desk/src/PvzpLib/ReanimAtlas.cpp
+--- pvzp-desk-src/src/PvzpLib/ReanimAtlas.cpp	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/ReanimAtlas.cpp	2026-10-31 11:20:22.892240502 +0000
+@@ -215,7 +215,7 @@
+ 		ReanimatorTrack* aTrack = &theReanimDef->mTracks.tracks[aTrackIndex];
+ 		for (int aKeyIndex = 0; aKeyIndex < aTrack->mTransforms.count; aKeyIndex++)
+ 		{
+-			Image* aImage = aTrack->mTransforms.mTransforms[aKeyIndex].mImage;
++			Image* aImage = ReanimTf(aTrack->mTransforms, aKeyIndex).mImage;
+ 			if (aImage != nullptr && aImage->mWidth <= 254 && aImage->mHeight <= 254 && FindImage(aImage) < 0)
+ 				AddImage(aImage);  // add it now; its atlas position is decided later
+ 		}
+@@ -224,12 +224,31 @@
+ 	int aAtlasWidth, aAtlasHeight;
+ 	ArrangeImages(aAtlasWidth, aAtlasHeight);
+ 
++	if (gNano7N7R)
++	{
++		// .n7r: frames refer to the definition's image table, so encode the table entries once
++		Nano7Def* aDef = Nano7DefOf(theReanimDef);
++		for (int i = 0; aDef && i < aDef->nimg; i++)
++		{
++			Image*& aImage = aDef->images[i];
++			if (aImage != nullptr && aImage->mWidth <= 254 && aImage->mHeight <= 254)
++			{
++				intptr_t aImageIndex = FindImage(aImage);
++				if (aImageIndex >= 0)
++					aImage = (Image*)(aImageIndex + 1);
++			}
++		}
++	}
++	else
++
+ 	for (int aTrackIndex = 0; aTrackIndex < theReanimDef->mTracks.count; aTrackIndex++)
+ 	{
+ 		ReanimatorTrack* aTrack = &theReanimDef->mTracks.tracks[aTrackIndex];
+ 		for (int aKeyIndex = 0; aKeyIndex < aTrack->mTransforms.count; aKeyIndex++)
+ 		{
+-			Image*& aImage = aTrack->mTransforms.mTransforms[aKeyIndex].mImage;
++			Image*& aImage = ReanimTf(aTrack->mTransforms, aKeyIndex).mImage;
++			if (aKeyIndex > 0 && &aImage == &ReanimTf(aTrack->mTransforms, aKeyIndex - 1).mImage)
++				continue;  // compacted: this frame shares the previous frame's record, already rewritten
+ 			if (aImage != nullptr && aImage->mWidth <= 254 && aImage->mHeight <= 254)
+ 			{
+ 				intptr_t aImageIndex = FindImage(aImage);
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/Reanimator.cpp pvzp-desk/src/PvzpLib/Reanimator.cpp
+--- pvzp-desk-src/src/PvzpLib/Reanimator.cpp	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/Reanimator.cpp	2026-10-31 20:24:48.318768833 +0000
+@@ -23,6 +23,9 @@
+ #include "PvzpCommon.h"
+ #include "Definition.h"
+ #include "Reanimator.h"
++#ifdef NANO7_DEVICE
++#include "../../nano7/n7bake.h"
++#endif
+ #include "Attachment.h"
+ #include "SexyAppBase.h"
+ #include "../LawnApp.h"
+@@ -218,8 +221,38 @@
+ 		thePrev = theValue;
+ }
+ 
++#include "../../nano7/memtrack.h"
++#include "../../nano7/reanimstat.h"
++#ifdef NANO7_DEVICE
++#include "../../nano7/n7fx.h"
++#endif
++bool gNano7CompactReanim = getenv("NANO7_COMPACT_REANIM") != nullptr;
++static void Nano7CompactTrack(ReanimatorTrack* aTrack)
++{
++	int n = aTrack->mTransforms.count;
++	if (n <= 0) return;
++	ReanimatorTransform* aOld = aTrack->mTransforms.mTransforms;
++	int aRuns = 0;
++	for (int i = 0; i < n; i++) if (i == 0 || memcmp(&aOld[i], &aOld[i - 1], sizeof(ReanimatorTransform))) aRuns++;
++	int aPad = (n * 2 + 3) & ~3;
++	char* aBlock = (char*)operator new[](aPad + aRuns * sizeof(ReanimatorTransform));
++	uint16_t* aIdx = (uint16_t*)aBlock;
++	ReanimatorTransform* aUnique = (ReanimatorTransform*)(aBlock + aPad);
++	int u = -1;
++	for (int i = 0; i < n; i++) {
++		if (i == 0 || memcmp(&aOld[i], &aOld[i - 1], sizeof(ReanimatorTransform))) { u++; memcpy(&aUnique[u], &aOld[i], sizeof(ReanimatorTransform)); }
++		aIdx[i] = (uint16_t)u;
++	}
++	delete[] (char*)aOld;
++	aTrack->mTransforms.mTransforms = (ReanimatorTransform*)aBlock;
++}
++#include "../../nano7/memtrack.h"
++#include "../../nano7/reanimstat.h"
+ bool ReanimationLoadDefinition(const std::string& theFileName, ReanimatorDefinition* theDefinition)
+ {
++	MT_TAG(MT_REANIM);
++	if (gNano7N7R)
++		return Nano7LoadN7R(theFileName, theDefinition);
+ 	if (!DefinitionLoadXML(theFileName, &gReanimatorDefMap, theDefinition))
+ 		return false;
+ 
+@@ -257,12 +290,16 @@
+ 			else
+ 				aPrevText = aTransform.mText;
+ 		}
++		if (gNano7CompactReanim) Nano7CompactTrack(aTrack);
+ 	}
+ 	return true;
+ }
+ 
+ void ReanimationFreeDefinition(ReanimatorDefinition* theDefinition)
+ {
++	if (gNano7N7R) { Nano7FreeN7R(theDefinition); return; }  // nano7: .n7r definitions are freed for real
++	if (gNano7CompactReanim) return;  // measuring build: compacted definitions live until exit
++	if (gNano7CompactReanim) return;  // measuring build: compacted definitions live until exit
+ 	// free the atlas
+ 	if (theDefinition->mReanimAtlas != nullptr)
+ 	{
+@@ -344,6 +381,7 @@
+ 	if (mTrackInstances != nullptr)
+ 	{
+ 		int aItemSize = mDefinition->mTracks.count * sizeof(ReanimatorTrackInstance);
++		if (Nano7PlainAlloc()) free(mTrackInstances); else  // nano7: pools never give memory back
+ 		FindGlobalAllocator(aItemSize)->Free(mTrackInstances, aItemSize);
+ 		mTrackInstances = nullptr;
+ 	}
+@@ -359,12 +397,16 @@
+ 
+ void ReanimationCreateAtlas(ReanimatorDefinition* theDefinition, ReanimationType theReanimationType)
+ {
++#ifdef NANO7_DEVICE
++	(void)theDefinition; (void)theReanimationType; return;   // atlases are built from CPU pixels
++#endif
+ 	const ReanimationParams& aParam = gReanimationParamArray[theReanimationType];
+ 	if (theDefinition->mReanimAtlas != nullptr || TestBit(aParam.mReanimParamFlags, ReanimFlags::REANIM_NO_ATLAS))
+ 		return;
+ 
+ 	PerfTimer aTimer;
+ 	aTimer.Start();
++	MT_TAG(MT_PIXELS);
+ 	ReanimAtlas* aAtlas = new ReanimAtlas();
+ 	theDefinition->mReanimAtlas = aAtlas;
+ 	aAtlas->ReanimAtlasCreate(theDefinition);
+@@ -408,7 +450,7 @@
+ 	{
+ 		mFrameCount = mDefinition->mTracks.tracks[0].mTransforms.count;
+ 		int aItemSize = theDefinition->mTracks.count * sizeof(ReanimatorTrackInstance);
+-		mTrackInstances = (ReanimatorTrackInstance*)FindGlobalAllocator(aItemSize)->Calloc(aItemSize);
++		mTrackInstances = (ReanimatorTrackInstance*)(Nano7PlainAlloc() ? calloc(1, aItemSize) : FindGlobalAllocator(aItemSize)->Calloc(aItemSize));
+ 		for (int aTrackIndex = 0; aTrackIndex < mDefinition->mTracks.count; aTrackIndex++)
+ 		{
+ 			ReanimatorTrackInstance* aTrack = &mTrackInstances[aTrackIndex];
+@@ -573,8 +615,8 @@
+ 	PVZP_ASSERT(theTrackIndex >= 0 && theTrackIndex < mDefinition->mTracks.count);
+ 	ReanimatorTrack* aTrack = &mDefinition->mTracks.tracks[theTrackIndex];
+ 	PVZP_ASSERT(aTrack->mTransforms.count == mDefinition->mTracks.tracks[0].mTransforms.count);
+-	ReanimatorTransform& aTransBefore = aTrack->mTransforms.mTransforms[theFrameTime->mAnimFrameBeforeInt];  // previous frame's transform definition
+-	ReanimatorTransform& aTransAfter = aTrack->mTransforms.mTransforms[theFrameTime->mAnimFrameAfterInt];  // next frame's transform definition
++	ReanimatorTransform& aTransBefore = ReanimTf(aTrack->mTransforms, theFrameTime->mAnimFrameBeforeInt);  // previous frame's transform definition
++	ReanimatorTransform& aTransAfter = ReanimTf(aTrack->mTransforms, theFrameTime->mAnimFrameAfterInt);  // next frame's transform definition
+ 
+ 	theTransform->mTransX = FloatLerp(aTransBefore.mTransX, aTransAfter.mTransX, theFrameTime->mFraction);
+ 	theTransform->mTransY = FloatLerp(aTransBefore.mTransY, aTransAfter.mTransY, theFrameTime->mFraction);
+@@ -928,10 +970,18 @@
+ {
+ 	if (mDead)
+ 		return;
++#ifdef NANO7_DEVICE
++	if (!Nano7FxReanimShown((int)mReanimationType))
++		return;  // nano7 v39: an effect animation (charred, splash, banner...): runs for the timing, never drawn
++#endif
+ 	if (mDefinition->mTracks.count == 0)
+ 		return;
++#ifdef NANO7_DEVICE
++	if (theRenderGroup == RENDER_GROUP_NORMAL && Nano7BakedDraw(this, g))  // nano7 v36: plants and mowers as one picture
++		return;
++#endif
+ 
+-	PvzpTriangleGroup aTriangleGroup;
++	PVZP_TRIANGLE_GROUP(aTriangleGroup);  // nano7 v35: not on the stack
+ 	ReanimatorFrameTime aFrameTime;
+ 	GetFrameTime(&aFrameTime);
+ 	for (int aTrackIndex = 0; aTrackIndex < mDefinition->mTracks.count; aTrackIndex++)
+@@ -1048,13 +1098,13 @@
+ 	theFrameStart = 0;
+ 	theFrameCount = 1;
+ 	for (int i = 0; i < aTrack->mTransforms.count; i++)
+-		if (aTrack->mTransforms.mTransforms[i].mFrame >= 0.0f)
++		if (ReanimTf(aTrack->mTransforms, i).mFrame >= 0.0f)
+ 		{
+ 			theFrameStart = i;  // first non-blank frame
+ 			break;
+ 		}
+ 	for (int j = theFrameStart; j < aTrack->mTransforms.count; j++)
+-		if (aTrack->mTransforms.mTransforms[j].mFrame >= 0.0f)
++		if (ReanimTf(aTrack->mTransforms, j).mFrame >= 0.0f)
+ 			theFrameCount = j - theFrameStart + 1;  // span from start to the last non-blank frame
+ }
+ 
+@@ -1179,6 +1229,10 @@
+ 	ReanimatorDefinition* aReanimDef = &gReanimatorDefArray[theReanimType];
+ 	if (aReanimDef->mTracks.tracks != nullptr)  // non-null tracks means the definition is already loaded
+ 		return;
++#ifdef NANO7_DEVICE
++	if (theIsPreloading && Nano7FxReanimIsEffect((int)theReanimType))
++		return;  // nano7 v39: effect animations are not preloaded (loaded only if one is really made)
++#endif
+ 	const ReanimationParams* aReanimParams = &gReanimationParamArray[theReanimType];
+ 	PvzpLogLn("'{}'", aReanimParams->mReanimFileName);
+ 	if (theIsPreloading)
+@@ -1194,6 +1248,7 @@
+ 			PvzpLogLn("Non-cheater failed to preload '{}' on {}", aReanimParams->mReanimFileName, LawnGetCurrentLevelName());
+ 	}
+ 
++	Nano7CrumbReanim(aReanimParams->mReanimFileName);  // nano7 v34: throttled breadcrumb naming the reanim
+ 	PerfTimer aTimer;
+ 	aTimer.Start();
+ 	PvzpHesitationBracket aHesitation("Load Reanim '{}'", aReanimParams->mReanimFileName);
+@@ -1219,7 +1274,7 @@
+ 	{
+ 		const ReanimationParams* aReanimationParams = &theReanimationParamArray[i];
+ 		PVZP_ASSERT(aReanimationParams->mReanimationType == i);
+-		if (DefinitionIsCompiled(aReanimationParams->mReanimFileName))
++		if (!getenv("NANO7_LAZY_REANIM") && DefinitionIsCompiled(aReanimationParams->mReanimFileName))
+ 			ReanimatorEnsureDefinitionLoaded(aReanimationParams->mReanimationType, true);
+ 	}
+ }
+@@ -1243,7 +1298,7 @@
+ 	PVZP_ASSERT(aTrackIndex >= 0 && aTrackIndex < mDefinition->mTracks.count);
+ 
+ 	ReanimatorTrack* aTrack = &mDefinition->mTracks.tracks[aTrackIndex];
+-	float aDis = aTrack->mTransforms.mTransforms[aFrameTime.mAnimFrameAfterInt].mTransX - aTrack->mTransforms.mTransforms[aFrameTime.mAnimFrameBeforeInt].mTransX;
++	float aDis = ReanimTf(aTrack->mTransforms, aFrameTime.mAnimFrameAfterInt).mTransX - ReanimTf(aTrack->mTransforms, aFrameTime.mAnimFrameBeforeInt).mTransX;
+ 	return aDis * SECONDS_PER_UPDATE * mAnimRate;  // velocity = x displacement between frames * frame duration * anim rate
+ }
+ 
+@@ -1254,7 +1309,7 @@
+ 	int aTrackIndex = FindTrackIndex(theTrackName);
+ 	PVZP_ASSERT(aTrackIndex >= 0 && aTrackIndex < mDefinition->mTracks.count);
+ 
+-	return mDefinition->mTracks.tracks[aTrackIndex].mTransforms.mTransforms[aFrameTime.mAnimFrameAfterInt].mFrame >= 0.0f;  // whether the next integer frame has an image
++	return ReanimTf(mDefinition->mTracks.tracks[aTrackIndex].mTransforms, aFrameTime.mAnimFrameAfterInt).mFrame >= 0.0f;  // whether the next integer frame has an image
+ }
+ 
+ void Reanimation::ShowOnlyTrack(const char* theTrackName)
+@@ -1375,14 +1430,14 @@
+ 	GetFrameTime(&aFrameTime);
+ 
+ 	int aPlaceHolderFrameStart = aFrameTime.mAnimFrameBeforeInt;
+-	while (aPlaceHolderFrameStart > mFrameStart && aTrack->mTransforms.mTransforms[aPlaceHolderFrameStart - 1].mText == aTrack->mTransforms.mTransforms[aPlaceHolderFrameStart].mText)
++	while (aPlaceHolderFrameStart > mFrameStart && ReanimTf(aTrack->mTransforms, aPlaceHolderFrameStart - 1).mText == ReanimTf(aTrack->mTransforms, aPlaceHolderFrameStart).mText)
+ 		aPlaceHolderFrameStart--;  // first frame of the current segment
+ 	int aPlaceHolderFrameEnd = aFrameTime.mAnimFrameBeforeInt;
+-	while (aPlaceHolderFrameEnd < mFrameStart + mFrameCount - 1 && aTrack->mTransforms.mTransforms[aPlaceHolderFrameEnd + 1].mText == aTrack->mTransforms.mTransforms[aPlaceHolderFrameEnd].mText)
++	while (aPlaceHolderFrameEnd < mFrameStart + mFrameCount - 1 && ReanimTf(aTrack->mTransforms, aPlaceHolderFrameEnd + 1).mText == ReanimTf(aTrack->mTransforms, aPlaceHolderFrameEnd).mText)
+ 		aPlaceHolderFrameEnd++;  // last frame of the current segment
+ 	int aPlaceHolderFrameCount = aPlaceHolderFrameEnd - aPlaceHolderFrameStart;
+-	ReanimatorTransform& aPlaceHolderStartTrans = aTrack->mTransforms.mTransforms[aPlaceHolderFrameStart];
+-	ReanimatorTransform& aPlaceHolderEndTrans = aTrack->mTransforms.mTransforms[aPlaceHolderFrameEnd];
++	ReanimatorTransform& aPlaceHolderStartTrans = ReanimTf(aTrack->mTransforms, aPlaceHolderFrameStart);
++	ReanimatorTransform& aPlaceHolderEndTrans = ReanimTf(aTrack->mTransforms, aPlaceHolderFrameEnd);
+ 	if (FloatApproxEqual(mAnimRate, 0.0f))
+ 	{
+ 		theAttachReanim->mAnimRate = 0.0f;
+@@ -1398,8 +1453,8 @@
+ 
+ 	int aGroundTrackIndex = theAttachReanim->FindTrackIndex("_ground");
+ 	ReanimatorTrack* aGroundTrack = &theAttachReanim->mDefinition->mTracks.tracks[aGroundTrackIndex];
+-	ReanimatorTransform& aTransformGuyStart = aGroundTrack->mTransforms.mTransforms[theAttachReanim->mFrameStart];
+-	ReanimatorTransform& aTransformGuyEnd = aGroundTrack->mTransforms.mTransforms[theAttachReanim->mFrameStart + theAttachReanim->mFrameCount - 1];
++	ReanimatorTransform& aTransformGuyStart = ReanimTf(aGroundTrack->mTransforms, theAttachReanim->mFrameStart);
++	ReanimatorTransform& aTransformGuyEnd = ReanimTf(aGroundTrack->mTransforms, theAttachReanim->mFrameStart + theAttachReanim->mFrameCount - 1);
+ 	float aGuyDistance = aTransformGuyEnd.mTransX - aTransformGuyStart.mTransX;  // attached anim's displacement over one full cycle
+ 	if (aGuyDistance < FLT_EPSILON || aPlaceHolderDistance < FLT_EPSILON)  // zero displacement: the attached anim cannot move
+ 	{
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/Reanimator.h pvzp-desk/src/PvzpLib/Reanimator.h
+--- pvzp-desk-src/src/PvzpLib/Reanimator.h	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/Reanimator.h	2026-10-31 11:21:17.001085779 +0000
+@@ -57,6 +57,10 @@
+ 	REANIM_FAST_DRAW_IN_SW_MODE
+ };
+ 
++extern bool gNano7CompactReanim;
++#include "../../nano7/n7r.h"
++struct ReanimatorTransformArray;
++inline class ReanimatorTransform& ReanimTf(const ReanimatorTransformArray& a, int i);
+ struct ReanimatorTransformArray {
+ 	ReanimatorTransform* mTransforms;
+ 	int32_t count;
+@@ -161,6 +165,18 @@
+ public:
+ 	ReanimatorTransform();
+ };
++inline ReanimatorTransform& ReanimTf(const ReanimatorTransformArray& a, int i)
++{
++	if (gNano7N7R)
++	{
++		const char* b = (const char*)a.mTransforms;
++		const uint16_t* idx = (const uint16_t*)(b + sizeof(void*));
++		return Nano7Decode(*(Nano7Def* const*)b, ((const Nano7Tf*)(b + sizeof(void*) + a.count * 2))[idx[i]]);
++	}
++	if (!gNano7CompactReanim) return a.mTransforms[i];
++	const uint16_t* idx = (const uint16_t*)a.mTransforms;
++	return ((ReanimatorTransform*)((char*)a.mTransforms + ((a.count * 2 + 3) & ~3)))[idx[i]];
++}
+ 
+ class ReanimatorTrackInstance
+ {
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/PvzpLib/Trail.cpp pvzp-desk/src/PvzpLib/Trail.cpp
+--- pvzp-desk-src/src/PvzpLib/Trail.cpp	2026-10-31 01:08:38.431007646 +0000
++++ pvzp-desk/src/PvzpLib/Trail.cpp	2026-10-31 01:25:41.727346123 +0000
+@@ -54,8 +54,10 @@
+ 	return true;
+ }
+ 
++#include "../../nano7/memtrack.h"
+ void TrailLoadDefinitions(TrailParams* theTrailParamArray, int theTrailParamArraySize)
+ {
++	MT_TAG(MT_PARTICLE);
+ 	PvzpHesitationBracket aHesitation("TrailLoadDefinitions");
+ 	PVZP_ASSERT(!gTrailParamArray && !gTrailDefArray);
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/Common.cpp pvzp-desk/src/SexyAppFramework/Common.cpp
+--- pvzp-desk-src/src/SexyAppFramework/Common.cpp	2026-10-31 01:08:38.435007412 +0000
++++ pvzp-desk/src/SexyAppFramework/Common.cpp	2026-10-31 19:40:22.318317324 +0000
+@@ -349,8 +349,15 @@
+ 	return std::filesystem::exists(PathFromU8(theFileName), ec);
+ }
+ 
++#ifdef NANO7_DEVICE
++void Nano7MkDirs(const std::string& thePath);   // n7main.cpp, v38
++#endif
+ void Sexy::MkDir(std::string_view theDir)
+ {
++#ifdef NANO7_DEVICE
++	Nano7MkDirs(std::string(theDir));   // nano7 v38: one OS mkdir a folder, no std::filesystem
++	return;
++#endif
+ 	std::error_code ec;
+ 	std::filesystem::create_directories(PathFromU8(theDir), ec);
+ }
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/SexyAppBase.cpp pvzp-desk/src/SexyAppFramework/SexyAppBase.cpp
+--- pvzp-desk-src/src/SexyAppFramework/SexyAppBase.cpp	2026-10-31 01:08:38.435007412 +0000
++++ pvzp-desk/src/SexyAppFramework/SexyAppBase.cpp	2026-10-31 19:40:22.314317557 +0000
+@@ -65,7 +65,8 @@
+ #include "graphics/MemoryImage.h"
+ #include "widget/Dialog.h"
+ #include "imagelib/ImageLib.h"
+-#include "sound/SDLSoundManager.h"
++#include "../../nano7/NanoSoundManager.h"
++#include "../../nano7/memtrack.h"
+ #include "sound/SDLSoundInstance.h"
+ #include "misc/Rect.h"
+ #include "misc/PropertiesParser.h"
+@@ -81,6 +82,11 @@
+ #include "misc/RegEmu.h"
+ 
+ using namespace Sexy;
++#ifdef NANO7_DEVICE
++bool Nano7WriteFile(const std::string& thePath, const void* theData, unsigned long theLen);   // n7main.cpp, v38
++Sexy::GLImage* Nano7DevGetImage(Sexy::SexyAppBase*, const std::string&);
++void Nano7DevDecoded(int, int, const std::string&);
++#endif
+ 
+ constexpr int DEMO_FILE_ID = 0x42BEEF78;
+ constexpr int DEMO_VERSION = 6; // v6: text input is recorded as UTF-8 (DEMO_KEY_TEXT)
+@@ -1383,6 +1389,9 @@
+ 		return true;
+ 	}
+ 
++#ifdef NANO7_DEVICE
++	return Nano7WriteFile(theFileName, theData, theDataLen);   // nano7 v38: one whole-file OS write, logged
++#endif
+ 	MkDir(GetFileDir(theFileName));
+ 	std::ofstream aFile(PathFromU8(theFileName), std::ios::out | std::ios::binary | std::ios::trunc);
+ 	if (!aFile)
+@@ -2325,7 +2334,11 @@
+ #ifdef __EMSCRIPTEN__
+ 		LoadingThreadProcStub(this);
+ #else
+-		mLoadingThread = std::thread(LoadingThreadProcStub, this); // keep joinable: detach() throws on devkitA64/libnx
++#ifdef NANO7_DEVICE
++		mNano7Loading = true;   // nano7 v32: Nano7Step runs it a slice a frame (one long callback can trip the OS)
++#else
++		LoadingThreadProcStub(this); /* nano7kit measure: single-threaded */
++#endif // keep joinable: detach() throws on devkitA64/libnx
+ #endif
+ 	}
+ }
+@@ -2737,7 +2750,7 @@
+ 					// Wait till next processing cycle
+ 					++mSleepCount;
+ 
+-#ifndef __EMSCRIPTEN__
++#if !defined(__EMSCRIPTEN__) && !defined(NANO7_DEVICE)
+ 					timespec ts;
+ 					ts.tv_sec = aTimeToNextFrame / 1000;
+ 					ts.tv_nsec = (aTimeToNextFrame % 1000) * 1000000;
+@@ -2763,7 +2776,7 @@
+ 				if (!allowSleep)
+ 					return false;
+ 
+-#ifndef __EMSCRIPTEN__
++#if !defined(__EMSCRIPTEN__) && !defined(NANO7_DEVICE)
+ 				timespec ts;
+ 				ts.tv_sec = aLoadingYieldSleepTime / 1000;
+ 				ts.tv_nsec = (aLoadingYieldSleepTime % 1000) * 1000000;
+@@ -2864,7 +2877,7 @@
+ 		{
+ 			if (mStepMode==2)
+ 			{
+-#ifndef __EMSCRIPTEN__
++#if !defined(__EMSCRIPTEN__) && !defined(NANO7_DEVICE)
+ 				timespec ts;
+ 				ts.tv_sec = mFrameTime / 1000;
+ 				ts.tv_nsec = (mFrameTime % 1000) * 1000000;
+@@ -2979,6 +2992,7 @@
+ 
+ bool SexyAppBase::LoadProperties(const std::string& theFileName, bool required, bool checkSig)
+ {
++	MT_TAG(MT_STRINGS);
+ 	Buffer aBuffer;
+ 	if (!ReadBufferFromFile(theFileName, &aBuffer))
+ 	{
+@@ -3340,7 +3354,7 @@
+ 	if (mNoSoundNeeded)
+ 		return new DummyMusicInterface();
+ 	else
+-		return new SDLMusicInterface();
++		return new DummyMusicInterface();
+ }
+ 
+ void SexyAppBase::InitPropertiesHook()
+@@ -3487,7 +3501,7 @@
+ 	}
+ 
+ 	if (mSoundManager == nullptr)
+-		mSoundManager = std::make_unique<SDLSoundManager>();
++		mSoundManager = std::make_unique<NanoSoundManager>();
+ 
+ 	SetSfxVolume(mSfxVolume);
+ 
+@@ -3565,16 +3579,32 @@
+ 
+ Sexy::GLImage* SexyAppBase::GetImage(const std::string& theFileName, bool commitBits)
+ {
+-	std::unique_ptr<ImageLib::Image> aLoadedImage(ImageLib::GetImage(theFileName, true));
++	MT_TAG(MT_PIXELS);
++#ifdef NANO7_DEVICE
++	if (GLImage* n = Nano7DevGetImage(this, theFileName)) return n;
++#endif
++	std::unique_ptr<ImageLib::Image> aLoadedImage([&] { MT_TAG(MT_DECODE); return ImageLib::GetImage(theFileName, true); }());
+ 
+ 	if (aLoadedImage == nullptr)
+ 		return nullptr;
+ 
+ 	GLImage* anImage = new GLImage(mGLInterface.get());
+-	anImage->SetBits(aLoadedImage->GetBits(), aLoadedImage->GetWidth(), aLoadedImage->GetHeight(), commitBits);
++#ifdef NANO7_DEVICE
++	Nano7DevDecoded(aLoadedImage->GetWidth(), aLoadedImage->GetHeight(), theFileName);
++#endif
++	{
++		// nano7: with lazy images these bits are dropped a few lines below; the device only reads the .n7t header here
++		static const bool sLazyTag = getenv("NANO7_LAZY_IMAGES") != nullptr;
++		MT_TAG(sLazyTag && ImageLib::gAlphaComposeColor == 0xFFFFFF ? MT_DECODE : MT_PIXELS);
++		anImage->SetBits(aLoadedImage->GetBits(), aLoadedImage->GetWidth(), aLoadedImage->GetHeight(), commitBits);
++	}
+ 	anImage->mFilePath = theFileName;
+ #ifdef LOW_MEMORY
+ 	anImage->mPurgeBits = true;
++	// nano7: keep only the size; GetBits() decodes it again from the pak when a texture is made
++	static bool sLazy = getenv("NANO7_LAZY_IMAGES") != nullptr;
++	if (sLazy && ImageLib::gAlphaComposeColor == 0xFFFFFF)
++		anImage->mBits.reset();
+ #endif
+ 
+ 	return anImage;
+@@ -4250,3 +4280,54 @@
+ 	for (GLImage* img : imagesToDelete)
+ 		delete img;
+ }
++
++#ifdef NANO7_DEVICE
++// nano7 PvZ device: the OS calls the app once per frame, so Start() and DoMainLoop() are split the way the
++// emscripten build does it: begin once, then one step per frame callback (no sleeping inside it).
++void SexyAppBase::Nano7StartBegin()
++{
++	if (mShutdown) return;
++	StartCursorThread();
++	if (mAutoStartLoadingThread) StartLoadingThread();   // single-threaded: loads the start-up resources right here
++	uint32_t aStartTime = SDL_GetTicks();
++	mRunning = true;
++	mStartTick = aStartTime;
++	mLastTime = aStartTime;
++	mLastUserInputTick = aStartTime;
++	mLastTimerTime = aStartTime;
++}
++// One call per OS frame callback, and exactly one full picture per call: the GL back buffer is not kept between
++// callbacks, so every widget is marked dirty, the panel is cleared first, the updates run until the first draw (or
++// until the step is done), and if no draw happened one is forced. Never two draws in a callback (each triangle
++// costs GL driver memory).
++void Nano7FrameBegin();
++void Nano7FrameEnd();
++bool SexyAppBase::Nano7Step()
++{
++	if (mShutdown) return false;
++	if (mExitToTop) mExitToTop = false;
++	if (mNano7Loading && Nano7LoadStep())
++	{
++		mNano7Loading = false;
++		Sexy::LogInfoLn("Resource Loading Time: {}", (SDL_GetTicks() - mTimeLoaded));
++		mLoadingThreadCompleted = true;
++	}
++	if (mWidgetManager) mWidgetManager->MarkAllDirty();
++	Nano7FrameBegin();
++	uint aDraws = mDrawCount;
++	bool updated = false;
++	for (int i = 0; i < 64 && mDrawCount == aDraws && !mShutdown; i++)
++	{
++		if (!UpdateAppStep(&updated)) break;
++		if (mUpdateAppState == UPDATESTATE_PROCESS_DONE && !mHasPendingDraw) break;
++	}
++	if (mDrawCount == aDraws && !mShutdown && mWidgetManager)
++	{
++		mWidgetManager->MarkAllDirty();
++		mNextDrawTick = 0;
++		DrawDirtyStuff();
++	}
++	Nano7FrameEnd();
++	return !mShutdown;
++}
++#endif
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/SexyAppBase.h pvzp-desk/src/SexyAppFramework/SexyAppBase.h
+--- pvzp-desk-src/src/SexyAppFramework/SexyAppBase.h	2026-10-31 01:08:38.435007412 +0000
++++ pvzp-desk/src/SexyAppFramework/SexyAppBase.h	2026-10-31 14:27:19.667505458 +0000
+@@ -379,6 +379,9 @@
+ 
+ 	void					WaitForLoadingThread();
+ 	void					ProcessSafeDeleteList();
++public:
++	void					Nano7ProcessSafeDeleteList() { ProcessSafeDeleteList(); }
++protected:
+ #ifdef __EMSCRIPTEN__
+ 	static void				EmscriptenMainLoopCallback();
+ #endif
+@@ -460,6 +463,13 @@
+ 	virtual void			HandleGameAlreadyRunning();
+ 
+ 	virtual void			Start();
++#ifdef NANO7_DEVICE
++	void					Nano7StartBegin();
++	bool					Nano7Step();
++	// nano7 v32: the loading "thread" runs a slice per frame callback (LawnApp splits it); true when done
++	virtual bool			Nano7LoadStep() { LoadingThreadProc(); return true; }
++	bool					mNano7Loading = false;
++#endif
+ 	void					LogPerfStats();
+ 	virtual void			Init();
+ 	virtual void			PreGLInterfaceInitHook();
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/graphics/GLImage.cpp pvzp-desk/src/SexyAppFramework/graphics/GLImage.cpp
+--- pvzp-desk-src/src/SexyAppFramework/graphics/GLImage.cpp	2026-10-31 01:08:38.435007412 +0000
++++ pvzp-desk/src/SexyAppFramework/graphics/GLImage.cpp	2026-10-31 12:31:52.342151610 +0000
+@@ -29,6 +29,7 @@
+ #include "Image.h"
+ 
+ using namespace Sexy;
++#include "../../../nano7/memtrack.h" /* nano7 pixel tag */
+ 
+ GLImage::GLImage() : MemoryImage(gSexyAppBase)
+ {
+@@ -53,6 +54,7 @@
+ 
+ void GLImage::Create(int theWidth, int theHeight)
+ {
++	MT_TAG(mt_tag == MT_DECODE ? MT_DECODE : MT_PIXELS);
+ 	MemoryImage::Create(theWidth, theHeight);
+ }
+ 
+@@ -96,6 +98,9 @@
+ 
+ void GLImage::PurgeBits()
+ {
++#ifdef NANO7_DEVICE
++	if (mN7T && mBits == nullptr) { mPurgeBits = true; return; }
++#endif
+ 	mPurgeBits = true;
+ 
+ 	CommitBits();
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/graphics/GLInterface.cpp pvzp-desk/src/SexyAppFramework/graphics/GLInterface.cpp
+--- pvzp-desk-src/src/SexyAppFramework/graphics/GLInterface.cpp	2026-10-31 01:08:38.435007412 +0000
++++ pvzp-desk/src/SexyAppFramework/graphics/GLInterface.cpp	2026-10-31 16:12:25.767504748 +0000
+@@ -22,6 +22,7 @@
+  * along with PvZ-Portable. If not, see <https://www.gnu.org/licenses/>.
+  */
+ 
++#include "../../../nano7/texlog.h"
+ #define GLAD_GLES2_IMPLEMENTATION
+ #include "graphics/GLPlatform.h"
+ 
+@@ -37,7 +38,7 @@
+ #include <mutex>
+ #include <vector>
+ 
+-constexpr const int MAX_VERTICES = 16384;
++static const int MAX_VERTICES = getenv("NANO7_SMALL_VERTS") ? 2048 : 16384;  // nano cut: 48 KB batch buffer
+ 
+ #ifndef GL_FRAMEBUFFER_SRGB
+ #define GL_FRAMEBUFFER_SRGB 0x8DB9 // Not in GLES 2.0 headers, but needed to disable sRGB on Windows.
+@@ -130,6 +131,9 @@
+ 	gDrawState.mixedBlend = theEnabled ? 1 : 0;
+ }
+ 
++#ifdef NANO7_DEVICE
++#include "../../../nano7dev/n7gl_dev_a.inc"
++#else
+ static void GfxApplyState(const GfxDrawState& state)
+ {
+ 	if (!gAppliedStateValid || gAppliedState.blendSrc != state.blendSrc || gAppliedState.blendDst != state.blendDst)
+@@ -183,6 +187,8 @@
+ 	gNumVertices = 0;
+ }
+ 
++#endif
++
+ static void GfxEnd()
+ {
+ 	if (gVertexMode == (GLenum)-1) return;
+@@ -657,6 +663,7 @@
+ 		glDeleteTextures(1, &piece.mTexture);
+ 	mTextures.clear();
+ 	mTexMemSize = 0;
++	nano7_tex_drop(this);
+ }
+ 
+ void TextureData::CreateTextureDimensions(MemoryImage *theImage)
+@@ -702,8 +709,14 @@
+ 	mMaxTotalV = aHeight / (float)mTexPieceHeight;
+ }
+ 
++#include "../../../nano7/memtrack.h"
+ void TextureData::CreateTextures(MemoryImage *theImage)
+ {
++#ifdef NANO7_DEVICE
++	if (theImage->mN7T && theImage->mBits == nullptr) { Nano7DevCreateTextures(this, theImage); return; }
++#endif
++	static const bool sLazyTex = getenv("NANO7_LAZY_IMAGES") != nullptr;
++	MT_TAG(sLazyTex ? MT_DECODE : MT_PIXELS);  // nano7: conversion buffers; the device uploads .n7t data directly
+ 	GfxFlush();
+ 	theImage->DeleteSWBuffers();
+ 
+@@ -755,6 +768,7 @@
+ 		}
+ 	}
+ 
++	if (createTextures) nano7_tex_note(this, theImage, (int)aFormat);
+ 	mWidth  = theImage->mWidth;
+ 	mHeight = theImage->mHeight;
+ 	mBitsChangedCount = theImage->mBitsChangedCount;
+@@ -764,6 +778,7 @@
+ 
+ void TextureData::CheckCreateTextures(MemoryImage *theImage)
+ {
++	nano7_tex_touch(this);
+ 	if (mPixelFormat == PixelFormat_Unknown
+ 		|| theImage->mWidth != mWidth || theImage->mHeight != mHeight
+ 		|| theImage->mBitsChangedCount != mBitsChangedCount
+@@ -943,8 +958,14 @@
+ 	}
+ };
+ 
++#ifdef NANO7_DEVICE
++extern "C" void n7p_note_sp(void);
++#endif
+ static void DrawPolyClipped(const Rect *clip, const VertexList &list)
+ {
++#ifdef NANO7_DEVICE
++	n7p_note_sp();   // nano7 v35: one of the deepest draw leaves
++#endif
+ 	VertexList l1, l2;
+ 	l1 = list;
+ 
+@@ -1067,6 +1088,9 @@
+ void TextureData::BltTriangles(const TriVertex theVertices[][3], int theNumTriangles,
+ 							   unsigned int theColor, float tx, float ty, bool clampUv, const uint8_t* theDrawModes)
+ {
++#ifdef NANO7_DEVICE
++	n7p_note_sp();   // nano7 v35: the deepest draw leaf
++#endif
+ 	gDrawState.useTexture = 1;
+ 	if (mMaxTotalU <= 1.0 && mMaxTotalV <= 1.0)
+ 	{
+@@ -1221,6 +1245,7 @@
+ 
+ GLImage* GLInterface::GetScreenImage() { return mScreenImage.get(); }
+ 
++#ifndef NANO7_DEVICE
+ void GLInterface::UpdateViewport()
+ {
+ 	GfxFlush();
+@@ -1230,7 +1255,7 @@
+ 	int width = 1280, height = 720;
+ #else
+ 	int width, height;
+-	SDL_GL_GetDrawableSize((SDL_Window*)mApp->mWindow, &width, &height);
++	SDL_GetWindowSize((SDL_Window*)mApp->mWindow, &width, &height);
+ #endif
+ 
+ 	vw = width; vh = height;
+@@ -1250,7 +1275,10 @@
+ 	glViewport(vx, vy, vw, vh);
+ 	mPresentationRect = Rect(vx, vy, vw, vh);
+ }
++#endif
+ 
++
++#ifndef NANO7_DEVICE
+ int GLInterface::Init(bool IsWindowed)
+ {
+ 	GfxFlush();
+@@ -1325,6 +1353,8 @@
+ 	SetVideoOnlyDraw(false);
+ 	return 1;
+ }
++#endif
++
+ 
+ bool GLInterface::Redraw(Rect*)
+ {
+@@ -1346,13 +1376,17 @@
+ 	mNextCursorY = y;
+ }
+ 
++#ifndef NANO7_DEVICE
+ bool GLInterface::PreDraw()
+ {
+ 	SetMixedBlendMode(false);
+ 	SetBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+ 	return true;
+ }
++#endif
++
+ 
++#ifndef NANO7_DEVICE
+ void GLInterface::Flush()
+ {
+ 	GfxFlush();
+@@ -1366,6 +1400,8 @@
+ 	glClear(GL_COLOR_BUFFER_BIT);
+ #endif // Emscripten: browser composites after rAF, no clear needed
+ }
++#endif
++
+ 
+ bool GLInterface::CreateImageTexture(MemoryImage *theImage)
+ {
+@@ -1382,6 +1418,7 @@
+ 	return data->mPixelFormat != PixelFormat_Unknown;
+ }
+ 
++#ifndef NANO7_DEVICE
+ bool GLInterface::RecoverBits(MemoryImage* theImage)
+ {
+ 	GfxFlush();
+@@ -1437,6 +1474,8 @@
+ 	}
+ 	return true;
+ }
++#endif
++
+ 
+ void GLInterface::PushTransform(const SexyMatrix3 &theTransform, bool concatenate)
+ {
+@@ -1728,3 +1767,7 @@
+ 		GfxEnd();
+ 	}
+ }
++
++#ifdef NANO7_DEVICE
++#include "../../../nano7dev/n7gl_dev_b.inc"
++#endif
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/graphics/GLInterface.h pvzp-desk/src/SexyAppFramework/graphics/GLInterface.h
+--- pvzp-desk-src/src/SexyAppFramework/graphics/GLInterface.h	2026-10-31 01:08:38.435007412 +0000
++++ pvzp-desk/src/SexyAppFramework/graphics/GLInterface.h	2026-10-31 16:11:18.263440455 +0000
+@@ -83,7 +83,11 @@
+ 
+ struct VertexList
+ {
++#ifdef NANO7_DEVICE   // nano7 v35: 100 made a list 2.4 KB of stack and BltTriangles 7.4 KB; a clipped quad needs 8
++	enum { MAX_STACK_VERTS = 12 };
++#else
+ 	enum { MAX_STACK_VERTS = 100 };
++#endif
+ 	GLVertex mStackVerts[MAX_STACK_VERTS];
+ 	GLVertex* mVerts;
+ 	int mSize;
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/graphics/GLPlatform.h pvzp-desk/src/SexyAppFramework/graphics/GLPlatform.h
+--- pvzp-desk-src/src/SexyAppFramework/graphics/GLPlatform.h	2026-10-31 01:08:38.435007412 +0000
++++ pvzp-desk/src/SexyAppFramework/graphics/GLPlatform.h	2026-10-31 01:25:41.723346356 +0000
+@@ -57,12 +57,13 @@
+ // When true, a desktop GL compatibility context is in use and shaders
+ extern bool gDesktopGLFallback;
+ 
++extern "C" void* nano7_gl_proc(const char*);
+ inline void PlatformGLInit()
+ {
+ #ifdef __SWITCH__
+ 	gladLoadGLES2((GLADloadfunc)eglGetProcAddress);
+ #else
+-	gladLoadGLES2((GLADloadfunc)SDL_GL_GetProcAddress);
++	gladLoadGLES2((GLADloadfunc)nano7_gl_proc);
+ #endif
+ }
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/graphics/Graphics.cpp pvzp-desk/src/SexyAppFramework/graphics/Graphics.cpp
+--- pvzp-desk-src/src/SexyAppFramework/graphics/Graphics.cpp	2026-10-31 01:08:38.435007412 +0000
++++ pvzp-desk/src/SexyAppFramework/graphics/Graphics.cpp	2026-10-31 20:29:42.433620993 +0000
+@@ -23,6 +23,7 @@
+  */
+ 
+ #include "Graphics.h"
++#include "../../../nano7/n7fx.h"
+ #include "Image.h"
+ #include "Font.h"
+ #include "GLImage.h"
+@@ -663,6 +664,7 @@
+ 
+ void Graphics::DrawImage(Sexy::Image* theImage, int theX, int theY)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	if (mScaleX!=1 || mScaleY!=1)
+ 	{
+ 		DrawImage(theImage,theX,theY,Rect(0,0,theImage->mWidth,theImage->mHeight));
+@@ -681,6 +683,7 @@
+ 
+ void Graphics::DrawImage(Image* theImage, int theX, int theY, const Rect& theSrcRect)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DBG_ASSERTE(theSrcRect.mX + theSrcRect.mWidth <= theImage->GetWidth());
+ 	DBG_ASSERTE(theSrcRect.mY + theSrcRect.mHeight <= theImage->GetHeight());
+ 
+@@ -707,11 +710,13 @@
+ 
+ void Graphics::DrawImageMirror(Image* theImage, int theX, int theY, bool mirror)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageMirror(theImage,theX,theY,Rect(0,0,theImage->mWidth,theImage->mHeight),mirror);
+ }
+ 
+ void Graphics::DrawImageMirror(Image* theImage, int theX, int theY, const Rect& theSrcRect, bool mirror)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	if (!mirror)
+ 	{
+ 		DrawImage(theImage, theX, theY, theSrcRect);
+@@ -742,6 +747,7 @@
+ 
+ void Graphics::DrawImageMirror(Image* theImage, const Rect& theDestRect, const Rect& theSrcRect, bool mirror)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	if (!mirror)
+ 	{
+ 		DrawImage(theImage,theDestRect,theSrcRect);
+@@ -756,6 +762,7 @@
+ 
+ void Graphics::DrawImage(Image* theImage, int theX, int theY, int theStretchedWidth, int theStretchedHeight)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	Rect aDestRect = Rect(theX + mTransX, theY + mTransY, theStretchedWidth, theStretchedHeight);
+ 	Rect aSrcRect = Rect(0, 0, theImage->mWidth, theImage->mHeight);
+ 
+@@ -764,6 +771,7 @@
+ 
+ void Graphics::DrawImage(Image* theImage, const Rect& theDestRect, const Rect& theSrcRect)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	Rect aDestRect = Rect(theDestRect.mX + mTransX, theDestRect.mY + mTransY, theDestRect.mWidth, theDestRect.mHeight);
+ 
+ 	mDestImage->StretchBlt(theImage, aDestRect, theSrcRect, mClipRect, mColorizeImages ? mColor : Color::White, mDrawMode, mFastStretch);
+@@ -771,6 +779,7 @@
+ 
+ void Graphics::DrawImageF(Image* theImage, float theX, float theY)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	theX += mTransX;
+ 	theY += mTransY;
+ 
+@@ -780,6 +789,7 @@
+ 
+ void Graphics::DrawImageF(Image* theImage, float theX, float theY, const Rect& theSrcRect)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DBG_ASSERTE(theSrcRect.mX + theSrcRect.mWidth <= theImage->GetWidth());
+ 	DBG_ASSERTE(theSrcRect.mY + theSrcRect.mHeight <= theImage->GetHeight());
+ 
+@@ -791,6 +801,7 @@
+ 
+ void Graphics::DrawImageRotated(Image* theImage, int theX, int theY, double theRot, const Rect *theSrcRect)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	if (theSrcRect == nullptr)
+ 	{
+ 		int aRotCenterX = theImage->GetWidth() / 2;
+@@ -809,6 +820,7 @@
+ 
+ void Graphics::DrawImageRotatedF(Image* theImage, float theX, float theY, double theRot, const Rect *theSrcRect)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	if (theSrcRect == nullptr)
+ 	{
+ 		float aRotCenterX = theImage->GetWidth() / 2.0f;
+@@ -827,11 +839,13 @@
+ 
+ void Graphics::DrawImageRotated(Image* theImage, int theX, int theY, double theRot, int theRotCenterX, int theRotCenterY, const Rect *theSrcRect)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageRotatedF(theImage,theX,theY,theRot,theRotCenterX,theRotCenterY,theSrcRect);
+ }
+ 
+ void Graphics::DrawImageRotatedF(Image* theImage, float theX, float theY, double theRot, float theRotCenterX, float theRotCenterY, const Rect *theSrcRect)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	theX += mTransX;
+ 	theY += mTransY;
+ 
+@@ -846,17 +860,20 @@
+ 
+ void Graphics::DrawImageMatrix(Image* theImage, const SexyMatrix3 &theMatrix, float x, float y)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	Rect aSrcRect(0,0,theImage->mWidth,theImage->mHeight);
+ 	mDestImage->BltMatrix(theImage,x+mTransX,y+mTransY,theMatrix,mClipRect,mColorizeImages?mColor:Color::White,mDrawMode,aSrcRect,mLinearBlend);
+ }
+ 
+ void Graphics::DrawImageMatrix(Image* theImage, const SexyMatrix3 &theMatrix, const Rect &theSrcRect, float x, float y)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	mDestImage->BltMatrix(theImage,x+mTransX,y+mTransY,theMatrix,mClipRect,mColorizeImages?mColor:Color::White,mDrawMode,theSrcRect,mLinearBlend);
+ }
+ 
+ void Graphics::DrawImageTransformHelper(Image* theImage, const Transform &theTransform, const Rect &theSrcRect, float x, float y, bool useFloat)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	if (theTransform.mComplex || (GLImage::Check3D(mDestImage) && useFloat))
+ 	{
+ 		DrawImageMatrix(theImage,theTransform.GetMatrix(),theSrcRect,x,y);
+@@ -918,32 +935,38 @@
+ 
+ void Graphics::DrawImageTransform(Image* theImage, const Transform &theTransform, float x, float y)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageTransformHelper(theImage,theTransform,Rect(0,0,theImage->mWidth,theImage->mHeight),x,y,false);
+ }
+ 
+ void Graphics::DrawImageTransformF(Image* theImage, const Transform &theTransform, float x, float y)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageTransformHelper(theImage,theTransform,Rect(0,0,theImage->mWidth,theImage->mHeight),x,y,true);
+ }
+ 
+ void Graphics::DrawImageTransform(Image* theImage, const Transform &theTransform, const Rect &theSrcRect, float x, float y)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageTransformHelper(theImage,theTransform,theSrcRect,x,y,false);
+ }
+ 
+ void Graphics::DrawImageTransformF(Image* theImage, const Transform &theTransform, const Rect &theSrcRect, float x, float y)
+ {
++	if (!theImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageTransformHelper(theImage,theTransform,theSrcRect,x,y,true);
+ }
+ 
+ void Graphics::DrawTriangleTex(Image *theTexture, const TriVertex &v1, const TriVertex &v2, const TriVertex &v3)
+ {
++	if (!theTexture) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	TriVertex v[1][3] = {{v1,v2,v3}};
+ 	mDestImage->BltTrianglesTex(theTexture,v,1,mClipRect,mColorizeImages?mColor:Color::White,mDrawMode,mTransX,mTransY,mLinearBlend);
+ }
+ 
+ void Graphics::DrawTrianglesTex(Image *theTexture, const TriVertex theVertices[][3], int theNumTriangles)
+ {
++	if (!theTexture) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	mDestImage->BltTrianglesTex(theTexture,theVertices,theNumTriangles,mClipRect,mColorizeImages?mColor:Color::White,mDrawMode,mTransX,mTransY,mLinearBlend);
+ }
+ 
+@@ -1001,11 +1024,13 @@
+ 
+ void Graphics::DrawImageBox(const Rect& theDest, Image* theComponentImage)
+ {
++	if (!theComponentImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageBox(Rect(0,0,theComponentImage->mWidth,theComponentImage->mHeight),theDest,theComponentImage);
+ }
+ 
+ void Graphics::DrawImageBox(const Rect& theSrc, const Rect &theDest, Image* theComponentImage)
+ {
++	if (!theComponentImage) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	if (theSrc.mWidth<=0 || theSrc.mHeight<=0)
+ 		return;
+ 
+@@ -1051,16 +1076,19 @@
+ 
+ void Graphics::DrawImageCel(Image* theImageStrip, int theX, int theY, int theCel)
+ {
++	if (!theImageStrip) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageCel(theImageStrip, theX, theY, theCel % theImageStrip->mNumCols, theCel / theImageStrip->mNumCols);
+ }
+ 
+ void Graphics::DrawImageCel(Image* theImageStrip, const Rect& theDestRect, int theCel)
+ {
++	if (!theImageStrip) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageCel(theImageStrip, theDestRect, theCel % theImageStrip->mNumCols, theCel / theImageStrip->mNumCols);
+ }
+ 
+ void Graphics::DrawImageCel(Image* theImageStrip, int theX, int theY, int theCelCol, int theCelRow)
+ {
++	if (!theImageStrip) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	if (theCelRow<0 || theCelCol<0 || theCelRow >= theImageStrip->mNumRows || theCelCol >= theImageStrip->mNumCols)
+ 		return;
+ 
+@@ -1073,11 +1101,13 @@
+ 
+ void Graphics::DrawImageAnim(Image* theImageAnim, int theX, int theY, int theTime)
+ {
++	if (!theImageAnim) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	DrawImageCel(theImageAnim, theX, theY, theImageAnim->GetAnimCel(theTime));
+ }
+ 
+ void Graphics::DrawImageCel(Image* theImageStrip, const Rect& theDestRect, int theCelCol, int theCelRow)
+ {
++	if (!theImageStrip) { Nano7FxMissingImage(); return; }   // nano7 v39: a pruned picture draws as nothing, not a crash
+ 	if (theCelRow<0 || theCelCol<0 || theCelRow >= theImageStrip->mNumRows || theCelCol >= theImageStrip->mNumCols)
+ 		return;
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/graphics/ImageFont.cpp pvzp-desk/src/SexyAppFramework/graphics/ImageFont.cpp
+--- pvzp-desk-src/src/SexyAppFramework/graphics/ImageFont.cpp	2026-10-31 01:08:38.439007179 +0000
++++ pvzp-desk/src/SexyAppFramework/graphics/ImageFont.cpp	2026-10-31 11:13:33.772093529 +0000
+@@ -584,8 +584,8 @@
+ 
+ 				if ((Image*)anImage != nullptr)
+ 				{
+-					if (isNew)
+-						anImage->Palletize();
++					if (isNew && !getenv("NANO7_LAZY_IMAGES"))
++						anImage->Palletize();  // nano7 lazy images: no palette copy, bits decoded when the texture is made
+ 					aLayer->mImage = anImage;
+ 				}
+ 				else
+@@ -1034,6 +1034,7 @@
+ 	mSourceFile = theFontDescFileName;
+ 
+ 	mInitialized = LoadDescriptor(theFontDescFileName); ;
++	if (getenv("NANO7_FONT_TRIM")) { mDefineMap.clear(); mCurrentLine.clear(); mCurrentLine.shrink_to_fit(); }  // nano7: parser data is not used after load
+ 
+ 	return !hasErrors;
+ }
+@@ -1423,7 +1424,11 @@
+ }
+ 
+ std::mutex gRenderCritSec;
++#ifdef NANO7_SMALL_POOLS
++static const int POOL_SIZE = 512;   /* nano7kit: glyph commands per text draw */
++#else
+ static const int POOL_SIZE = 4096;
++#endif
+ static RenderCommand gRenderCommandPool[POOL_SIZE];
+ static RenderCommand* gRenderTail[256];
+ static RenderCommand* gRenderHead[256];
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/graphics/MemoryImage.cpp pvzp-desk/src/SexyAppFramework/graphics/MemoryImage.cpp
+--- pvzp-desk-src/src/SexyAppFramework/graphics/MemoryImage.cpp	2026-10-31 01:08:38.439007179 +0000
++++ pvzp-desk/src/SexyAppFramework/graphics/MemoryImage.cpp	2026-10-31 12:31:52.342151610 +0000
+@@ -38,6 +38,7 @@
+ #include <math.h>
+ 
+ using namespace Sexy;
++#include "../../../nano7/memtrack.h" /* nano7 pixel tag */
+ 
+ #ifdef OPTIMIZE_SOFTWARE_DRAWING
+ bool gOptimizeSoftwareDrawing = false;
+@@ -704,6 +705,7 @@
+ 
+ void MemoryImage::CommitBits()
+ {
++	MT_TAG(mt_tag == MT_DECODE ? MT_DECODE : MT_PIXELS);
+ 	//if (gDebug)
+ 	//	mApp->CopyToClipboard("+MemoryImage::CommitBits");
+ 
+@@ -773,6 +775,7 @@
+ 
+ void* MemoryImage::GetNativeAlphaData(NativeDisplay *theDisplay)
+ {
++	MT_TAG(mt_tag == MT_DECODE ? MT_DECODE : MT_PIXELS);
+ 	if (mNativeAlphaData != nullptr)
+ 		return mNativeAlphaData.get();
+ 
+@@ -850,6 +853,7 @@
+ 
+ uchar* MemoryImage::GetRLAlphaData()
+ {
++	MT_TAG(mt_tag == MT_DECODE ? MT_DECODE : MT_PIXELS);
+ 	CommitBits();
+ 
+ 	if (mRLAlphaData == nullptr)
+@@ -888,6 +892,7 @@
+ 
+ uchar* MemoryImage::GetRLAdditiveData(NativeDisplay *theNative)
+ {
++	MT_TAG(mt_tag == MT_DECODE ? MT_DECODE : MT_PIXELS);
+ 	if (mRLAdditiveData == nullptr)
+ 	{
+ 		if (mColorTable == nullptr)
+@@ -1069,6 +1074,7 @@
+ 
+ void MemoryImage::SetBits(uint32_t* theBits, int theWidth, int theHeight, bool commitBits)
+ {
++	MT_TAG(mt_tag == MT_DECODE ? MT_DECODE : MT_PIXELS);
+ 	if (theBits != mBits.get())
+ 	{
+ 		mColorIndices.reset();
+@@ -1091,6 +1097,7 @@
+ 
+ void MemoryImage::Create(int theWidth, int theHeight)
+ {
++	MT_TAG(mt_tag == MT_DECODE ? MT_DECODE : MT_PIXELS);
+ 	mBits.reset();
+ 
+ 	mWidth = theWidth;
+@@ -1103,10 +1110,25 @@
+ 	BitsChanged();
+ }
+ 
++#ifdef NANO7_DEVICE
++void Nano7DevBitsWanted(Sexy::MemoryImage*);
++#define N7_NOT_N7T && !mN7T
++#else
++#define N7_NOT_N7T
++#endif
+ uint32_t* MemoryImage::GetBits()
+ {
++	// nano7: a lazy image decoded again only to build its texture is an upload buffer; the device streams
++	// the 16-bit .n7t in strips instead (counted as a fixed strip buffer). Bits that outlive the upload are
++	// added back by the measuring bot.
++	static const bool sLazy = getenv("NANO7_LAZY_IMAGES") != nullptr;
++	(void)sLazy;  // only texture creation (which sets the decode tag itself) counts as an upload buffer
++	MT_TAG(mt_tag == MT_DECODE ? MT_DECODE : MT_PIXELS);
+ 	if (mBits == nullptr)
+ 	{
++#ifdef NANO7_DEVICE
++		if (mN7T) Nano7DevBitsWanted(this);
++#endif
+ 		int aSize = mWidth*mHeight;
+ 
+ 		mBits = std::make_unique<uint32_t[]>(aSize+1);
+@@ -1153,8 +1175,8 @@
+ 		else if (mRenderData == nullptr || mApp->mPrimaryThreadId != std::this_thread::get_id() || !mApp->mGLInterface->RecoverBits(this))
+ 		{
+ 			std::unique_ptr<ImageLib::Image> aLoadedImage;
+-			if (!mFilePath.empty())
+-				aLoadedImage.reset(ImageLib::GetImage(mFilePath, true));
++			if (!mFilePath.empty() N7_NOT_N7T)
++				{ MT_TAG(MT_DECODE); aLoadedImage.reset(ImageLib::GetImage(mFilePath, true)); }
+ 
+ 			if (aLoadedImage != nullptr && aLoadedImage->GetWidth() == mWidth && aLoadedImage->GetHeight() == mHeight)
+ 				memcpy(mBits.get(), aLoadedImage->GetBits(), aSize*sizeof(uint32_t));
+@@ -1748,6 +1770,7 @@
+ 
+ bool MemoryImage::Palletize()
+ {
++	MT_TAG(mt_tag == MT_DECODE ? MT_DECODE : MT_PIXELS);
+ 	CommitBits();
+ 
+ 	if (mColorTable != nullptr)
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/graphics/MemoryImage.h pvzp-desk/src/SexyAppFramework/graphics/MemoryImage.h
+--- pvzp-desk-src/src/SexyAppFramework/graphics/MemoryImage.h	2026-10-31 01:08:38.439007179 +0000
++++ pvzp-desk/src/SexyAppFramework/graphics/MemoryImage.h	2026-10-31 17:03:42.598855053 +0000
+@@ -59,6 +59,13 @@
+ 	bool					mHasAlpha;
+ 	bool					mIsVolatile;
+ 	bool					mPurgeBits;
++#ifdef NANO7_DEVICE
++	bool					mN7T = false;		// pixels exist only as a GL texture (.n7t)
++	uint16_t				mN7TW = 0, mN7TH = 0;
++	uint8_t					mN7Fmt = 0;
++	const uint16_t*			mN7Pixels = nullptr;	// nano7 v36: a baked image's texels in memory (else the .n7t file)
++	bool					mN7PixelsOwned = false;	// freed (malloc) once they are a GL texture
++#endif
+ 	bool					mWantPal;
+ 
+ 	std::unique_ptr<uint32_t[]>		mNativeAlphaData;
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/imagelib/ImageLib.cpp pvzp-desk/src/SexyAppFramework/imagelib/ImageLib.cpp
+--- pvzp-desk-src/src/SexyAppFramework/imagelib/ImageLib.cpp	2026-10-31 01:08:38.439007179 +0000
++++ pvzp-desk/src/SexyAppFramework/imagelib/ImageLib.cpp	2026-10-31 11:16:24.410144780 +0000
+@@ -26,7 +26,6 @@
+ 
+ #include "Common.h"
+ #include "ImageLib.h"
+-#include "png.h"
+ #include <math.h>
+ #include <algorithm>
+ #include <array>
+@@ -37,11 +36,6 @@
+ #include <unordered_set>
+ #include "paklib/PakInterface.h"
+ 
+-extern "C"
+-{
+-#include "jpeglib.h"
+-#include "jerror.h"
+-}
+ 
+ using namespace ImageLib;
+ using namespace std::string_view_literals;
+@@ -69,115 +63,9 @@
+ 	return mBits.get();
+ }
+ 
+-// PNG Pak Support
+-
+-static void png_pak_read_data(png_structp png_ptr, png_bytep data, png_size_t length)
+-{
+-	png_size_t check;
+-
+-	/* fread() returns 0 on error, so it is OK to store this in a png_size_t
+-	* instead of an int, which is what fread() actually returns.
+-	*/
+-	check = (png_size_t)p_fread(data, (png_size_t)1, length,
+-		(PFILE*)png_get_io_ptr(png_ptr));
+-
+-	if (check != length)
+-	{
+-		png_error(png_ptr, "Read Error");
+-	}
+-}
+-
+-Image* GetPNGImage(const std::string& theFileName)
+-{
+-	png_structp png_ptr;
+-	png_infop info_ptr;
+-	png_uint_32 width, height;
+-	PFILE *fp;
+-
+-	if ((fp = p_fopen(theFileName.c_str(), "rb")) == nullptr)
+-		return nullptr;
+-
+-	png_ptr = png_create_read_struct(PNG_LIBPNG_VER_STRING,
+-	  nullptr, nullptr, nullptr);
+-	png_set_read_fn(png_ptr, (png_voidp)fp, png_pak_read_data);
+-
+-	if (png_ptr == nullptr)
+-	{
+-		p_fclose(fp);
+-		return nullptr;
+-	}
+-
+-	/* Allocate/initialize the memory for image information.  REQUIRED. */
+-	info_ptr = png_create_info_struct(png_ptr);
+-	if (info_ptr == nullptr)
+-	{
+-		p_fclose(fp);
+-		png_destroy_read_struct(&png_ptr, (png_infopp)nullptr, (png_infopp)nullptr);
+-		return nullptr;
+-	}
+-
+-   /* Set error handling if you are using the setjmp/longjmp method (this is
+-    * the normal method of doing things with libpng).  REQUIRED unless you
+-    * set up your own error handlers in the png_create_read_struct() earlier.
+-    */
+-
+-	// must be volatile: assigned after setjmp, read in the error path after longjmp
+-	png_bytep* volatile row_pointers = nullptr;
+-	uint32_t* volatile aBits = nullptr;
+-
+-	if (setjmp(png_jmpbuf(png_ptr)))
+-	{
+-		/* Free all of the memory associated with the png_ptr and info_ptr */
+-		png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)nullptr);
+-		p_fclose(fp);
+-		delete[] (png_bytep*)row_pointers;
+-		delete[] (uint32_t*)aBits;
+-		/* If we get here, we had a problem reading the file */
+-		return nullptr;
+-	}
+-
+-	png_read_info(png_ptr, info_ptr);
+-	png_get_IHDR(png_ptr, info_ptr, &width, &height, nullptr, nullptr,
+-	   nullptr, nullptr, nullptr);
+-
+-	png_set_expand(png_ptr);
+-	if constexpr (std::endian::native == std::endian::big)
+-	{
+-		png_set_filler(png_ptr, 0xff, PNG_FILLER_BEFORE);
+-	}
+-	else
+-	{
+-		png_set_filler(png_ptr, 0xff, PNG_FILLER_AFTER);
+-		png_set_bgr(png_ptr);
+-	}
+-	png_set_palette_to_rgb(png_ptr);
+-	png_set_gray_to_rgb(png_ptr);
+-
+-	row_pointers = new png_bytep[height];
+-	aBits = new uint32_t[width*height];
+-	for (uint i = 0; i < height; i++)
+-	{
+-		row_pointers[i] = (png_bytep)(aBits + i*width);
+-	}
+-	png_read_image(png_ptr, row_pointers);
+-
+-	/* read rest of file, and get additional chunks in info_ptr - REQUIRED */
+-	png_read_end(png_ptr, info_ptr);
+-
+-	/* clean up after the read, and free any memory allocated - REQUIRED */
+-	png_destroy_read_struct(&png_ptr, &info_ptr, (png_infopp)nullptr);
+-
+-	/* close the file */
+-	p_fclose(fp);
+-	delete[] row_pointers;
+-
+-	Image* anImage = new Image();
+-	anImage->mWidth = width;
+-	anImage->mHeight = height;
+-	anImage->mBits.reset(aBits);
+-
+-	return anImage;
+-}
++// nano7kit measurement: stb_image instead of libpng/libjpeg (same ARGB output).
++#include "../../../nano7/stb_decode.h"
++Image* GetPNGImage(const std::string& theFileName) { return nano7_stb_load(theFileName, false); }
+ 
+ Image* GetTGAImage(const std::string& theFileName)
+ {
+@@ -695,427 +583,10 @@
+ 	return nullptr;
+ }
+ 
+-typedef struct my_error_mgr * my_error_ptr;
+-
+-struct my_error_mgr
+-{
+-  struct jpeg_error_mgr pub;	/* "public" fields */
+-
+-  jmp_buf setjmp_buffer;	/* for return to caller */
+-};
+-
+-METHODDEF(void)
+-my_error_exit (j_common_ptr cinfo)
+-{
+-  /* cinfo->err really points to a my_error_mgr struct, so coerce pointer */
+-  my_error_ptr myerr = (my_error_ptr) cinfo->err;
+-
+-  /* Always display the message. */
+-  /* We could postpone this until after returning, if we chose. */
+-  (*cinfo->err->output_message) (cinfo);
+-
+-  /* Return control to the setjmp point */
+-  longjmp(myerr->setjmp_buffer, 1);
+-
+-}
+-
+-bool ImageLib::WriteJPEGImage(const std::string& theFileName, Image* theImage)
+-{
+-	FILE *fp;
+-
+-	if ((fp = fopen(theFileName.c_str(), "wb")) == nullptr)
+-		return false;
+-
+-	struct jpeg_compress_struct cinfo{};
+-	struct my_error_mgr jerr;
+-
+-	cinfo.err = jpeg_std_error(&jerr.pub);
+-	jerr.pub.error_exit = my_error_exit;
+-
+-	// must be volatile: assigned after setjmp, read in the error path after longjmp
+-	uint8_t* volatile aTempBuffer = nullptr;
+-
+-	if (setjmp(jerr.setjmp_buffer))
+-	{
+-		/* If we get here, the JPEG code has signaled an error.
+-		 * We need to clean up the JPEG object, close the input file, and return.
+-		 */
+-		jpeg_destroy_compress(&cinfo);
+-		delete[] (uint8_t*)aTempBuffer;
+-		fclose(fp);
+-		return false;
+-	}
+-
+-	jpeg_create_compress(&cinfo);
+-
+-	cinfo.image_width = theImage->mWidth;
+-	cinfo.image_height = theImage->mHeight;
+-	cinfo.input_components = 3;
+-	cinfo.in_color_space = JCS_RGB;
+-	cinfo.optimize_coding = TRUE;
+-	jpeg_set_defaults(&cinfo);
+-	jpeg_set_quality(&cinfo, 80, TRUE);
+-
+-	jpeg_stdio_dest(&cinfo, fp);
+-
+-	jpeg_start_compress(&cinfo, TRUE);
+-
+-	int row_stride = theImage->GetWidth() * 3;
+-
+-	aTempBuffer = new uint8_t[row_stride];
+-
+-	uint32_t* aSrcPtr = theImage->mBits.get();
+-
+-	for (int aRow = 0; aRow < theImage->mHeight; aRow++)
+-	{
+-		uint8_t* aDest = aTempBuffer;
+-
+-		for (int aCol = 0; aCol < theImage->mWidth; aCol++)
+-		{
+-			uint32_t src = *(aSrcPtr++);
+-
+-			*aDest++ = (src >> 16) & 0xFF;
+-			*aDest++ = (src >>  8) & 0xFF;
+-			*aDest++ = (src      ) & 0xFF;
+-		}
+-
+-		uint8_t* aRowBuffer = aTempBuffer;
+-		jpeg_write_scanlines(&cinfo, &aRowBuffer, 1);
+-	}
+-
+-	delete [] aTempBuffer;
+-	aTempBuffer = nullptr; // jpeg_finish_compress may still longjmp; avoid double delete in the error path
+-
+-	jpeg_finish_compress(&cinfo);
+-	jpeg_destroy_compress(&cinfo);
+-
+-	fclose(fp);
+-
+-	return true;
+-}
+-
+-bool ImageLib::WritePNGImage(const std::string& theFileName, Image* theImage)
+-{
+-	png_structp png_ptr;
+-	png_infop info_ptr;
+-
+-	FILE *fp;
+-
+-	if ((fp = fopen(theFileName.c_str(), "wb")) == nullptr)
+-		return false;
+-
+-	png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING,
+-	  nullptr, nullptr, nullptr);
+-
+-	if (png_ptr == nullptr)
+-	{
+-		fclose(fp);
+-		return false;
+-	}
+-
+-	// Allocate/initialize the memory for image information.  REQUIRED.
+-	info_ptr = png_create_info_struct(png_ptr);
+-	if (info_ptr == nullptr)
+-	{
+-		fclose(fp);
+-		png_destroy_write_struct(&png_ptr, (png_infopp)nullptr);
+-		return false;
+-	}
+-
+-   // Set error handling if you are using the setjmp/longjmp method (this is
+-   // the normal method of doing things with libpng).  REQUIRED unless you
+-   // set up your own error handlers in the png_create_write_struct() earlier.
+-
+-	if (setjmp(png_jmpbuf(png_ptr)))
+-	{
+-		// Free all of the memory associated with the png_ptr and info_ptr
+-		png_destroy_write_struct(&png_ptr, &info_ptr);
+-		fclose(fp);
+-		// If we get here, we had a problem writeing the file
+-		return false;
+-	}
+-
+-	png_init_io(png_ptr, fp);
+-
+-	png_color_8 sig_bit;
+-	sig_bit.red = 8;
+-	sig_bit.green = 8;
+-	sig_bit.blue = 8;
+-	/* if the image has an alpha channel then */
+-	sig_bit.alpha = 8;
+-	png_set_sBIT(png_ptr, info_ptr, &sig_bit);
+-	png_set_bgr(png_ptr);
+-
+-	png_set_IHDR(png_ptr, info_ptr, theImage->mWidth, theImage->mHeight, 8, PNG_COLOR_TYPE_RGB_ALPHA,
+-	   PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_BASE, PNG_FILTER_TYPE_BASE);
+-
+-	png_write_info(png_ptr, info_ptr);
+-
+-	for (int i = 0; i < theImage->mHeight; i++)
+-	{
+-		png_bytep aRowPtr = (png_bytep) (theImage->mBits.get() + i*theImage->mWidth);
+-		png_write_rows(png_ptr, &aRowPtr, 1);
+-	}
+-
+-	// write rest of file, and get additional chunks in info_ptr - REQUIRED
+-	png_write_end(png_ptr, info_ptr);
+-
+-	// clean up after the write, and free any memory allocated - REQUIRED
+-	png_destroy_write_struct(&png_ptr, &info_ptr);
+-
+-	// close the file
+-	fclose(fp);
+-
+-	return true;
+-}
+-
+-bool ImageLib::WriteTGAImage(const std::string& theFileName, Image* theImage)
+-{
+-	FILE* aTGAFile = fopen(theFileName.c_str(), "wb");
+-	if (aTGAFile == nullptr)
+-		return false;
+-
+-	uint8_t aHeaderIDLen = 0;
+-	fwrite(&aHeaderIDLen, sizeof(uint8_t), 1, aTGAFile);
+-
+-	uint8_t aColorMapType = 0;
+-	fwrite(&aColorMapType, sizeof(uint8_t), 1, aTGAFile);
+-
+-	uint8_t anImageType = 2;
+-	fwrite(&anImageType, sizeof(uint8_t), 1, aTGAFile);
+-
+-	uint16_t aFirstEntryIdx = 0;
+-	aFirstEntryIdx = Sexy::ToLE16(aFirstEntryIdx);
+-	fwrite(&aFirstEntryIdx, sizeof(uint16_t), 1, aTGAFile);
+-
+-	uint16_t aColorMapLen = 0;
+-	aColorMapLen = Sexy::ToLE16(aColorMapLen);
+-	fwrite(&aColorMapLen, sizeof(uint16_t), 1, aTGAFile);
+-
+-	uint8_t aColorMapEntrySize = 0;
+-	fwrite(&aColorMapEntrySize, sizeof(uint8_t), 1, aTGAFile);
+-
+-	uint16_t anXOrigin = 0;
+-	anXOrigin = Sexy::ToLE16(anXOrigin);
+-	fwrite(&anXOrigin, sizeof(uint16_t), 1, aTGAFile);
+-
+-	uint16_t aYOrigin = 0;
+-	aYOrigin = Sexy::ToLE16(aYOrigin);
+-	fwrite(&aYOrigin, sizeof(uint16_t), 1, aTGAFile);
+-
+-	uint16_t anImageWidth = theImage->mWidth;
+-	anImageWidth = Sexy::ToLE16(anImageWidth);
+-	fwrite(&anImageWidth, sizeof(uint16_t), 1, aTGAFile);
+-
+-	uint16_t anImageHeight = theImage->mHeight;
+-	anImageHeight = Sexy::ToLE16(anImageHeight);
+-	fwrite(&anImageHeight, sizeof(uint16_t), 1, aTGAFile);
+-
+-	uint8_t aBitCount = 32;
+-	fwrite(&aBitCount, sizeof(uint8_t), 1, aTGAFile);
+-
+-	uint8_t anImageDescriptor = 8 | (1<<5);
+-	fwrite(&anImageDescriptor, sizeof(uint8_t), 1, aTGAFile);
+-
+-	if constexpr (std::endian::native == std::endian::little)
+-	{
+-		fwrite(theImage->mBits.get(), 4, theImage->mWidth * theImage->mHeight, aTGAFile);
+-	}
+-	else
+-	{
+-		std::vector<uint32_t> aPixelsLE(theImage->mBits.get(), theImage->mBits.get() + theImage->mWidth * theImage->mHeight);
+-		for (uint32_t& pixel : aPixelsLE)
+-			pixel = Sexy::ToLE32(pixel);
+-		fwrite(aPixelsLE.data(), 4, aPixelsLE.size(), aTGAFile);
+-	}
+-
+-	fclose(aTGAFile);
+-
+-	return true;
+-}
+-
+-// JPEG Pak Reader
+-
+-typedef struct {
+-	struct jpeg_source_mgr pub;	/* public fields */
+-
+-	PFILE * infile;		/* source stream */
+-	JOCTET * buffer;		/* start of buffer */
+-	boolean start_of_file;	/* have we gotten any data yet? */
+-} pak_source_mgr;
+-
+-typedef pak_source_mgr * pak_src_ptr;
+-
+-constexpr const int INPUT_BUF_SIZE = 4096;
+-
+-METHODDEF(void) init_source (j_decompress_ptr cinfo)
+-{
+-	pak_src_ptr src = (pak_src_ptr) cinfo->src;
+-	src->start_of_file = TRUE;
+-}
+-
+-METHODDEF(boolean) fill_input_buffer (j_decompress_ptr cinfo)
+-{
+-	pak_src_ptr src = (pak_src_ptr) cinfo->src;
+-	size_t nbytes;
+-
+-	nbytes = p_fread(src->buffer, 1, INPUT_BUF_SIZE, src->infile);
+-
+-	if (nbytes <= 0) {
+-		if (src->start_of_file)	/* Treat empty input file as fatal error */
+-			ERREXIT(cinfo, JERR_INPUT_EMPTY);
+-		WARNMS(cinfo, JWRN_JPEG_EOF);
+-		/* Insert a fake EOI marker */
+-		src->buffer[0] = (JOCTET) 0xFF;
+-		src->buffer[1] = (JOCTET) JPEG_EOI;
+-		nbytes = 2;
+-	}
+-
+-	src->pub.next_input_byte = src->buffer;
+-	src->pub.bytes_in_buffer = nbytes;
+-	src->start_of_file = FALSE;
+-
+-	return TRUE;
+-}
+-
+-METHODDEF(void) skip_input_data (j_decompress_ptr cinfo, long num_bytes)
+-{
+-	pak_src_ptr src = (pak_src_ptr) cinfo->src;
+-
+-	if (num_bytes > 0) {
+-		while (num_bytes > (long) src->pub.bytes_in_buffer) {
+-			num_bytes -= (long) src->pub.bytes_in_buffer;
+-			(void) fill_input_buffer(cinfo);
+-		}
+-		src->pub.next_input_byte += (size_t) num_bytes;
+-		src->pub.bytes_in_buffer -= (size_t) num_bytes;
+-	}
+-}
+-
+-METHODDEF(void) term_source (j_decompress_ptr /* cinfo */)
+-{
+-	/* no work necessary here */
+-}
+-
+-void jpeg_pak_src (j_decompress_ptr cinfo, PFILE* infile)
+-{
+-	pak_src_ptr src;
+-
+-	/* The source object and input buffer are made permanent so that a series
+-	* of JPEG images can be read from the same file by calling jpeg_stdio_src
+-	* only before the first one.  (If we discarded the buffer at the end of
+-	* one image, we'd likely lose the start of the next one.)
+-	* This makes it unsafe to use this manager and a different source
+-	* manager serially with the same JPEG object.  Caveat programmer.
+-	*/
+-	if (cinfo->src == nullptr) {	/* first time for this JPEG object? */
+-		cinfo->src = (struct jpeg_source_mgr *)
+-			(*cinfo->mem->alloc_small) ((j_common_ptr) cinfo, JPOOL_PERMANENT,
+-			sizeof(pak_source_mgr));
+-		src = (pak_src_ptr) cinfo->src;
+-		src->buffer = (JOCTET *)
+-			(*cinfo->mem->alloc_small) ((j_common_ptr) cinfo, JPOOL_PERMANENT,
+-			INPUT_BUF_SIZE * sizeof(JOCTET));
+-	}
+-
+-	src = (pak_src_ptr) cinfo->src;
+-	src->pub.init_source = init_source;
+-	src->pub.fill_input_buffer = fill_input_buffer;
+-	src->pub.skip_input_data = skip_input_data;
+-	src->pub.resync_to_restart = jpeg_resync_to_restart; /* use default method */
+-	src->pub.term_source = term_source;
+-	src->infile = infile;
+-	src->pub.bytes_in_buffer = 0; /* forces fill_input_buffer on first read */
+-	src->pub.next_input_byte = nullptr; /* until buffer loaded */
+-}
+-
+-
+-Image* GetJPEGImage(const std::string& theFileName)
+-{
+-	PFILE *fp;
+-
+-	if ((fp = p_fopen(theFileName.c_str(), "rb")) == nullptr)
+-		return nullptr;
+-
+-	struct jpeg_decompress_struct cinfo{};
+-	struct my_error_mgr jerr;
+-
+-	cinfo.err = jpeg_std_error(&jerr.pub);
+-	jerr.pub.error_exit = my_error_exit;
+-
+-	// must be volatile: assigned after setjmp, read in the error path after longjmp
+-	uint32_t* volatile aBits = nullptr;
+-	Image* volatile anImage = nullptr;
+-
+-	if (setjmp(jerr.setjmp_buffer))
+-	{
+-		/* If we get here, the JPEG code has signaled an error.
+-		 * We need to clean up the JPEG object, close the input file, and return.
+-		 */
+-		jpeg_destroy_decompress(&cinfo);
+-		delete[] (uint32_t*)aBits;
+-		delete anImage;
+-		p_fclose(fp);
+-		return 0;
+-	}
+-
+-	jpeg_create_decompress(&cinfo);
+-	jpeg_pak_src(&cinfo, fp);
+-	jpeg_read_header(&cinfo, TRUE);
+-	jpeg_start_decompress(&cinfo);
+-	int row_stride = cinfo.output_width * cinfo.output_components;
+-
+-	uint8_t** buffer = (*cinfo.mem->alloc_sarray)
+-		((j_common_ptr) &cinfo, JPOOL_IMAGE, row_stride, 1);
+-
+-	aBits = new uint32_t[cinfo.output_width*cinfo.output_height];
+-	uint32_t* q = aBits;
+-
+-	if (cinfo.output_components==1)
+-	{
+-		while (cinfo.output_scanline < cinfo.output_height)
+-		{
+-			jpeg_read_scanlines(&cinfo, buffer, 1);
+-
+-			uint8_t* p = *buffer;
+-			for (unsigned int i = 0; i < cinfo.output_width; i++)
+-			{
+-				int r = *p++;
+-				*q++ = 0xFF000000 | (r << 16) | (r << 8) | (r);
+-			}
+-		}
+-	}
+-	else
+-	{
+-		while (cinfo.output_scanline < cinfo.output_height)
+-		{
+-			jpeg_read_scanlines(&cinfo, buffer, 1);
+-
+-			uint8_t* p = *buffer;
+-			for (unsigned int i = 0; i < cinfo.output_width; i++)
+-			{
+-				int r = *p++;
+-				int g = *p++;
+-				int b = *p++;
+-
+-				*q++ = 0xFF000000 | (r << 16) | (g << 8) | (b);
+-			}
+-		}
+-	}
+-
+-	anImage = new Image();
+-	anImage->mWidth = cinfo.output_width;
+-	anImage->mHeight = cinfo.output_height;
+-	anImage->mBits.reset(aBits);
+-	aBits = nullptr; // anImage owns it now; avoid double delete in the error path
+-
+-	jpeg_finish_decompress(&cinfo);
+-	jpeg_destroy_decompress(&cinfo);
+-
+-	p_fclose(fp);
+-
+-	return anImage;
+-}
++Image* GetJPEGImage(const std::string& theFileName) { return nano7_stb_load(theFileName, true); }
++bool ImageLib::WriteJPEGImage(const std::string&, Image*) { return false; }
++bool ImageLib::WritePNGImage(const std::string&, Image*) { return false; }
++bool ImageLib::WriteTGAImage(const std::string&, Image*) { return false; }
+ 
+ int ImageLib::gAlphaComposeColor = 0xFFFFFF;
+ bool ImageLib::gAutoLoadAlpha = true;
+@@ -1156,7 +627,11 @@
+ 
+ 	if (gPakInterface)
+ 	{
++#ifdef NANO7_FLAT_PAK
++		if (gPakInterface->Nano7Find(PakInterface::NormalizePakPath(thePath)))
++#else
+ 		if (gPakInterface->mPakRecordMap.contains(PakInterface::NormalizePakPath(thePath)))
++#endif
+ 			return true;
+ 	}
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/misc/ResourceManager.cpp pvzp-desk/src/SexyAppFramework/misc/ResourceManager.cpp
+--- pvzp-desk-src/src/SexyAppFramework/misc/ResourceManager.cpp	2026-10-31 01:08:38.439007179 +0000
++++ pvzp-desk/src/SexyAppFramework/misc/ResourceManager.cpp	2026-10-31 12:31:52.350151143 +0000
+@@ -26,6 +26,7 @@
+ #include <cassert>
+ #include <format>
+ #include "ResourceManager.h"
++#include "../../../nano7/memtrack.h"
+ #include "XMLParser.h"
+ #include "sound/SoundManager.h"
+ #include "graphics/GLImage.h"
+@@ -563,6 +564,7 @@
+ 
+ bool ResourceManager::ParseResourcesFile(const std::string& theFilename)
+ {
++	MT_TAG(MT_RESMGR);
+ 	mXMLParser = std::make_unique<XMLParser>();
+ 	if (!mXMLParser->OpenFile(theFilename))
+ 		Fail("Resource file not found: " + theFilename);
+@@ -675,8 +677,14 @@
+ 	return true;
+ }
+ 
++#ifdef NANO7_DEVICE
++#define N7_ALPHA_DONE(i) ((i)->mN7T)
++#else
++#define N7_ALPHA_DONE(i) false
++#endif
+ bool ResourceManager::DoLoadImage(ImageRes *theRes)
+ {
++	MT_TAG(MT_PIXELS);
+ 	//bool lookForAlpha = theRes->mAlphaImage.empty() && theRes->mAlphaGridImage.empty() && theRes->mAutoFindAlpha; // unused
+ 
+ 	SEXY_PERF_BEGIN("ResourceManager:GetImage");
+@@ -694,7 +702,9 @@
+ 	if (aGLImage == nullptr)
+ 		return Fail(std::format("Failed to load image: {}", theRes->mPath));
+ 
+-	if (isNew)
++	if (isNew && !N7_ALPHA_DONE(aGLImage) && aGLImage->mBits == nullptr && (!theRes->mAlphaImage.empty() || !theRes->mAlphaGridImage.empty()))
++		aGLImage->GetBits();  // nano7 lazy images: the alpha merge needs the colour bits now
++	if (isNew && !N7_ALPHA_DONE(aGLImage))
+ 	{
+ 		if (!theRes->mAlphaImage.empty())
+ 		{
+@@ -744,8 +754,16 @@
+ 	aGLImage->mNumRows = theRes->mRows;
+ 	aGLImage->mNumCols = theRes->mCols;
+ 
+-	if (aGLImage->mPurgeBits)
++	// nano7: under lazy images the bits may already be gone; PurgeBits would decode them again just to drop them
++	if (aGLImage->mPurgeBits && !(getenv("NANO7_LAZY_IMAGES") && aGLImage->mBits == nullptr && !aGLImage->mFilePath.empty()))
+ 		aGLImage->PurgeBits();
++	// nano7: keep only the size; decode again from the pak when the texture is first made
++	if (getenv("NANO7_LAZY_IMAGES") && aGLImage->mRenderData == nullptr && !aGLImage->mFilePath.empty()
++		&& theRes->mAlphaImage.empty() && theRes->mAlphaGridImage.empty() && aGLImage->mColorTable == nullptr)
++	{
++		aGLImage->mPurgeBits = true;
++		aGLImage->mBits.reset();
++	}
+ 
+ 	ResourceLoadedHook(theRes);
+ 	return true;
+@@ -802,6 +820,7 @@
+ 
+ bool ResourceManager::DoLoadFont(FontRes* theRes)
+ {
++	MT_TAG(MT_FONT);
+ 	std::unique_ptr<_Font> aFont;
+ 
+ 	SEXY_PERF_BEGIN("ResourceManager:DoLoadFont");
+@@ -1071,6 +1090,8 @@
+ 	}
+ 
+ 
++	if (getenv("NANO7_PRUNED_OK") && mImageMap.find(theId) == mImageMap.end())
++		return {};  // nano7: this id belongs to a resource group the repacker removed (stripped mode)
+ 	Fail(std::format("Image resource not found: {}", theId));
+ 	throw ResourceManagerException(GetErrorText());
+ }
+@@ -1089,6 +1110,8 @@
+ 	}
+ 
+ 
++	if (getenv("NANO7_PRUNED_OK") && mSoundMap.find(theId) == mSoundMap.end())
++		return {};  // nano7: this id belongs to a resource group the repacker removed (stripped mode)
+ 	Fail(std::format("Sound resource not found: {}", theId));
+ 	throw ResourceManagerException(GetErrorText());
+ }
+@@ -1106,6 +1129,8 @@
+ 			return nullptr;
+ 	}
+ 
++	if (getenv("NANO7_PRUNED_OK") && mFontMap.find(theId) == mFontMap.end())
++		return {};  // nano7: this id belongs to a resource group the repacker removed (stripped mode)
+ 	Fail(std::format("Font resource not found: {}", theId));
+ 	throw ResourceManagerException(GetErrorText());
+ }
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/paklib/PakInterface.cpp pvzp-desk/src/SexyAppFramework/paklib/PakInterface.cpp
+--- pvzp-desk-src/src/SexyAppFramework/paklib/PakInterface.cpp	2026-10-31 01:08:38.443006946 +0000
++++ pvzp-desk/src/SexyAppFramework/paklib/PakInterface.cpp	2026-10-31 12:31:52.350151143 +0000
+@@ -78,6 +78,81 @@
+ 	return aResult;
+ }
+ 
++#ifdef NANO7_FLAT_PAK
++PakRecord* PakInterface::Nano7Find(const std::string& theKey)
++{
++	uint64_t h = Nano7Hash(theKey);
++	auto it = std::lower_bound(mPakRecordMap.begin(), mPakRecordMap.end(), h, [](const PakRecord& r, uint64_t v) { return r.mHash < v; });
++	return (it != mPakRecordMap.end() && it->mHash == h) ? &*it : nullptr;
++}
++
++bool PakInterface::AddPakFile(const std::string& theFileName)
++{
++	FILE *aFileHandle = fcaseopen(theFileName.c_str(), "rb");
++	if (!aFileHandle)
++		return false;
++	fseek(aFileHandle, 0, SEEK_END);
++	size_t aFileSize = ftell(aFileHandle);
++	fseek(aFileHandle, 0, SEEK_SET);
++	mPakCollectionList.emplace_back(aFileHandle);
++	PakCollection* aPakCollection = &mPakCollectionList.back();
++
++	PakRecord aSelf{aPakCollection, 0, 0, (int)aFileSize};
++	PFILE* aFP = new PFILE;
++	aFP->mRecord = &aSelf; aFP->mPos = 0; aFP->mFP = nullptr; aFP->mBufferStart = 0; aFP->mBufferLen = 0;
++
++	uint32_t aMagic = 0, aVersion = 0;
++	FRead(&aMagic, sizeof(uint32_t), 1, aFP);
++	FRead(&aVersion, sizeof(uint32_t), 1, aFP);
++	if (Sexy::FromLE32(aMagic) != 0xBAC04AC0 || Sexy::FromLE32(aVersion) > 0)
++	{
++		FClose(aFP);
++		mPakCollectionList.pop_back();
++		return false;
++	}
++
++	size_t aFirst = mPakRecordMap.size();
++	int aPos = 0;
++	for (;;)
++	{
++		uint8_t aFlags = 0;
++		int aCount = FRead(&aFlags, 1, 1, aFP);
++		if ((aFlags & FILEFLAGS_END) || (aCount == 0))
++			break;
++		uint8_t aNameWidth = 0;
++		char aName[256];
++		FRead(&aNameWidth, 1, 1, aFP);
++		FRead(aName, 1, aNameWidth, aFP);
++		aName[aNameWidth] = 0;
++		int aSrcSize = 0;
++		FRead(&aSrcSize, sizeof(int), 1, aFP);
++		aSrcSize = static_cast<int>(Sexy::FromLE32(static_cast<uint32_t>(aSrcSize)));
++		int64_t aFileTime;
++		FRead(&aFileTime, sizeof(int64_t), 1, aFP);
++		for (int i = 0; i < aNameWidth; i++)
++			if (aName[i] == '\\') aName[i] = '/';
++		mPakRecordMap.push_back(PakRecord{aPakCollection, Nano7Hash(NormalizePakPath(aName)), aPos, aSrcSize});
++		aPos += aSrcSize;
++	}
++	int anOffset = FTell(aFP);
++	FClose(aFP);
++	for (size_t i = aFirst; i < mPakRecordMap.size(); i++)
++		mPakRecordMap[i].mStartPos += anOffset;
++	std::stable_sort(mPakRecordMap.begin(), mPakRecordMap.end(), [](const PakRecord& a, const PakRecord& b) { return a.mHash < b.mHash; });
++	// later paks override earlier ones with the same name: keep the last record for each hash
++	std::vector<PakRecord> aOut;
++	aOut.reserve(mPakRecordMap.size());
++	for (size_t i = 0; i < mPakRecordMap.size(); i++)
++	{
++		if (!aOut.empty() && aOut.back().mHash == mPakRecordMap[i].mHash)
++			aOut.back() = mPakRecordMap[i];
++		else
++			aOut.push_back(mPakRecordMap[i]);
++	}
++	mPakRecordMap.swap(aOut);
++	return true;
++}
++#else
+ bool PakInterface::AddPakFile(const std::string& theFileName)
+ {
+ 	FILE *aFileHandle = fcaseopen(theFileName.c_str(), "rb");
+@@ -212,16 +287,32 @@
+ 	return true;
+ }
+ 
++#endif
++
++#ifdef NANO7_DEVICE
++PFILE* Nano7DevOpen(const char* theFileName, const char* theAccess);
++#define N7F(f) ((f)->mN7)
++#endif
+ PFILE* PakInterface::FOpen(const char* theFileName, const char* anAccess)
+ {
++#ifdef NANO7_DEVICE
++	if (PFILE* aN7 = Nano7DevOpen(theFileName, anAccess)) return aN7;
++#endif
+ 	if ((strcasecmp(anAccess, "r") == 0) || (strcasecmp(anAccess, "rb") == 0) || (strcasecmp(anAccess, "rt") == 0))
+ 	{
+ 		std::string aKey = NormalizePakPath(theFileName);
++#ifdef NANO7_FLAT_PAK
++		if (PakRecord* aRec = Nano7Find(aKey))
++		{
++			PFILE* aPFP = new PFILE;
++			aPFP->mRecord = aRec;
++#else
+ 		auto anItr = mPakRecordMap.find(aKey);
+ 		if (anItr != mPakRecordMap.end())
+ 		{
+ 			PFILE* aPFP = new PFILE;
+ 			aPFP->mRecord = &anItr->second;
++#endif
+ 			aPFP->mPos = 0;
+ 			aPFP->mFP = nullptr;
+ #ifdef LOW_MEMORY
+@@ -259,6 +350,9 @@
+ 
+ int PakInterface::FClose(PFILE* theFile)
+ {
++#ifdef NANO7_DEVICE
++	if (N7F(theFile)) { free(theFile->mN7Data); delete theFile; return 0; }
++#endif
+ 	if (theFile->mRecord == nullptr)
+ 		fclose(theFile->mFP);
+ 	delete theFile;
+@@ -267,6 +361,10 @@
+ 
+ int PakInterface::FSeek(PFILE* theFile, long theOffset, int theOrigin)
+ {
++#ifdef NANO7_DEVICE
++	if (N7F(theFile)) { long p = theOrigin == SEEK_SET ? theOffset : theOrigin == SEEK_END ? theFile->mN7Size + theOffset : theFile->mPos + theOffset;
++		theFile->mPos = (int)std::clamp(p, 0L, (long)theFile->mN7Size); return 0; }
++#endif
+ 	if (theFile->mRecord != nullptr)
+ 	{
+ 		if (theOrigin == SEEK_SET)
+@@ -288,6 +386,9 @@
+ 
+ int PakInterface::FTell(PFILE* theFile)
+ {
++#ifdef NANO7_DEVICE
++	if (N7F(theFile)) return theFile->mPos;
++#endif
+ 	if (theFile->mRecord != nullptr)
+ 		return theFile->mPos;
+ 	else
+@@ -340,6 +441,10 @@
+ 
+ size_t PakInterface::FRead(void* thePtr, int theElemSize, int theCount, PFILE* theFile)
+ {
++#ifdef NANO7_DEVICE
++	if (N7F(theFile)) { if (theElemSize <= 0) return 0; int n = std::min(theElemSize * theCount, theFile->mN7Size - theFile->mPos) / theElemSize;
++		memcpy(thePtr, theFile->mN7Data + theFile->mPos, (size_t)n * theElemSize); theFile->mPos += n * theElemSize; return n; }
++#endif
+ 	if (theFile->mRecord != nullptr)
+ 		return ReadRecordBytes(theFile, thePtr, theElemSize*theCount) / theElemSize;
+ 
+@@ -348,6 +453,9 @@
+ 
+ int PakInterface::FGetC(PFILE* theFile)
+ {
++#ifdef NANO7_DEVICE
++	if (N7F(theFile)) { while (theFile->mPos < theFile->mN7Size) { char c = (char)theFile->mN7Data[theFile->mPos++]; if (c != '\r') return (uint8_t)c; } return EOF; }
++#endif
+ 	if (theFile->mRecord != nullptr)
+ 	{
+ 		for (;;)
+@@ -367,6 +475,9 @@
+ 
+ int PakInterface::UnGetC(int theChar, PFILE* theFile)
+ {
++#ifdef NANO7_DEVICE
++	if (N7F(theFile)) { theFile->mPos = std::max(theFile->mPos - 1, 0); return theChar; }
++#endif
+ 	if (theFile->mRecord != nullptr)
+ 	{
+ 		// This won't work if we're not pushing the same chars back in the stream
+@@ -379,6 +490,11 @@
+ 
+ char* PakInterface::FGetS(char* thePtr, int theSize, PFILE* theFile)
+ {
++#ifdef NANO7_DEVICE
++	if (N7F(theFile)) { int i = 0; if (theFile->mPos >= theFile->mN7Size) return nullptr;
++		while (i < theSize - 1 && theFile->mPos < theFile->mN7Size) { char c = (char)theFile->mN7Data[theFile->mPos++]; if (c != '\r') thePtr[i++] = c; if (c == '\n') break; }
++		thePtr[i] = 0; return thePtr; }
++#endif
+ 	if (theFile->mRecord != nullptr)
+ 	{
+ 		int anIdx = 0;
+@@ -407,6 +523,9 @@
+ 
+ int PakInterface::FEof(PFILE* theFile)
+ {
++#ifdef NANO7_DEVICE
++	if (N7F(theFile)) return theFile->mPos >= theFile->mN7Size;
++#endif
+ 	if (theFile->mRecord != nullptr)
+ 		return theFile->mPos >= theFile->mRecord->mSize;
+ 	else
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/paklib/PakInterface.h pvzp-desk/src/SexyAppFramework/paklib/PakInterface.h
+--- pvzp-desk-src/src/SexyAppFramework/paklib/PakInterface.h	2026-10-31 01:08:38.443006946 +0000
++++ pvzp-desk/src/SexyAppFramework/paklib/PakInterface.h	2026-10-31 12:31:52.350151143 +0000
+@@ -40,6 +40,17 @@
+ // a .pak file (e.g. main.pak) packs individual resource files (e.g. zombie_falling_1.ogg)
+ 
+ // a PakRecord describes one resource file inside a pak: name, position, size, etc.
++#ifdef NANO7_FLAT_PAK
++class PakRecord
++{
++public:
++	PakCollection*			mCollection;
++	uint64_t				mHash;					// FNV-1a 64 of the normalised path
++	int						mStartPos;
++	int						mSize;
++};
++typedef std::vector<PakRecord> PakRecordMap;
++#else
+ class PakRecord
+ {
+ public:
+@@ -51,6 +62,7 @@
+ };
+ 
+ typedef std::map<std::string, PakRecord> PakRecordMap;
++#endif
+ 
+ // a PakCollection represents one pak file's storage
+ class PakCollection
+@@ -90,6 +102,11 @@
+ 	PakRecord*				mRecord;
+ 	int						mPos;
+ 	FILE*					mFP;
++#ifdef NANO7_DEVICE
++	bool					mN7 = false;		// a whole file read into memory (nano7 device)
++	uint8_t*				mN7Data = nullptr;
++	int						mN7Size = 0;
++#endif
+ #ifdef LOW_MEMORY
+ 	static constexpr int	BUFFER_SIZE = 8192;
+ 	std::array<uint8_t, BUFFER_SIZE>	mBuffer;
+@@ -119,6 +136,10 @@
+ 	PakRecordMap			mPakRecordMap;			//+0x10: maps every resource file name to its record
+ 
+ 	static std::string		NormalizePakPath(std::string_view theFileName);
++#ifdef NANO7_FLAT_PAK
++	static uint64_t			Nano7Hash(const std::string& theKey) { uint64_t h = 1469598103934665603ULL; for (unsigned char c : theKey) { h ^= c; h *= 1099511628211ULL; } return h; }
++	PakRecord*				Nano7Find(const std::string& theKey);
++#endif
+ 
+ public:
+ 
+diff -ruN '--exclude=.nano7_applied.json' pvzp-desk-src/src/SexyAppFramework/widget/Dialog.cpp pvzp-desk/src/SexyAppFramework/widget/Dialog.cpp
+--- pvzp-desk-src/src/SexyAppFramework/widget/Dialog.cpp	2026-10-31 01:08:38.475005080 +0000
++++ pvzp-desk/src/SexyAppFramework/widget/Dialog.cpp	2026-10-31 21:11:50.270240052 +0000
+@@ -407,8 +407,20 @@
+ 	return mIsModal;
+ }
+ 
++#ifdef NANO7_DEVICE
++extern "C" void n7p_log(const char*);
++#endif
+ int Dialog::WaitForResult(bool autoKill)
+ {
++#ifdef NANO7_DEVICE
++	/* nano7 v39: the iPod gives input only between frames, so a dialog that waits inside a frame would freeze it
++	   (Crazy Dave's seed-slot offer at 2-4 did in the dry run). Answer "no" at once instead. */
++	if (mResult == 0x7FFFFFFF) mResult = ID_NO;
++	{ char m[96]; snprintf(m, sizeof m, "nano7 dialog %d would wait for an answer: answered no", mId); n7p_log(m); }
++	if (autoKill)
++		gSexyAppBase->KillDialog(mId);
++	return mResult;
++#endif
+ #ifdef __EMSCRIPTEN__
+ 	const auto isWaitingForResult = [this]() {
+ 		return mWidgetManager != nullptr && mResult == 0x7FFFFFFF;

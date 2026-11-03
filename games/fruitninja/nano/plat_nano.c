@@ -1,0 +1,204 @@
+/* plat_nano.c: files, time, log and C library glue for the recompiled Fruit Ninja on the nano
+ * (nano7kit, MIT). Game files live in /Apps/Data/FruitNinja: guest.img (the
+ * translated executable's data), fileArciveFat.bin, and fileArcive.bin split by the host into
+ * fa/000.bin, fa/001.bin, ... of FN_CHUNK bytes each, because hb_fs_read reads whole files. */
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <reent.h>
+#include <stdlib.h>
+#include <string.h>
+#include "hb_sdk.h"
+#include "hb_heap.h"
+#include "../rt/rt_plat.h"
+
+#define DATA_DIR "/Apps/Data/FruitNinja"
+#define FN_CHUNK (128u * 1024u)
+#define SLACK 8192u                     /* hb_fs_read may fill whole sectors past the end */
+
+/* ---- allocation: the C library and the front end use these; the guest has its own heap --
+ * these come out of the guest heap, inside the one block the resident frees when the app
+ * unloads (HB_APP_AUX_BLOCK). An earlier build took them from the OS heap, and the atlas pages (2 x 128 KB)
+ * and anything else still held at quit outlived the app (no quit callback) and sat in the
+ * middle of the biggest free block. Only when the guest heap has no room past what the engine
+ * itself will need (GUEST_PEAK, measured 973,920 bytes on the host harness) does an allocation
+ * fall back to the OS heap; those are counted and logged (host_outside). */
+#define AMAGIC 0x464e414cu              /* OS heap */
+#define GMAGIC 0x464e4748u              /* guest heap */
+#define GUEST_PEAK 1100000u
+#define GUEST_SPARE 0x10000u
+typedef struct { uint32_t size, magic, base, pad; } ahdr;   /* 16 bytes: payload stays 16-aligned */
+extern uint8_t *g_mem;
+extern uint32_t g_malloc(uint32_t n);
+extern void g_free(uint32_t p);
+extern uint32_t rt_heap_used(void), rt_heap_size(void);
+uint32_t host_in_guest, host_outside, host_outside_peak, host_outside_count;
+static int guest_room(uint32_t n) {
+    uint32_t size = rt_heap_size(), used = rt_heap_used();
+    if (!g_mem || !size || used >= size) return 0;
+    uint32_t engine = used > host_in_guest ? used - host_in_guest : 0;
+    uint32_t reserve = (engine < GUEST_PEAK ? GUEST_PEAK - engine : 0) + GUEST_SPARE;
+    return size - used >= n + 64u + reserve;
+}
+void *malloc(size_t n) {
+    uint32_t want = (uint32_t)n + sizeof(ahdr) + 15u;
+    if (guest_room(want)) {
+        uint32_t before = rt_heap_used(), a = g_malloc(want);
+        if (a) {
+            host_in_guest += rt_heap_used() - before;
+            ahdr *h = (ahdr *)(((uintptr_t)(g_mem + a) + sizeof(ahdr) + 15u) & ~(uintptr_t)15u) - 1;
+            h->size = (uint32_t)n; h->magic = GMAGIC; h->base = a;
+            return h + 1;
+        }
+    }
+    uint8_t *raw = hb_os_alloc(want);
+    if (!raw) return NULL;
+    ahdr *h = (ahdr *)(((uintptr_t)raw + sizeof(ahdr) + 15u) & ~(uintptr_t)15u) - 1;
+    h->size = (uint32_t)n; h->magic = AMAGIC; h->base = (uint32_t)(uintptr_t)raw;
+    host_outside += (uint32_t)n; host_outside_count++;
+    if (host_outside > host_outside_peak) host_outside_peak = host_outside;
+    return h + 1;
+}
+void free(void *p) {
+    if (!p) return;
+    ahdr *h = (ahdr *)p - 1;
+    if (h->magic == GMAGIC) {
+        h->magic = 0;
+        uint32_t before = rt_heap_used();
+        g_free(h->base);
+        uint32_t back = before - rt_heap_used();
+        host_in_guest = host_in_guest > back ? host_in_guest - back : 0;
+    } else if (h->magic == AMAGIC) {
+        h->magic = 0;
+        host_outside -= h->size < host_outside ? h->size : host_outside;
+        hb_os_free((void *)(uintptr_t)h->base);
+    }
+}
+void *calloc(size_t a, size_t b) { size_t n = a * b; void *p = malloc(n); if (p) memset(p, 0, n); return p; }
+void *realloc(void *p, size_t n) {
+    if (!p) return malloc(n);
+    ahdr *h = (ahdr *)p - 1; void *q = malloc(n);
+    if (q) { memcpy(q, p, h->size < n ? h->size : n); free(p); }
+    return q;
+}
+void *_malloc_r(struct _reent *r, size_t n) { (void)r; return malloc(n); }
+void _free_r(struct _reent *r, void *p) { (void)r; free(p); }
+void *_calloc_r(struct _reent *r, size_t a, size_t b) { (void)r; return calloc(a, b); }
+void *_realloc_r(struct _reent *r, void *p, size_t n) { (void)r; return realloc(p, n); }
+void *_sbrk(int n) { (void)n; return (void *)-1; }
+int _write(int f, const void *b, int n) { (void)f; (void)b; return n; }
+int _read(int f, void *b, int n) { (void)f; (void)b; (void)n; return 0; }
+int _close(int f) { (void)f; return -1; }
+int _lseek(int f, int o, int w) { (void)f; (void)o; (void)w; return 0; }
+int _fstat(int f, void *s) { (void)f; (void)s; return -1; }
+int _isatty(int f) { (void)f; return 0; }
+int _getpid(void) { return 1; }
+int _kill(int p, int s) { (void)p; (void)s; return -1; }
+void _exit(int c) { (void)c; for (;;) {} }
+
+/* ---- time ------------------------------------------------------------------------------- */
+static uint32_t t_last, t_high;
+uint64_t plat_time_us(void) {
+    uint32_t now = hb_time_uptime_us();
+    if (now < t_last) t_high++;
+    t_last = now;
+    return (uint64_t)t_high << 32 | now;
+}
+
+/* ---- log: kept in memory, written to log.txt after start-up, every so often and on a fatal - */
+#define LOG_CAP 16384u
+/* the log and the archive chunk live in .bss, inside the app image the resident frees on
+ * unload: an hb_os_alloc here would outlive the app (there is no quit callback) */
+static char log_store[LOG_CAP + SLACK] __attribute__((aligned(64)));
+static char *log_buf;
+static uint32_t log_len, log_dirty;
+void plat_log_line(const char *line) {
+    if (!log_buf) { log_buf = log_store; log_len = 0; }
+    uint32_t n = (uint32_t)strlen(line);
+    if (n > 200) n = 200;
+    if (log_len + n + 1 > LOG_CAP) {    /* keep the first half (start-up), drop the oldest of the rest */
+        uint32_t keep = LOG_CAP / 2, cut = log_len - keep < n + 1 + 1024 ? log_len - keep : n + 1 + 1024;
+        memmove(log_buf + keep, log_buf + keep + cut, log_len - keep - cut);
+        log_len -= cut;
+    }
+    memcpy(log_buf + log_len, line, n); log_len += n; log_buf[log_len++] = '\n';
+    log_dirty = 1;
+}
+void plat_log_flush(void) {
+    if (!log_buf || !log_dirty) return;
+    hb_fs_mkdir(DATA_DIR);
+    hb_fs_write(DATA_DIR "/log.txt", log_buf, log_len);
+    log_dirty = 0;
+}
+void plat_trace(void) {}
+extern void fn_nano_fatal(void);
+void plat_fatal(const char *why) {
+    char b[160];
+    snprintf(b, sizeof b, "nano7kit Fruit Ninja fatal: %s", why);
+    plat_log_line(b);
+    plat_log_flush();
+    fn_nano_fatal();
+}
+
+/* ---- files ------------------------------------------------------------------------------ */
+static void path_of(char *out, size_t n, const char *name) { snprintf(out, n, DATA_DIR "/%s", name); }
+static uint32_t arch_size;              /* from fa/size.txt, written by the host */
+static uint8_t chunk_store[FN_CHUNK + SLACK] __attribute__((aligned(64)));
+static uint8_t *chunk;                  /* one chunk of fileArcive.bin, FN_CHUNK + SLACK */
+static int chunk_idx = -1;
+static int is_arch(const char *name) { return !strcmp(name, "fileArcive.bin"); }
+static uint32_t arch_total(void) {
+    if (!arch_size) {
+        char b[32 + SLACK / 256]; memset(b, 0, sizeof b);
+        uint32_t got = hb_fs_read(DATA_DIR "/fa/size.txt", b, sizeof b - 1);
+        if (got) { b[got < sizeof b - 1 ? got : sizeof b - 1] = 0; arch_size = (uint32_t)strtoul(b, NULL, 10); }
+    }
+    return arch_size;
+}
+int32_t plat_file_size(const char *name) {
+    if (is_arch(name)) { uint32_t s = arch_total(); return s ? (int32_t)s : -1; }
+    char p[96]; path_of(p, sizeof p, name);
+    if (!hb_fs_exists(p)) return -1;
+    return (int32_t)hb_fs_size(p);
+}
+int32_t plat_file_read(const char *name, uint32_t off, void *dst, uint32_t n) {
+    uint8_t *d = dst;
+    if (is_arch(name)) {
+        uint32_t total = arch_total(), done = 0;
+        if (!chunk) { chunk = chunk_store; chunk_idx = -1; }
+        while (done < n && off + done < total) {
+            uint32_t at = off + done, idx = at / FN_CHUNK, in = at % FN_CHUNK;
+            if ((int)idx != chunk_idx) {
+                char p[96]; snprintf(p, sizeof p, DATA_DIR "/fa/%03u.bin", (unsigned)idx);
+                uint32_t want = total - idx * FN_CHUNK < FN_CHUNK ? total - idx * FN_CHUNK : FN_CHUNK;
+                if (hb_fs_read(p, chunk, FN_CHUNK + SLACK) != want) { chunk_idx = -1; return -1; }
+                chunk_idx = (int)idx;
+            }
+            uint32_t take = FN_CHUNK - in < n - done ? FN_CHUNK - in : n - done;
+            memcpy(d + done, chunk + in, take);
+            done += take;
+        }
+        return (int32_t)done;
+    }
+    char p[96]; path_of(p, sizeof p, name);
+    uint32_t size = hb_fs_size(p);
+    if (!size || off >= size) return off == size ? 0 : -1;
+    uint8_t *tmp = malloc(size + SLACK);
+    if (!tmp) return -1;
+    int32_t got = (int32_t)hb_fs_read(p, tmp, size + SLACK);
+    if (got != (int32_t)size) { free(tmp); return -1; }
+    uint32_t take = size - off < n ? size - off : n;
+    memcpy(d, tmp + off, take);
+    free(tmp);
+    return (int32_t)take;
+}
+int plat_file_write(const char *name, const void *src, uint32_t n) {
+    char p[96]; path_of(p, sizeof p, name);
+    hb_fs_mkdir(DATA_DIR);
+    return hb_fs_write(p, src, n) ? 0 : -1;
+}
+uint32_t plat_load_image(void *dst, uint32_t size) {
+    /* the guest block has the heap after the image, so the read may run past size by SLACK */
+    return hb_fs_read(DATA_DIR "/guest.img", dst, size + SLACK) == size ? size : 0;
+}
+void plat_nano_reset(void) { host_in_guest = host_outside = host_outside_peak = host_outside_count = 0; t_last = t_high = 0; log_buf = NULL; log_len = log_dirty = 0; arch_size = 0; chunk = NULL; chunk_idx = -1; }

@@ -1,0 +1,4 @@
+Everything under games/pvz_portable/ is LGPL-3.0-or-later, the licence of
+the PvZ-Portable engine it builds on (wszqkzqk). Full texts:
+engine/LICENSE-PvZ-Portable (LGPL-3.0) and engine/COPYING-PvZ-Portable (GPL-3.0).
+stb_image.h and stb_vorbis are public domain / MIT as stated in those files.

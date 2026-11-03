@@ -1,0 +1,486 @@
+{
+  "note": "Built extras for Helvetica silver_resident / 39A10023. Untested on MKN52 except Blocks, Game Boy, Probe (those stay in artifacts/device).",
+  "sdk": "hb_shared ABI v1: touch, trace and file buffers come from the resident's shared block or the app's own arena; no fixed live-OS addresses (host/fixed_addrs.py). Refresh installed copies: ./start apps refresh.",
+  "apps": [
+    {
+      "name": "Benchmark",
+      "folder": "benchmark",
+      "size": 490584,
+      "exe_sha256": "d353354457efe88d0b7099be89667cd211dbbfa38414c377450cb22d6b79d54a",
+      "icon_sha256": "1e9022de7b9824408c40395a4de5616fab54c22b1b34bc42bc58486d8158bb98",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "graphics"
+    },
+    {
+      "name": "Books",
+      "folder": "books",
+      "size": 253656,
+      "exe_sha256": "7e16bbba044b55e60eb98d1d2edf558ee824a801d96ddd07c33fcd47f5bfd403",
+      "icon_sha256": "c8e1819394a1ea011a9f2021cd566c39401cc34de5d5c2580b85906bcf994bf3",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Breakout",
+      "folder": "breakout",
+      "size": 223008,
+      "exe_sha256": "8d5f70dac175e930826af87462c37e4c834f7a7a5c506c79f153deef00459c25",
+      "icon_sha256": "418be0d46511e41051795454dd5b5e079e24b3373dc7468e42c1b5f9da94ec13",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Calculator",
+      "folder": "calculator",
+      "size": 315568,
+      "exe_sha256": "35bd5bce112e411a06e04543d83280c982a9f0283445460ec93b3db4180c18e3",
+      "icon_sha256": "2bc332b4d32ebcb6f849a05d1686c99bb84e8927230d02f5e83ed38e6700fe07",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Calendar",
+      "folder": "calendar",
+      "size": 296268,
+      "exe_sha256": "a03a252a8b42babe214079fb86dbd4618f17e663cd6dcaf310f4ea186aa560c2",
+      "icon_sha256": "167785cb9ba5b850180b0be0cda56800ed757c9b3d48f9ae259b23c62dca62ac",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Chess",
+      "folder": "chess",
+      "size": 239308,
+      "exe_sha256": "cbbbdc288aa89fd5152866e65d5e4a78a2cbe575188ada6b4dce75935caf458b",
+      "icon_sha256": "dabbce6db672b241e3953b32770c80e18b33de4cb4a7c1ba7450a7342c55e7b2",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "cards"
+    },
+    {
+      "name": "Clock",
+      "folder": "clock",
+      "size": 414108,
+      "exe_sha256": "14d9bc837b1855e7381c985132084aa3ef2ab3b9a607107d1887252525d0eb6a",
+      "icon_sha256": "beb878dc211eb1ae08f62877782d9fba3d1ab3e85c73f5c9c7bc0c70678aaa7c",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "tools"
+    },
+    {
+      "name": "Connect4",
+      "folder": "connect4",
+      "size": 245108,
+      "exe_sha256": "f9b5f86e8a42eff6d56c424c6e6577462672974f2ad1110120735d0e1fe81dde",
+      "icon_sha256": "472e33494178b012044e879cbda98e3f7e24dc1ae1242d32492fe52a51848a45",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Contacts",
+      "folder": "contacts",
+      "size": 343020,
+      "exe_sha256": "f01c81a0edbcf824cc5fab71276a24f853e0c6e00e4960f274afdf8b24d7ad7d",
+      "icon_sha256": "8b5026f78e219fa94b230ebb9fdec7052d256603472df4af17f2b6df634ecab1",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Countdown",
+      "folder": "countdown",
+      "size": 347104,
+      "exe_sha256": "6c58a40e073141e1e68721f6958ee97c3e68affbf29876522382d5ec0a898aff",
+      "icon_sha256": "cd4ff57125a68e21bd85ae7f1a33935c62fdc3d75f1fc0ac0204dd30e93d5773",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Crosswords",
+      "folder": "crosswords",
+      "size": 236980,
+      "exe_sha256": "7c201cc9ee470b645e31a0fee5e0adbbf5c8a29b8776111515a599fa1c5bbe28",
+      "icon_sha256": "21dd278f16e57ba5930b35094f6926a9bf1ed718c3daaa36014eef2ae017c268",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Dictionary",
+      "folder": "dictionary",
+      "size": 284516,
+      "exe_sha256": "a65795eaad9386bd1e7f9cdd57964604ab765c7e03387dd41a90f32a3c4e2f14",
+      "icon_sha256": "7ff6e98cebe032b4dd6936a7f5a542439c19bd9c545d24a0bd5bfd8fd2547014",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Elements",
+      "folder": "elements",
+      "size": 376324,
+      "exe_sha256": "8754050de2f6ca0f20070b700929e039b6a65942424ed3ff1395e780bf3ed3b5",
+      "icon_sha256": "09dba9f29e915f56be88aa7d481debaa917c94983aaafefa1ad888abd8ac40e3",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Files",
+      "folder": "files",
+      "size": 236136,
+      "exe_sha256": "77bb210821204acddc44af8db877d86e30ef2da8f3a9ce146bf8c9b16cad8309",
+      "icon_sha256": "c8da0617ef57e11808e879a5bb852565f92058bf6820fcf3f976d38e5488c177",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Freecell",
+      "folder": "freecell",
+      "size": 233196,
+      "exe_sha256": "b54616b1c9dc27b667d3fad2747c7e4a1db3f0ca60d9aa38e9ff187fd282d29c",
+      "icon_sha256": "9b7e95e21e320ebd2ac541374dcaf7cf75ca7573a9119e11c97cd8cc58a7a2a8",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "cards"
+    },
+    {
+      "name": "G2048",
+      "folder": "g2048",
+      "size": 298496,
+      "exe_sha256": "fcee15ddfe7be0126f19d75cf8c53e75549ad2291beeb59339a88563e818396d",
+      "icon_sha256": "d57fdca7c41b6017e5086b1e81e28037e3725ebdd383491d469aca1227e7bd2b",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "GLBench",
+      "folder": "glbench",
+      "size": 8352,
+      "exe_sha256": "9f3512a86e544d0c9fde6288ac0a9b6473c9664f169e89915321dde4b6e52f4f",
+      "icon_sha256": "6edc14a822a9c7880923ecea4dde3a9a150d8c21bbfc478bd5d73ed9a1aafab8",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "diagnostic"
+    },
+    {
+      "name": "Golf",
+      "folder": "golf",
+      "size": 286360,
+      "exe_sha256": "6bc630ed69ad560870a38d6f0c99029f25c4eeb205fbc425d8bf41f61dfdd40a",
+      "icon_sha256": "386e9d65af985b083ad8bdc14ff06c19ea6f76d28233955fee83247a240409f9",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Heads Up",
+      "folder": "headsup",
+      "size": 412356,
+      "exe_sha256": "32a0cca79387efdbd756a587dcc8e597c53e76701c6470004c63ba90254e1a3d",
+      "icon_sha256": "9a2b862bffb8633a0ed8deb62cd01799e6b9b994cb5aae5b3ba82f9ad69d634d",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "cards"
+    },
+    {
+      "name": "Holdem",
+      "folder": "holdem",
+      "size": 240064,
+      "exe_sha256": "97e256c126173db629501dc2179348f9b5bd9b1c166fbeecc09c7691766b9bcb",
+      "icon_sha256": "f4536dbf993c6964d95a7f269bb790ef0297890261ab45d8eff10b54ffd552bb",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "cards"
+    },
+    {
+      "name": "Lap",
+      "folder": "lap",
+      "size": 8532,
+      "exe_sha256": "cfe1be2c9883b476138a1ee21a1b55860f702174470abe65a72251f24154a3e5",
+      "icon_sha256": "792c055c9eba025521dbf5648ac967f0801ea6b12114685e50140200a1c4840c",
+      "author": "nano7kit first-party (MIT); NanoApps SDK (MIT)",
+      "category": "first-party"
+    },
+    {
+      "name": "Level",
+      "folder": "level",
+      "size": 267924,
+      "exe_sha256": "9e96f16e5d37e481a30b90b5370b893592a9a6db663967f56487ada8fc375005",
+      "icon_sha256": "616e0bc3835d51cdf6f7af9a5edf3d0be48a0c5405dbf6b59bc70a44fd4c3b4e",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "tools"
+    },
+    {
+      "name": "Mahjong",
+      "folder": "mahjong",
+      "size": 301640,
+      "exe_sha256": "e61d087d6f4035f7cbd023f475b8716d94beb612ade8af8ecb39dc90822e9064",
+      "icon_sha256": "dfcf68bcfd0637e66c205223c9b6e5e06333ca72f28d0526f84808c9b5776c95",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "cards"
+    },
+    {
+      "name": "Match3",
+      "folder": "match3",
+      "size": 224748,
+      "exe_sha256": "747ada9e70a5aa0defbea920b51e0898f44284d5a1506a3c38a299c56c85f1f4",
+      "icon_sha256": "b1304607e7cfef02d1deb8df80998b66aabce20119b3db750b91cd306b77cd2d",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Minesweeper",
+      "folder": "minesweeper",
+      "size": 251348,
+      "exe_sha256": "5d147711a6c1a3ffae7ad57a554e3a54d804fc2e69bfe5a01decbee8f2157c8f",
+      "icon_sha256": "aa619711aeca8731154b083007523a68d7f3cc0e7847d74586a89a1c20483a54",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Notes",
+      "folder": "notes",
+      "size": 287612,
+      "exe_sha256": "55c08420b39cd21219fecf28bb3b1b57229a625dfec7dca56d5ed011548d46b6",
+      "icon_sha256": "e74638a2439de2406c0b08eaeb601463b8e90fb23ae558b17fec2555dfc95b4e",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "OpenGL",
+      "folder": "opengl",
+      "size": 22780,
+      "exe_sha256": "a164cb888b9ac1c65fa7633fee6401b32ebfb81b18b8afc5c3969556481d4d64",
+      "icon_sha256": "3689b48907c4758f1e9901185a07a0c626d2aa615744246d4ec5a2d9b426b987",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "graphics"
+    },
+    {
+      "name": "Paint",
+      "folder": "paint",
+      "size": 8772,
+      "exe_sha256": "d65c20ae493ccc67572daa127d39b1e57fceefc2eaf87a8040a8b1a4578ee7ac",
+      "icon_sha256": "798e4c665f46865941df824c735edf456b15e514e32e2ae1643c02bebb7fa66d",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "tools"
+    },
+    {
+      "name": "Passwords",
+      "folder": "passwords",
+      "size": 385460,
+      "exe_sha256": "ea46aa54590aec06f3eb409d764e6ee8ef0f82b1b3550d63dc0fcd32b26e1adf",
+      "icon_sha256": "20b86f7fc5bd5143fb5c6aa05c7508e9c1a3dcfced14745fd2abc5b7fa6db337",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "JS Hello",
+      "folder": "pockethello",
+      "size": 7672,
+      "exe_sha256": "8d6848124537229d88d72e8f9cdbf5386bf8ba5e22a4d8b73bc129c45e76dbe9",
+      "icon_sha256": "8d792b40a9397bcc26640287277f515b75bfb83629054cabdd20aa3c5b15e2d4",
+      "author": "nano7kit first-party PocketJS HAL prototype (MIT); NanoApps SDK (MIT). Not the PocketJS runtime.",
+      "category": "first-party"
+    },
+    {
+      "name": "Pong",
+      "folder": "pong",
+      "size": 268632,
+      "exe_sha256": "c31a1e9119301faa672cf1ba7682aa6251b5545e9f19965317ceb62f01b49d22",
+      "icon_sha256": "eb24496c6ac12afa0abec88c50566c4c61fccf061a7bb624d128c5e9e2ee7173",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Quiz",
+      "folder": "quiz",
+      "size": 300524,
+      "exe_sha256": "8722e7dba9bcc250f2483913ab4c7e5ba1b0a4e83e58c5091efacfd6b1292727",
+      "icon_sha256": "e4c426a3fc10df6863eeab55d0c367b72d4f5a92f735ed7b1999e66fe9e129b1",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Reminders",
+      "folder": "reminders",
+      "size": 286244,
+      "exe_sha256": "ef58eb85523d5bf295fd3a83deaca8ab9e1509b3b4474774b88bb5849fce8635",
+      "icon_sha256": "09c81aedd757e92e32ebb941021035f3da03960548d36b547d3b46b94ad569fb",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Remote",
+      "folder": "remote",
+      "size": 272904,
+      "exe_sha256": "c8e420e3b27a79e1f7f33adb7703a93b7e089447220715e1e6f69c0f0436f948",
+      "icon_sha256": "860785bde8e0d3f3dac6ee464445e4b1e32893c213125a0c441fc378d33605a9",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "tools"
+    },
+    {
+      "name": "Rhythm",
+      "folder": "rhythm",
+      "size": 232000,
+      "exe_sha256": "4da4fad5dc31b1d2e9ff846bc78d545d53b4e4fe2fc2976c0086c9dade0c48e2",
+      "icon_sha256": "b8708be982f851b62ee918a88e315e9d3d3c44f3f75d6e9785d4e0fdbf012c0e",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Screenshot",
+      "folder": "screenshot",
+      "size": 273620,
+      "exe_sha256": "8c195647a7154c89b2ccc61072d86b5c703e849327ca66cda8b2fb90665dd746",
+      "icon_sha256": "77b524e2b62be11d8b7b11377ea94737112142f2424bae7c35e75955cea58c0d",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "tools"
+    },
+    {
+      "name": "Sensors",
+      "folder": "sensors",
+      "size": 275672,
+      "exe_sha256": "dbd404a2a928e0396d8ffd6a70bd826bc6141a16fa123382f15feac674438e2a",
+      "icon_sha256": "1edfbbe838414ddc17647bef62a7261866cc7a9ba8e539f592fdf9958709a76a",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "tools"
+    },
+    {
+      "name": "Simon Says",
+      "folder": "simonsays",
+      "size": 231140,
+      "exe_sha256": "2310105a6d5f35d821e2c9b8f24065f4868abb9e13871323dfab17d47537b722",
+      "icon_sha256": "7426c88edd976d0b72b325b1037872879001bd0cdd26caac621ffa7bac11f6c5",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Snake",
+      "folder": "snake",
+      "size": 269172,
+      "exe_sha256": "88bb62238a1b2d72013b71bf5773146a810462b20a4581d9537c88fed90a02b2",
+      "icon_sha256": "0a134b2bace8b79889f2545d9469c23fc6c64dbbfd9610466fe400f653acf472",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Solitaire",
+      "folder": "solitaire",
+      "size": 255648,
+      "exe_sha256": "29cd8add97d6c669f9d3d8894dcca0521c65061aab7f80f034199fc3d64eaf0b",
+      "icon_sha256": "f8d45fef01c5fe3e2a38f0f6d78a230a271cd9705e14d6114c162dcbf7101143",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "cards"
+    },
+    {
+      "name": "Stress",
+      "folder": "stress",
+      "size": 214364,
+      "exe_sha256": "1c1a7d06d95585a91b0c32b6eb7fbd875aeeddd15f913869826d3ba1751f1e70",
+      "icon_sha256": "c1bf4a5425d3e002110f01caad0b844fc3344c8d832858c004649d13f19e5e54",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "graphics"
+    },
+    {
+      "name": "Sudoku",
+      "folder": "sudoku",
+      "size": 245876,
+      "exe_sha256": "b1c7aba847676619a67d15f0e557e069b9fa4deb3087082a3d5da69e4be1da23",
+      "icon_sha256": "76c695188f5a66b913fa0f9f7934bc03bacdc4197de1a9be792c05d5f0fac965",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Tetris",
+      "folder": "tetris",
+      "size": 246468,
+      "exe_sha256": "14c114212cf3d7f0b3604979482a906ba0cbd73d5c6f5721995e488ded6dd986",
+      "icon_sha256": "5b828979d18bebfd3cfbd3b063e1b82342097c1d770125f121b8e03f1843726f",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Tictactoe",
+      "folder": "tictactoe",
+      "size": 302072,
+      "exe_sha256": "b2a1772095b22ef71d738f46538c5c2dd05f27fbf2ad58423209894bbb0c746c",
+      "icon_sha256": "cc3021e22978b03a615f463eec0cc8fd932f145bbf9038d9cd774d62ae5ac717",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Tilt Ball",
+      "folder": "tiltball",
+      "size": 231844,
+      "exe_sha256": "6c31eed89b351a174accb32da8862a4ffe97bc9e2a8ecc16bf91b3c01f0df419",
+      "icon_sha256": "65c12e448f257bf88f3f43ca298db6e6cd130e8fc295ddb16d7f30ac863ee56f",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Tower",
+      "folder": "tower",
+      "size": 230852,
+      "exe_sha256": "d61de8ee710f3169830d71e2979f58720fd8e3dd89ee84087e48c03115de9ca0",
+      "icon_sha256": "8346e34b9804c5e6eff8385d12f9ac02bdf60219b54d088ab375bc2f544b28d8",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    },
+    {
+      "name": "Wallet",
+      "folder": "wallet",
+      "size": 334660,
+      "exe_sha256": "9b47892c2d7faf98c7cec3b29e9bd1542889d0cf36c7c20b6e585437e375d64d",
+      "icon_sha256": "82df5ff04274923115148ae1ca0aabb4dac90ed459fc7a640bc954332697c1eb",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "productivity"
+    },
+    {
+      "name": "Widgets",
+      "folder": "widgets",
+      "size": 415660,
+      "exe_sha256": "18d529420c36f7a833a5b2d6363c53116f22e780d39fa0027183d06656d4c535",
+      "icon_sha256": "7e357f2ae7eb12b0433a8c133301737626a8deba6c57c8e211a963a299d82992",
+      "author": "nfzerox (NanoApps, MIT); LVGL widgets by LVGL contributors (MIT)",
+      "category": "graphics"
+    },
+    {
+      "name": "Wordle",
+      "folder": "wordle",
+      "size": 249580,
+      "exe_sha256": "3abbbfcd7400bba0dda91a2d6bff1730aec64384fb4329a314fa00b51854e7ad",
+      "icon_sha256": "c66e1520239fabbfc135cb660b724af94c5e61886c1721cb625271279ab0c9db",
+      "author": "nfzerox (NanoApps, MIT)",
+      "category": "games"
+    }
+  ],
+  "skipped": [
+    {
+      "name": "BigLoad",
+      "reason": "no hbapp"
+    },
+    {
+      "name": "FPUTest",
+      "reason": "no hbapp"
+    },
+    {
+      "name": "Mario Kart",
+      "reason": "user ROM build"
+    },
+    {
+      "name": "Mario 64",
+      "reason": "user ROM build"
+    },
+    {
+      "name": "Flappy Bird",
+      "reason": "user payload build"
+    },
+    {
+      "name": "Doodle Jump",
+      "reason": "user payload build"
+    },
+    {
+      "name": "Temple Run",
+      "reason": "large GL port (user files)"
+    }
+  ],
+  "shipped": [
+    "Free RAM",
+    "JS Hello",
+    "JS Hero",
+    "JS QuickJS",
+    "JS Samples",
+    "Lap"
+  ],
+  "build_on_demand": "Other NanoApps apps are not shipped: ./start apps add (and ./install) compiles them from the pinned source on first use. exe_sha256 for those is the reference build with Arm GNU Toolchain 14.2.rel1; other compiler versions give different bytes."
+}

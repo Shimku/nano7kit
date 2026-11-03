@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>	<string>org.nano7kit.pockethello</string>
+	<key>CFBundleName</key>		<string>JS Hello</string>
+	<key>CFBundleExecutable</key>	<string>pockethello</string>
+	<key>HBAppKind</key>			<integer>1</integer>
+	<key>HBIconGlyph</key>		<string>code</string>
+	<key>HBIconColor</key>		<string>#2563eb</string>
+</dict>
+</plist>

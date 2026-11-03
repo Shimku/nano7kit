@@ -1,0 +1,14 @@
+# Physics: menu row 4 (Physics (QuickJS)); wait, Shake, Gravity flip
+3
+3 120 208
+3
+40
+shot 01-physics
+3 54 390
+3
+40
+shot 02-shake
+3 146 390
+3
+40
+shot 03-up
