@@ -56,18 +56,22 @@ static float last_x, last_y;
 #define TQ 8
 static fn_tsample tq[TQ];
 static int tq_n, t_report;
-static uint32_t t_presses, t_from_list, t_from_mb, t_stale, t_held;
+static uint32_t t_presses, t_from_list, t_from_mb, t_stale, t_held, t_lifts, t_places;
+static uint32_t w_ms0, w_frames, w_down, w_dry, w_dry_run, w_dry_max, w_dt_min, w_dt_max;   /* 5 s touch window */
 /* 1 with the finger's place if the list holds a touch that is down, 2 if all it holds have
- * lifted, 0 if it is empty or cannot be read. Read only, never altered. */
-static int list_touch(int16_t *x, int16_t *y) {
+ * lifted, 0 if it is empty or cannot be read. *newest_up: the newest node is a lift (a down
+ * and its lift both waiting: the down is used, then the lift). Read only, never altered. */
+static int list_touch(int16_t *x, int16_t *y, int *newest_up) {
     volatile uint32_t *head = OS_TOUCH_HEAD;
+    *newest_up = 0;
     if (head[5] == 0) return 0;
     uint32_t end = head[4], nodes = 0; int down = 0;
     if (end < 0x08000000u || end >= 0x10000000u) return 0;
     for (uint32_t node = *(volatile uint32_t *)end; node != end && nodes < 8; node = *(volatile uint32_t *)node, nodes++) {
         if (node < 0x08000000u || node >= 0x10000000u) return 0;
         volatile int32_t *value = (volatile int32_t *)(node + 8);
-        if (*((volatile uint8_t *)(node + 8) + 4) == 1) continue;   /* status 1: lifted */
+        *newest_up = *((volatile uint8_t *)(node + 8) + 4) == 1;
+        if (*newest_up) continue;   /* status 1: lifted */
         *x = (int16_t)value[2]; *y = (int16_t)value[3]; down = 1;
     }
     return down ? 1 : nodes ? 2 : 0;
@@ -93,48 +97,36 @@ static int snap_touch(int16_t *x, int16_t *y) {
     *x = (int16_t)sp->finger[0][2]; *y = (int16_t)sp->finger[0][3];
     return 1;
 }
-/* Diagnostic, read only: the 8 OS touch queue heads (0x18 bytes each from OS_TOUCH_HEAD),
- * with the length of each queue's node list (from head[4]) and of the chain at head[1]. */
 static void logf_(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
-static uint32_t chain_len(uint32_t p, uint32_t stop) {
-    uint32_t n = 0;
-    while (p && p != stop && n < 999u) {
-        if (p < 0x08000000u || p >= 0x0C000000u || (p & 3u)) return 1000u + n;   /* outside the low 64 MB: not followed */
-        p = *(volatile uint32_t *)p; n++;
-    }
-    return n;
-}
-static void log_queues(const char *when) {
-    for (uint32_t q = 0; q < 8; q++) {
-        volatile uint32_t *h = (volatile uint32_t *)(0x089a5298u + q * 0x18u);
-        uint32_t end = h[4];
-        uint32_t len = end >= 0x08000000u && end < 0x0C000000u ? chain_len(*(volatile uint32_t *)end, end) : 9999u;
-        logf_("nano7kit queue %s %u: %08x %08x %08x %08x %08x n=%u walk=%u chain1=%u",
-              when, (unsigned)q, (unsigned)h[0], (unsigned)h[1], (unsigned)h[2], (unsigned)h[3], (unsigned)end,
-              (unsigned)h[5], (unsigned)len, (unsigned)chain_len(h[1], 0));
-    }
-}
 void fn_nano_poll(void) {
     static fn_tpick_t pick;
     if (state != 1) return;
     hb_spoint_t f; hb_surface_touch_read(&f);
-    int16_t lx = 0, ly = 0;
-    int listed = list_touch(&lx, &ly), down;
+    int16_t lx = 0, ly = 0, mx = f.x, my = f.y;
+    int newest_up, listed = list_touch(&lx, &ly, &newest_up);
     if (listed) { int16_t sx, sy; (void)snap_touch(&sx, &sy); }   /* the queue had it: just catch up */
     else if ((listed = snap_touch(&lx, &ly)) != 0) t_from_snap++;
-    switch (fn_tpick(&pick, (uint32_t)plat_time_us(), listed, lx, ly, f.down, f.x, f.y)) {
-    case FN_TP_LIST:    down = 1; f.x = lx; f.y = ly; t_from_list++; break;
-    case FN_TP_MAILBOX: down = 1; t_from_mb++; break;
-    case FN_TP_STALE:   down = 0; t_stale++; break;
-    case FN_TP_HELD:    down = 0; t_held++; break;
-    default:            down = 0; break;
+    for (int pass = 0; pass < 2; pass++) {
+        int down;
+        f.x = mx; f.y = my;
+        switch (fn_tpick(&pick, (uint32_t)plat_time_us(), listed, lx, ly, f.down, f.x, f.y)) {
+        case FN_TP_LIST:    down = 1; f.x = lx; f.y = ly; t_from_list++; break;
+        case FN_TP_MAILBOX: down = 1; t_from_mb++; break;
+        case FN_TP_STALE:   down = 0; t_stale++; break;
+        case FN_TP_HELD:    down = 0; t_held++; break;
+        default:            down = 0; break;
+        }
+        float x = down ? (float)f.x : last_x, y = down ? (float)f.y : last_y;   /* a touch ends where it was last seen */
+        if (down != was_down || (down && (x != last_x || y != last_y))) {
+            if (down && !was_down && ++t_presses <= 3) t_report = 1;
+            if (!down && was_down) t_lifts++;
+            was_down = down; last_x = x; last_y = y; t_places++;
+            if (tq_n < TQ) { tq[tq_n].x = x; tq[tq_n].y = y; tq[tq_n].down = down; tq_n++; }
+            else if (!down || tq[TQ - 1].down) { tq[TQ - 1].x = x; tq[TQ - 1].y = y; tq[TQ - 1].down = down; }  /* never lose a release */
+        }
+        if (listed != 1 || !newest_up) break;
+        listed = 2;                     /* the list's newest node is the lift of what it held down */
     }
-    float x = down ? (float)f.x : last_x, y = down ? (float)f.y : last_y;   /* a touch ends where it was last seen */
-    if (down == was_down && (!down || (x == last_x && y == last_y))) return;
-    if (down && !was_down && ++t_presses <= 3) t_report = 1;
-    was_down = down; last_x = x; last_y = y;
-    if (tq_n < TQ) { tq[tq_n].x = x; tq[tq_n].y = y; tq[tq_n].down = down; tq_n++; }
-    else if (!down || tq[TQ - 1].down) { tq[TQ - 1].x = x; tq[TQ - 1].y = y; tq[TQ - 1].down = down; }  /* never lose a release */
 }
 
 typedef uint32_t fn_jmp_buf[26] __attribute__((aligned(8)));
@@ -176,7 +168,6 @@ static int start(int w, int h) {
     uint32_t free_a = hb_os_heap_free(), largest_a = hb_os_heap_largest();
     /* first delete the textures an earlier nano7kit port (this one included) left in the
      * resident's shared GL context, then measure: see gl_left.c */
-    log_queues("start");
     gll_init(DATA_DIR_GL "/gl_names.txt");
     uint32_t swept = gll_sweep();
     uint32_t free0 = hb_os_heap_free(), largest = hb_os_heap_largest();
@@ -238,7 +229,13 @@ void fn_nano_frame(int w, int h, uint32_t n) {
     int nq = tq_n;
     memcpy(q, tq, (size_t)nq * sizeof q[0]);
     tq_n = 0;
-    if (!nq && was_down) { q[0].x = last_x; q[0].y = last_y; q[0].down = 1; nq = 1; }   /* held still: keep it down */
+    /* nothing new and still down: fn_frame_q keeps the touch down and runs one still step */
+    uint32_t dt_ms = (uint32_t)(dt * 1000.f + 0.5f);
+    if (!w_frames || dt_ms < w_dt_min) w_dt_min = dt_ms;
+    if (dt_ms > w_dt_max) w_dt_max = dt_ms;
+    w_frames++;
+    if (was_down || nq) w_down++;
+    if (!nq && was_down) { w_dry++; if (++w_dry_run > w_dry_max) w_dry_max = w_dry_run; } else w_dry_run = 0;
     fn_frame_q(dt, q, nq);
     if (t_report) {
         t_report = 0;
@@ -248,13 +245,24 @@ void fn_nano_frame(int w, int h, uint32_t n) {
     in_engine = 0;
     frames++;
     uint32_t ms = (uint32_t)(now / 1000u);
+    if (!w_ms0) w_ms0 = ms;
+    if (ms - w_ms0 >= 5000u) {          /* touch and timing, every 5 s in which the finger was down */
+        if (w_down) {
+            uint32_t span = ms - w_ms0;
+            logf_("nano7kit touch %us: %u fps, frame %u-%u ms; down %u frames, %u with nothing new (run %u); "
+                  "press %u lift %u places %u; list %u snap %u mb %u stale %u held %u",
+                  (unsigned)(ms / 1000u), (unsigned)(w_frames * 1000u / (span ? span : 1u)), (unsigned)w_dt_min, (unsigned)w_dt_max,
+                  (unsigned)w_down, (unsigned)w_dry, (unsigned)w_dry_max, (unsigned)t_presses, (unsigned)t_lifts,
+                  (unsigned)t_places, (unsigned)t_from_list, (unsigned)t_from_snap, (unsigned)t_from_mb,
+                  (unsigned)t_stale, (unsigned)t_held);
+            plat_log_flush();
+        }
+        w_ms0 = ms; w_frames = w_down = w_dry = w_dry_max = w_dt_max = 0; w_dt_min = 0;
+    }
     if (frames == 60 || ms - last_flush_ms > 20000u) {
         logf_("nano7kit frame %u: %d tris (%d small, %d over budget), %d draws, heap free %u, guest heap %u, textures %d live %d failed, archive reads %u (%u KB)",
               (unsigned)frames, be_stat_tris, be_stat_tiny, be_stat_over, be_stat_draws, (unsigned)hb_os_heap_free(),
               (unsigned)rt_heap_used(), be_stat_live_tex, be_stat_tex_fail, (unsigned)rt_varch_reads, (unsigned)(rt_varch_bytes >> 10));
-        logf_("nano7kit touch: %u presses; polls %u from the OS list (%u of them from the launcher snapshot), %u from the mailbox, %u stale, %u held unconfirmed",
-              (unsigned)t_presses, (unsigned)t_from_list, (unsigned)t_from_snap, (unsigned)t_from_mb, (unsigned)t_stale, (unsigned)t_held);
-        log_queues("run");
         if (host_outside_count)
             logf_("nano7kit front end outside the block: %u bytes now, %u peak, %u allocations",
                   (unsigned)host_outside, (unsigned)host_outside_peak, (unsigned)host_outside_count);

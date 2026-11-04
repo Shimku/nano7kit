@@ -39,18 +39,17 @@ class TouchLikeMarioTests(unittest.TestCase):
         self.assertIn("@@ -0,0 +1,1695 @@", lines)
 
     def test_fruitninja_reads_the_queues_only(self):
-        """fn-touch-diag: Fruit Ninja never pops a node (no drain), and logs the 8 queue heads."""
+        """Fruit Ninja never pops a node (no drain). fn-gameplay: the 8-queue diagnostic is
+        gone; a list whose newest node is a lift gives the down it holds, then the lift."""
         src = (ROOT / "games/fruitninja/nano/fn_nano.c").read_text()
         self.assertNotIn("hb_touch_drain", src)
         self.assertNotIn("pop_front", src)
-        self.assertIn('log_queues("start");', src)
-        self.assertIn('log_queues("run");', src)
-        body = src[src.index("static void log_queues"):]
-        body = body[:body.index("\n}\n")]
-        self.assertNotIn("=", body.replace("==", "").replace("!=", "").replace(">=", "").replace("<=", "")
-                         .replace("uint32_t end =", "").replace("uint32_t len =", "").replace("uint32_t q =", "")
-                         .replace("n=%u", "").replace("walk=%u", "").replace("chain1=%u", "")
-                         .replace("volatile uint32_t *h =", ""))
+        self.assertNotIn("log_queues", src)
+        poll = src[src.index("void fn_nano_poll(void)"):]
+        poll = poll[:poll.index("\n}\n")]
+        self.assertIn("for (int pass = 0; pass < 2; pass++)", poll)
+        self.assertIn("if (listed != 1 || !newest_up) break;", poll)
+        self.assertIn("*newest_up = *((volatile uint8_t *)(node + 8) + 4) == 1;", src)
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,7 +9,7 @@ nano7kit has no game data and never downloads any. You supply a file you own,
 | Mario 64 | Super Mario 64 (USA) `.z64` | sha1 `9bef1128717f958171a4afac3ed78ee2bb4e86ce` | olievans123 | tested |
 | PvZ Portable | the PC Plants vs. Zombies Game of the Year folder | `main.pak` sha256 `0cbdba7e…9d88cba` and `properties/` | PvZ-Portable (wszqkzqk) engine, nano7kit nano layer | tested |
 | Temple Run | decrypted iOS `.ipa` or `.app` | `com.imangi.templerun` 1.0; the build also checks the armv7 binary hash | olievans123, with nano7kit memory changes | tested |
-| Fruit Ninja | decrypted iOS `.ipa` or `.app` | `com.Halfbrick.Fruit` 1.0 | nano7kit | menu works; gameplay swipes unreliable on 1.1 (fix in progress) |
+| Fruit Ninja | decrypted iOS `.ipa` or `.app` | `com.Halfbrick.Fruit` 1.0 | nano7kit | tested |
 | Mario Kart 64 | Mario Kart 64 (USA) `.z64` | md5 `3a67d9986f54eb282924fca4cd5f6dff` | olievans123 | untested |
 | Flappy Bird | iOS `.ipa` | version 1.2 | olievans123 | untested |
 | Doodle Jump | iOS `.ipa` | version 1.0 | olievans123 | untested |

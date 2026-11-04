@@ -150,15 +150,14 @@ olievans123's Temple Run port; none of its code is used.
 - **Host harness** (`host/`): runs the engine headless with a software rasterizer,
   writes frames and plays a scripted swipe. Measured there: guest heap peak
   1,075,216 bytes, at most 691 triangles a frame.
-- **Touch, learned on hardware** (comments in `nano/fn_nano.c`, `nano/touch_pick.h`):
-  reading the launcher's touch mailbox once a frame turned swipes into taps, so it
-  reads the OS touch queues as Temple Run's port does. The OS empties those queues
-  after each touch event, so a game that polls them once a frame can miss samples.
-  In 1.1 the launcher copies each queue's newest sample at every touch event into a
-  snapshot after the SDK's shared block (`nanoapps/system/silver_resident_na/touch_latch.h`),
-  and Fruit Ninja and PocketJS read it when their own poll comes back empty. That
-  fixed two-finger input in PocketJS on hardware. Fruit Ninja's menu works, but
-  swipes during a round are still unreliable on 1.1; a fix is in progress.
+- **Touch, learned on hardware** (`nano/fn_nano.c`, `rt/fn_entry.c`): the game reads
+  the OS touch queues, plus the launcher's per-event snapshot
+  (`nanoapps/system/silver_resident_na/touch_latch.h`) because the OS empties the queues
+  after each touch event. The engine kills the blade for the rest of a touch once a held
+  finger reports no movement for two update steps, and NanoApps delivers some frames with
+  no new sample. So a frame with nothing new is skipped instead of repeating the old
+  position, and a lift is registered even when an earlier entry in the queue was a down.
+  The host harness showed the blade dying; `tests/test_fruitninja_rc.py` checks the fix.
 - **Writes:** `Fruit Ninja.hbapp` (about 920 KB) and `/Apps/Data/FruitNinja` (about 9.2 MB).
 
 ## Adding a game to nano7kit

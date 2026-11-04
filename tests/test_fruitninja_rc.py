@@ -210,11 +210,76 @@ class V28Tests(unittest.TestCase):
   printf("%d", fn_tpick(&s, now, 0, 0, 0, 0, 49, 50));""")
         self.assertEqual(out, "2" * 40 + "0")
 
-    def test_touch_summary_logged_after_the_first_presses(self):
-        """The press lines stop after three; the periodic frame log carries the touch counters."""
+    def test_touch_and_timing_logged_every_5_s_of_touching(self):
+        """The press lines stop after three; a short touch-and-timing line follows every 5 s
+        in which the finger was down (flushed), so a test in the game itself is in log.txt."""
         nano = (GAME / "nano" / "fn_nano.c").read_text()
         self.assertIn("++t_presses <= 3", nano)
-        self.assertIn('"nano7kit touch: %u presses; polls %u from the OS list (%u of them from the launcher snapshot), %u from the mailbox, %u stale, %u held unconfirmed"', nano)
+        self.assertIn('"nano7kit touch %us: %u fps, frame %u-%u ms; down %u frames, %u with nothing new (run %u); "', nano)
+        self.assertIn('"press %u lift %u places %u; list %u snap %u mb %u stale %u held %u"', nano)
+        body = nano[nano.index("if (ms - w_ms0 >= 5000u)"):]
+        self.assertLess(body.index("plat_log_flush();"), body.index("w_ms0 = ms;"))
+
+    def _run_frames(self, body):
+        """fn_entry.c with the engine replaced by a recorder: T<down>(x,y) per Touch, U per UpdateApp."""
+        import shutil, subprocess
+        cc = shutil.which("cc") or shutil.which("gcc")
+        if not cc:
+            self.skipTest("no host C compiler")
+        with tempfile.TemporaryDirectory() as t:
+            d = Path(t)
+            shutil.copyfile(GAME / "rt" / "fn_entry.c", d / "fn_entry.c")
+            shutil.copyfile(GAME / "rt" / "fn_entry.h", d / "fn_entry.h")
+            (d / "rt.h").write_text(
+                "#include <stdint.h>\n#include <string.h>\n"
+                "static inline uint32_t F2U(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }\n"
+                "uint32_t rt_call(const char *what, uint32_t addr, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, const uint32_t *stack, int nstack);\n"
+                "uint32_t g_strdup(const char *s);\n")
+            (d / "fngl.h").write_text("extern float fe_scale, fe_scale_y, fe_off_x, fe_off_y;\nextern int fe_view_h;\n"
+                                      "void be_frame_begin(void);\nvoid be_frame_end(void);\n")
+            (d / "rt_entry.h").write_text("#define FN_INIT_COUNT 0\nstatic const uint32_t fn_inits[1];\n#define FN_SetRootDir 1u\n"
+                                          "#define FN_InitSoundSession 0u\n#define FN_InitializeApp 2u\n#define FN_UpdateApp 3u\n"
+                                          "#define FN_DrawApp 4u\n#define FN_Touch 5u\n")
+            (d / "main.c").write_text(r"""
+#include <stdio.h>
+#include "rt.h"
+#include "fn_entry.h"
+float fe_scale = 1, fe_scale_y = 1, fe_off_x = 0, fe_off_y = 0; int fe_view_h = 480;
+void be_frame_begin(void) {} void be_frame_end(void) { printf("|"); }
+uint32_t g_strdup(const char *s) { (void)s; return 0; }
+static float U2F(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
+uint32_t rt_call(const char *what, uint32_t addr, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, const uint32_t *stack, int nstack) {
+    (void)what; (void)a0; (void)stack; (void)nstack;
+    if (addr == 5u) printf("T%u(%g,%g)", (unsigned)a1, U2F(a2), U2F(a3));
+    if (addr == 3u) printf("U");
+    return 0;
+}
+#define F(...) do { fn_tsample q[] = {__VA_ARGS__}; fn_frame_q(0.04f, q, (int)(sizeof q / sizeof q[0])); } while (0)
+#define NONE() fn_frame_q(0.04f, 0, 0)
+int main(void) {
+""" + body + "\n  printf(\"\\n\"); return 0; }\n")
+            exe = d / "t"
+            subprocess.run([cc, "-O1", "-Wall", "-Werror", "-Wno-unused-variable", "-I", str(d), "-o", str(exe),
+                            str(d / "fn_entry.c"), str(d / "main.c")], check=True)
+            return subprocess.run([str(exe)], capture_output=True, text=True, check=True).stdout.strip()
+
+    def test_a_down_touch_never_sits_still_for_two_steps(self):
+        """fn-gameplay: the engine stops a blade for the rest of the touch once two update
+        steps in a row leave a down touch where it was (host harness: one nano frame with no new
+        place before the fruit and the swipe cut nothing, menu and game). While down, a repeated
+        place is dropped, one new place fills both steps (the first gets the halfway point), and
+        a frame with nothing new is one step. Not down: two steps, as before."""
+        out = self._run_frames(r"""
+  F({10, 10, 1});                    /* press: as before, the place before the second step */
+  F({20, 10, 1});                    /* one new place: the halfway point, then the place */
+  NONE();                            /* nothing new: one still step */
+  F({20, 10, 1});                    /* the same place again (the old 'held still' re-send): one step */
+  F({40, 10, 1});
+  F({40, 10, 0});                    /* lift: as before */
+  NONE();                            /* up and nothing new: two steps, as before */
+  F({1, 1, 1}, {2, 2, 1}, {3, 3, 1});""")
+        self.assertEqual(out, "UT1(10,10)U|T1(15,10)UT1(20,10)U|U|U|T1(30,10)UT1(40,10)U|UT0(40,10)U|UU|"
+                              "T1(1,1)UT1(2,2)UT1(3,3)U|")
 
     def test_front_end_allocations_live_in_the_block(self):
         plat = (GAME / "nano" / "plat_nano.c").read_text()

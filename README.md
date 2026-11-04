@@ -54,7 +54,7 @@ Otherwise see [Full setup](#full-setup) at the bottom.
 | Super Mario 64 | Super Mario 64 (USA) `.z64` | olievans123's, fetched and built on your Mac |
 | PvZ Portable | the PC Plants vs. Zombies GOTY folder (`main.pak` and `properties/`) | PvZ-Portable engine plus a nano layer, `games/pvz_portable` |
 | Temple Run | decrypted Temple Run 1.0 `.ipa` | olievans123's recompile, with my memory changes |
-| Fruit Ninja | decrypted Fruit Ninja 1.0 `.ipa` | recompiled here, `games/fruitninja`. Swipes in a round are unreliable on 1.1 |
+| Fruit Ninja | decrypted Fruit Ninja 1.0 `.ipa` | recompiled here, `games/fruitninja` |
 
 Put the files in `mygames/` (git ignores it) or drag them into Terminal when the
 installer asks. Each file is hash-checked, so only those exact versions work. Nothing
@@ -96,9 +96,8 @@ PocketJS is fetched at `6ca9f914` and patched with `pocketjs/nano7g.patch`.
 
 ## Known issues
 
-Fruit Ninja's menu works, but swipes during a round don't register reliably on 1.1 (they
-did on 1.0); I'm working on it. No game has sound. More than 16 apps on Home, Mario Kart
-64, Flappy Bird and Doodle Jump are untested.
+No game has sound. More than 16 apps on Home, Mario Kart 64, Flappy Bird and Doodle Jump
+are untested.
 
 ## nano7kit, NanoApps and nano7-untethered
 
