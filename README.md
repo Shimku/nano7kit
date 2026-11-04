@@ -219,7 +219,7 @@ included); [PvZ-Portable](https://github.com/wszqkzqk/PvZ-Portable) by wszqkzqk
 (LGPL-3.0); [PocketJS](https://github.com/pocket-nexus/pocketjs) by pocket-nexus (MIT,
 pinned at `6ca9f914`) with Motion Lab by yui540; QuickJS; [Inter](https://rsms.me/inter/)
 (OFL); wInd3x; ipod_sun. Everyone, with licences: [CREDITS.md](CREDITS.md). The old
-untethered recovery, `./start apps restore-tested`, is in [docs/RECOVERY.md](docs/RECOVERY.md).
+untethered recovery, `./start apps restore-tested`, is in [docs/RECOVERY.md](docs/RECOVERY.md). Cursor and GrokBot saved me here.
 
 Unofficial and at your own risk. Not affiliated with Apple, Nintendo, Imangi, Halfbrick,
 PopCap or any game developer. No game files, ROMs or Apple firmware are included. MIT,
