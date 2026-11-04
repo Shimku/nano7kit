@@ -1,37 +1,44 @@
 # nano7kit
 
-Games and JavaScript apps for the iPod nano 7th generation, installed from a Mac.
+Apps, games and JavaScript apps for the iPod nano 7th generation, installed from a Mac.
 
 ![Super Mario 64 running on four iPod nano 7G units](docs/images/mario.png)
 
-nano7kit sits on top of [NanoApps 1.0](https://github.com/nfzerox/NanoApps) by nfzerox. It
-keeps NanoApps' firmware and apps and adds:
+nano7kit builds on top of [NanoApps 1.0](https://github.com/nfzerox/NanoApps) by nfzerox and
+[nano7-untethered](https://github.com/olievans123/nano7-untethered) by olievans123. It keeps
+NanoApps' firmware and apps and adds:
 
-- a fork of the NanoApps launcher that fits big games: it checks free memory before
-  loading, reads large files in pieces and frees the app on Home, so you can switch
-  between games without a restart
-- Super Mario 64, Plants vs. Zombies, Temple Run and Fruit Ninja, built on your Mac from
-  your own game files
-- PocketJS: write nano apps in TSX, run them on QuickJS on the iPod
-- a Terminal installer where you tick the apps you want
+- N64, PC and iOS games, built on your Mac from your own files: Super Mario 64 (N64,
+  olievans123's port), Plants vs. Zombies (PC, my port of the PvZ-Portable engine), Temple
+  Run (iOS, olievans123's recompile with my memory changes) and Fruit Ninja (iOS, my
+  recompile). Plus Game Boy and Probe from nano7-untethered.
+- [PocketJS](https://github.com/pocket-nexus/pocketjs): write nano apps in TSX and run them
+  on QuickJS on the iPod, with touch gestures and tilt
+- a fork of the NanoApps launcher with better memory handling for big apps: it checks free
+  memory before loading, reads large files in pieces and frees the app when you go back to
+  the Home screen, so you can switch between games without a restart
+- a Mac installer where you tick the apps you want
 
 ## Before you start
 
 - **iPod:** nano 7G on firmware 1.1.2. I tested one Mid-2015 model (MKN52, 16 GB). The
-  2012 model runs the same firmware but I haven't tried it.
+  2012 model runs the same firmware and NanoApps has an IPSW for it, but I haven't tried it.
 - **Mac:** I tested an Intel Mac on macOS 13.5. On Intel, `./install` downloads its own
   Python, Arm compiler and other tools into `build/macos-intel` (no Homebrew, no
   password). Apple silicon should work with Homebrew ([docs/MACOS.md](docs/MACOS.md)) but
   I haven't tested it on hardware. You also need Xcode's command line tools
-  (`xcode-select --install`). No Windows.
-- **Cable:** Lightning. My Mac only saw the iPod in recovery mode through a USB-A hub.
-- **Time:** tool setup takes a few minutes, once. Mario 64 takes several minutes
-  to build.
+  (`xcode-select --install`). No Windows support here; NanoApps on its own installs from
+  iTunes on Windows.
+- **Cable:** Lightning to USB-C or USB-A. My Mac only saw the iPod in recovery mode through a USB-A hub.
+- **Time:** tool setup takes a few minutes. Heavier games like Mario 64 take several
+  minutes to build.
 - **Risk:** on the NanoApps base, nano7kit only copies files into `/Apps` and
   `/Library/resident.hbapp`, after backing up `/Library`, `/Apps` and `/NanoApps` to your
   Mac. Music is not touched. Writing firmware (step 1b below) is riskier: it takes a full
   disk image first and refuses if anything doesn't match. See [Undo](#undo).
-- **Games:** not included. You supply your own copies (table below).
+- **Apps & Games:** nano7kit has build recipes and a porting guide, and the four games
+  below are tested on hardware. You supply your own game files, for obvious reasons
+  (table below).
 
 ## Install
 
@@ -45,7 +52,7 @@ Otherwise see [Full setup](#full-setup) at the bottom.
 
 ![The Home screen with NanoApps apps, games and PocketJS](docs/images/home.png)
 
-## Games
+## Games (and Apps)
 
 ![Temple Run, Blocks, Plants vs. Zombies and Fruit Ninja on the nano](docs/images/games.png)
 
@@ -96,23 +103,39 @@ PocketJS is fetched at `6ca9f914` and patched with `pocketjs/nano7g.patch`.
 
 ## Known issues
 
-No game has sound. More than 16 apps on Home, Mario Kart 64, Flappy Bird and Doodle Jump
-are untested.
+No game has sound. I haven't tried every NanoApps app with this launcher; the ones I
+use, such as Chess and Screenshot, work. Mario Kart 64, Flappy Bird and
+Doodle Jump are untested here: Mario Kart 64 runs on nano7-untethered, and NanoApps reports
+Flappy Bird and Doodle Jump working on a 2015 nano.
 
-## nano7kit, NanoApps and nano7-untethered
+## Who brought what
 
-- **nano7-untethered** (olievans123): patched firmware flashed from a Linux PC. Needs a
-  FAT32 disk, which erases the iPod. Comes with Blocks, Game Boy, Probe and the Mario
-  ports. Finder can't update an iPod running it. nano7kit 1.0 was built on it.
-- **NanoApps 1.0** (nfzerox): installs as a firmware update from Finder, iTunes or Apple
-  Devices, on Mac or Windows, no Terminal. Over 40 apps and a C SDK. Its launcher keeps
-  the last app loaded, so reopening it is quicker.
-- **nano7kit 1.1**: NanoApps 1.0 plus PocketJS (JS/TSX apps), the Mario 64, PvZ, Temple
-  Run and Fruit Ninja ports, a launcher fork that fits big games, and a Mac installer.
+- **nano7-untethered** (olievans123) made homebrew untethered: a patched firmware (built
+  with nfzerox's ipod_sun_untethered, flashed from recovery mode with wInd3x on a Linux PC)
+  loads apps at every boot, with no computer attached. It needs a FAT32 disk, which means
+  an iPod formatted by iTunes on Windows, and erasing it if it isn't. It ships Blocks, Game
+  Boy, Probe and native ports of Mario Kart 64 and Super Mario 64 built from your ROMs.
+  Tested on one 2012 nano. On my nano, Finder could no longer update the iPod while it ran
+  this (error 1461). nano7kit 1.0 was built on it.
+- **NanoApps 1.0** (nfzerox) is the app framework: over 40 apps, a C SDK (LVGL widgets,
+  OpenGL ES 1.1 or a raw framebuffer) and the launcher. 1.0 installs as an IPSW for the 2012
+  or 2015 model through Check for Update in Finder, iTunes or Apple Devices, on Mac or
+  Windows, with no Terminal. It includes olievans123's untethered loading, Merquice's
+  AirPods H2 fix, Raphmatt's Lightning Dock fix and ninjaprawn's music sync fix. Its
+  launcher keeps the last app loaded, so reopening it is quicker.
+- **nano7kit 1.1** (me) adds, on top of NanoApps 1.0: the launcher fork that fits big
+  games; Plants vs. Zombies and Fruit Ninja, ported here; Super Mario 64 and Temple Run
+  from olievans123, built here, with memory changes to Temple Run; Game Boy and Probe from
+  nano7-untethered; the PocketJS nano 7G target for JS/TSX apps; a Mac installer; and
+  `nabase flash`, which moves a nano from nano7-untethered to NanoApps without erasing it.
   Mac only, needs Terminal, tested on one Mid-2015 nano.
 
-If you just want the apps, NanoApps alone is simpler. The nano7-untethered route is still
-here as a fallback ([docs/FAT32.md](docs/FAT32.md)).
+**What you end up with:** NanoApps' firmware and apps, plus Game Boy, Probe, Mario 64, PvZ,
+Temple Run, Fruit Ninja and the PocketJS apps on the same Home screen, switching without a
+restart. Your music stays.
+
+The nano7kit 1.0 route on nano7-untethered is still here as a fallback
+([docs/FAT32.md](docs/FAT32.md)).
 
 ## Full setup
 
