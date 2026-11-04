@@ -1,43 +1,40 @@
 # nano7kit
 
-Apps, games and JavaScript apps for the iPod nano 7th generation, installed from a Mac.
+Install apps, games and JavaScript apps for the iPod Nano 7th generation from a Mac.
 
 ![Super Mario 64 running on four iPod nano 7G units](docs/images/mario.png)
 
-nano7kit builds on top of [NanoApps 1.0](https://github.com/nfzerox/NanoApps) by nfzerox and
+nano7kit wouldn't be possible and is built on top of [NanoApps 1.0](https://github.com/nfzerox/NanoApps) by nfzerox and
 [nano7-untethered](https://github.com/olievans123/nano7-untethered) by olievans123. It keeps
-NanoApps' firmware and apps and adds:
+NanoApps' firmware & 40+ apps selection and adds:
 
-- N64, PC and iOS games, built on your Mac from your own files: Super Mario 64 (N64,
-  olievans123's port), Plants vs. Zombies (PC, my port of the PvZ-Portable engine), Temple
-  Run (iOS, olievans123's recompile with my memory changes) and Fruit Ninja (iOS, my
-  recompile). Plus Game Boy and Probe from nano7-untethered.
+- Console, PC and iOS games that can be ported to iPod. Some examples of things that work are Plants vs. Zombies (PC, my port of the PvZ-Portable engine), Super Mario 64 (N64,
+  olievans123's port), Fruit Ninja (iOS, my
+  recompile). 
 - [PocketJS](https://github.com/pocket-nexus/pocketjs): write nano apps in TSX and run them
   on QuickJS on the iPod, with touch gestures and tilt
 - a fork of the NanoApps launcher with better memory handling for big apps: it checks free
   memory before loading, reads large files in pieces and frees the app when you go back to
   the Home screen, so you can switch between games without a restart
-- a Mac installer where you tick the apps you want
 
 ## Before you start
 
 - **iPod:** nano 7G on firmware 1.1.2. I tested one Mid-2015 model (MKN52, 16 GB). The
-  2012 model runs the same firmware and NanoApps has an IPSW for it, but I haven't tried it.
+  2012 model should run the same, but I haven't tried it.
 - **Mac:** I tested an Intel Mac on macOS 13.5. On Intel, `./install` downloads its own
   Python, Arm compiler and other tools into `build/macos-intel` (no Homebrew, no
-  password). Apple silicon should work with Homebrew ([docs/MACOS.md](docs/MACOS.md)) but
-  I haven't tested it on hardware. You also need Xcode's command line tools
-  (`xcode-select --install`). No Windows support here; NanoApps on its own installs from
-  iTunes on Windows.
-- **Cable:** Lightning to USB-C or USB-A. My Mac only saw the iPod in recovery mode through a USB-A hub.
+  password). Apple M-series should work with Homebrew ([docs/MACOS.md](docs/MACOS.md)) but
+  I haven't tested it on that hardware. You also need Xcode's command line tools
+  (`xcode-select --install`). No Windows support but NanoApps should get you covered there.
+- **Cable:** Lightning to USB-C or USB-A. My Mac only saw the iPod in recovery mode through a USB hub.
 - **Time:** tool setup takes a few minutes. Heavier games like Mario 64 take several
   minutes to build.
 - **Risk:** on the NanoApps base, nano7kit only copies files into `/Apps` and
   `/Library/resident.hbapp`, after backing up `/Library`, `/Apps` and `/NanoApps` to your
   Mac. Music is not touched. Writing firmware (step 1b below) is riskier: it takes a full
   disk image first and refuses if anything doesn't match. See [Undo](#undo).
-- **Apps & Games:** nano7kit has build recipes and a porting guide, and the four games
-  below are tested on hardware. You supply your own game files, for obvious reasons
+- **Apps & Games:** nano7kit has a porting guide, and the four games
+  below are tested on hardware. You have to supply your own game files, for obvious reasons
   (table below).
 
 ## Install
@@ -58,10 +55,11 @@ Otherwise see [Full setup](#full-setup) at the bottom.
 
 | Game | You supply | Port |
 |---|---|---|
-| Super Mario 64 | Super Mario 64 (USA) `.z64` | olievans123's, fetched and built on your Mac |
-| PvZ Portable | the PC Plants vs. Zombies GOTY folder (`main.pak` and `properties/`) | PvZ-Portable engine plus a nano layer, `games/pvz_portable` |
-| Temple Run | decrypted Temple Run 1.0 `.ipa` | olievans123's recompile, with my memory changes |
+| PvZ Portable | the PC Plants vs. Zombies GOTY folder (`main.pak` and `properties/`) | PvZ-Portable engine downscaled for Nano, `games/pvz_portable` |
+| Super Mario 64 | Super Mario 64 (USA) `.z64` | olievans123's |
+| Temple Run | decrypted Temple Run 1.0 `.ipa` | olievans123's, with my memory changes |
 | Fruit Ninja | decrypted Fruit Ninja 1.0 `.ipa` | recompiled here, `games/fruitninja` |
+| Other | Mario Kart, Blocks, Flappy Bird, Doodle Jump, etc. ) | Blocks runs great, other games were not tested but should run |
 
 Put the files in `mygames/` (git ignores it) or drag them into Terminal when the
 installer asks. Each file is hash-checked, so only those exact versions work. Nothing
@@ -71,7 +69,7 @@ Bird, Doodle Jump): [docs/GAMES.md](docs/GAMES.md).
 ## Writing apps
 
 The nano gives an app a 240x432 touch screen, an accelerometer, OpenGL ES 1.1 and about
-4 MB of memory. One app runs at a time.
+4 MB of memory. Due to memory constraints, one app runs at a time, but saving is possible where available (e.g. PvZ or PocketJS).
 
 In C, with the NanoApps SDK (NanoApps apps run unchanged on this launcher):
 
@@ -88,51 +86,49 @@ Temple Run and Fruit Ninja.
 
 ![PocketJS apps on the nano: a counter, the home screen, Motion Lab and Notes](docs/images/pocketjs.png)
 
-[PocketJS](https://github.com/pocket-nexus/pocketjs) by pocket-nexus renders Solid or Vue
-TSX components to native pixels. I added a nano 7G target, so an iPod app is a component
-with flexbox and Tailwind-style classes, signals for state, touch (two fingers) and tilt.
-It runs on QuickJS on the iPod, or is compiled ahead of time with MicroTS. An app is a
-`.pocket` file in `/Apps/Data/PocketJS`, and `./start pocketjs emu` runs it on the Mac
-first and reports its memory peak.
+[PocketJS](https://github.com/pocket-nexus/pocketjs) is pocket-nexus's framework for
+writing small-screen apps in Solid or Vue TSX. nano7kit ports it to an iPod Nano 7G and it is pretty damn cool.
 
-JS QuickJS, the PocketJS home screen, comes with Notes (with a keyboard, saves to the
-iPod), Talk, yui540's Motion Lab, Cafe, Physics, Tilt, Gestures, Type and Fonts.
+You write an app as a component, lay it out with flexbox and Tailwind-style classes,
+and keep state in signals. It can read two-finger touch and tilt. On the iPod it runs
+on QuickJS, or you can compile it ahead of time with MicroTS.
+
+Each app is one `.pocket` file in `/Apps/Data/PocketJS`. Run `./start pocketjs emu`
+to try it on your Mac first. It also shows the app's peak memory use.
 
 An example app, and how to build and add your own: [docs/POCKETJS.md](docs/POCKETJS.md).
 PocketJS is fetched at `6ca9f914` and patched with `pocketjs/nano7g.patch`.
 
 ## Known issues
 
-No game has sound. I haven't tried every NanoApps app with this launcher; the ones I
-use, such as Chess and Screenshot, work. Mario Kart 64, Flappy Bird and
-Doodle Jump are untested here: Mario Kart 64 runs on nano7-untethered, and NanoApps reports
-Flappy Bird and Doodle Jump working on a 2015 nano.
+No games have sound. I haven't tried every NanoApps app but those I did work flawlessly so I don't see a reason others would break. Mario Kart 64, Flappy Bird and
+Doodle Jump are untested here but should be working. Making the install a bit more graphical would be nice. Of course, this should be tested on more iPods.
 
 ## Who brought what
 
 - **nano7-untethered** (olievans123) made homebrew untethered: a patched firmware (built
   with nfzerox's ipod_sun_untethered, flashed from recovery mode with wInd3x on a Linux PC)
-  loads apps at every boot, with no computer attached. It needs a FAT32 disk, which means
+  loads apps at every boot with no computer attached. It needs a FAT32 disk, which means
   an iPod formatted by iTunes on Windows, and erasing it if it isn't. It ships Blocks, Game
   Boy, Probe and native ports of Mario Kart 64 and Super Mario 64 built from your ROMs.
   Tested on one 2012 nano. On my nano, Finder could no longer update the iPod while it ran
-  this (error 1461). nano7kit 1.0 was built on it.
-- **NanoApps 1.0** (nfzerox) is the app framework: over 40 apps, a C SDK (LVGL widgets,
+  this (error 1461). nano7kit 1.0 was built on it by porting the entire process over to Mac and combining it with an earlier NanoApps release.
+- **NanoApps 1.0** (nfzerox) is the app framework: 40+ apps, a C SDK (LVGL widgets,
   OpenGL ES 1.1 or a raw framebuffer) and the launcher. 1.0 installs as an IPSW for the 2012
   or 2015 model through Check for Update in Finder, iTunes or Apple Devices, on Mac or
   Windows, with no Terminal. It includes olievans123's untethered loading, Merquice's
   AirPods H2 fix, Raphmatt's Lightning Dock fix and ninjaprawn's music sync fix. Its
   launcher keeps the last app loaded, so reopening it is quicker.
-- **nano7kit 1.1** (me) adds, on top of NanoApps 1.0: the launcher fork that fits big
-  games; Plants vs. Zombies and Fruit Ninja, ported here; Super Mario 64 and Temple Run
-  from olievans123, built here, with memory changes to Temple Run; Game Boy and Probe from
-  nano7-untethered; the PocketJS nano 7G target for JS/TSX apps; a Mac installer; and
+- **nano7kit 1.1** (this) adds some things on top of NanoApps 1.0: the launcher fork that fits big
+  games; new ports for Plants vs. Zombies and Fruit Ninja alongside existing apps (e.g. Probe) and games (e.g. Super Mario 64,
+  etc.) with memory changes to some games (e.g. Temple Run);
+  the PocketJS Nano 7G target for building & running JS/TSX apps; a Mac-first installer; and
   `nabase flash`, which moves a nano from nano7-untethered to NanoApps without erasing it.
   Mac only, needs Terminal, tested on one Mid-2015 nano.
 
-**What you end up with:** NanoApps' firmware and apps, plus Game Boy, Probe, Mario 64, PvZ,
+**What you end up with:** NanoApps' firmware and apps and games you select incl. Game Boy, Mario 64, PvZ,
 Temple Run, Fruit Ninja and the PocketJS apps on the same Home screen, switching without a
-restart. Your music stays.
+restart. Music doesn't get removed, and obviously you can add apps and games you create or port yourself.
 
 The nano7kit 1.0 route on nano7-untethered is still here as a fallback
 ([docs/FAT32.md](docs/FAT32.md)).
