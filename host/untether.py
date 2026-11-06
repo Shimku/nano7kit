@@ -260,7 +260,7 @@ def install_loader_files(
     )
     _write_files_receipts(rec)
     print(
-        f"DEVICE_FILES_OK: {rec.get('wrote', len(expected))} written, {rec.get('already', 0)} already present "
+        f"DEVICE_FILES_OK: {rec.get('wrote', len(rec.get('file_hashes') or {}))} written, {rec.get('already', 0)} already present "
         "(mtools readback from the raw node)"
     )
     return rec
