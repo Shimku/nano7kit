@@ -1,0 +1,10 @@
+dlmalloc 2.8.6 (Doug Lea)
+
+This is a version (aka dlmalloc) of malloc/free/realloc written by
+Doug Lea and released to the public domain, as explained at
+http://creativecommons.org/publicdomain/zero/1.0/
+
+nano7kit fetches malloc-2.8.6.c from
+https://gee.cs.oswego.edu/pub/misc/malloc-2.8.6.c
+(sha256 103602c3fcbe200d5e257cdd7353d84bcc033d887bea3b245321319bf5401f47)
+when building JS QuickJS and PvZ Portable. The source is not vendored here.

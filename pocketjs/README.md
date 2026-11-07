@@ -76,8 +76,8 @@ any of them.
 
 ## Credits
 
-- [PocketJS](https://github.com/pocket-nexus/pocketjs) (MIT): runtime, MicroTS compiler, core, rasterizer, and the Hero, GBA Hero, iPod nano Hero, Solid AOT Lab and Vue SFC Lab samples.
-- [QuickJS](https://bellard.org/quickjs/) (MIT, Fabrice Bellard and Charlie Gordon), via [pocket-nexus/quickjs-rs](https://github.com/pocket-nexus/quickjs-rs); dlmalloc (public domain, Doug Lea); newlib; Inter (SIL OFL 1.1, Rasmus Andersson) in fonts/intl.pjfa.
+- [PocketJS](https://github.com/pocket-nexus/pocketjs) (MIT): runtime, MicroTS compiler, core, rasterizer, and the Hero, GBA Hero, iPod nano Hero, Solid AOT Lab and Vue SFC Lab samples. Text: [LICENSES/PocketJS-MIT.txt](../LICENSES/PocketJS-MIT.txt).
+- [QuickJS](https://bellard.org/quickjs/) (MIT, Fabrice Bellard and Charlie Gordon), via [pocket-nexus/quickjs-rs](https://github.com/pocket-nexus/quickjs-rs); dlmalloc (public domain, Doug Lea); newlib; Inter (SIL OFL 1.1, Rasmus Andersson) in fonts/intl.pjfa. Texts: [LICENSES/QuickJS-MIT.txt](../LICENSES/QuickJS-MIT.txt), [LICENSES/dlmalloc-CC0.txt](../LICENSES/dlmalloc-CC0.txt), [LICENSES/Inter-OFL-1.1.txt](../LICENSES/Inter-OFL-1.1.txt) (also [fonts/LICENSE.txt](../untether/artifacts/extra/Data/PocketJS/fonts/LICENSE.txt)).
 - [NanoApps](https://github.com/nfzerox/NanoApps) (MIT): SDK, raw surface runtime, resident and loader.
 - [nano7-untethered](https://github.com/olievans123/nano7-untethered): patched firmware so apps load at boot.
 - [ipod_sun_untethered](https://github.com/nfzerox/ipod_sun_untethered) (GPL-3.0): firmware builder.

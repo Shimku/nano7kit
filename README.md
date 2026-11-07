@@ -13,9 +13,10 @@ NanoApps' firmware & 40+ apps selection and adds:
   recompile). 
 - [PocketJS](https://github.com/pocket-nexus/pocketjs): write nano apps in TSX and run them
   on QuickJS on the iPod, with touch gestures and tilt
-- a fork of the NanoApps launcher with better memory handling for big apps: it checks free
-  memory before loading, reads large files in pieces and frees the app when you go back to
-  the Home screen, so you can switch between games without a restart
+- a fork of the NanoApps launcher for big apps: the patched SDK checks the largest free
+  block before allocating and reads files over 512 KB in pieces; on refresh it unloads
+  before reading the app catalog, and it only re-reads the catalog after USB marked the
+  disk dirty
 
 ## Before you start
 
@@ -117,8 +118,10 @@ Doodle Jump are untested here but should be working. Making the install a bit mo
   OpenGL ES 1.1 or a raw framebuffer) and the launcher. 1.0 installs as an IPSW for the 2012
   or 2015 model through Check for Update in Finder, iTunes or Apple Devices, on Mac or
   Windows, with no Terminal. It includes olievans123's untethered loading, Merquice's
-  AirPods H2 fix, Raphmatt's Lightning Dock fix and ninjaprawn's music sync fix. Its
-  launcher keeps the last app loaded, so reopening it is quicker.
+  AirPods H2 fix, Raphmatt's Lightning Dock fix and ninjaprawn's music sync fix. After
+  you go back to Home, a 500 ms timer unloads the last app. A relaunch before that
+  timer can reuse the still-loaded image. Opening a different app unloads the others
+  immediately.
 - **nano7kit 1.1** (this) adds some things on top of NanoApps 1.0: the launcher fork that fits big
   games; new ports for Plants vs. Zombies and Fruit Ninja alongside existing apps (e.g. Probe) and games (e.g. Super Mario 64,
   etc.) with memory changes to some games (e.g. Temple Run);
@@ -218,7 +221,8 @@ and the Temple Run port by olievans123 (no licence stated, so fetched at build t
 included); [PvZ-Portable](https://github.com/wszqkzqk/PvZ-Portable) by wszqkzqk
 (LGPL-3.0); [PocketJS](https://github.com/pocket-nexus/pocketjs) by pocket-nexus (MIT,
 pinned at `6ca9f914`) with Motion Lab by yui540; QuickJS; [Inter](https://rsms.me/inter/)
-(OFL); wInd3x; ipod_sun. Everyone, with licences: [CREDITS.md](CREDITS.md). The old
+(OFL); wInd3x; ipod_sun. Everyone, with licences: [CREDITS.md](CREDITS.md),
+[NOTICE](NOTICE), [LICENSES/](LICENSES/). The old
 untethered recovery, `./start apps restore-tested`, is in [docs/RECOVERY.md](docs/RECOVERY.md). Cursor and GrokBot saved me here.
 
 Unofficial and at your own risk. Not affiliated with Apple, Nintendo, Imangi, Halfbrick,

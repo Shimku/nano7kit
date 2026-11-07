@@ -17,8 +17,12 @@ Exceptions:
                                the wInd3x patch, GPL-2.0); each hunk follows
                                the licence of the file it changes
   untether/artifacts/extra/    prebuilt apps; each keeps its source's
-                               licence (NanoApps MIT, PocketJS MIT, QuickJS
-                               MIT, Inter OFL-1.1, Font Awesome Free icons)
+                               licence. The texts are in LICENSES/:
+                               PocketJS MIT, QuickJS MIT, Inter OFL-1.1
+                               (also next to the font at
+                               untether/artifacts/extra/Data/PocketJS/fonts/LICENSE.txt),
+                               Font Awesome Free 7.2.0, dlmalloc public domain / CC0.
+                               See LICENSES/README.md.
 
 Not in this repository, fetched at pinned commits (UPSTREAM.txt) when
 you install or build:

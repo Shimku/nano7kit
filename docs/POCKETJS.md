@@ -155,7 +155,12 @@ click wheel). It is not used here.
 ## Credits
 
 PocketJS is by Yifeng "Evan" Wang / [pocket-nexus](https://github.com/pocket-nexus/pocketjs),
-MIT, pinned at `6ca9f914`. QuickJS is by Fabrice Bellard and Charlie Gordon (MIT).
+MIT, pinned at `6ca9f914` ([LICENSES/PocketJS-MIT.txt](../LICENSES/PocketJS-MIT.txt)).
+QuickJS is by Fabrice Bellard and Charlie Gordon (MIT,
+[LICENSES/QuickJS-MIT.txt](../LICENSES/QuickJS-MIT.txt)).
 Motion Lab is yui540's motion studies from upstream `apps/motions`. Inter is by
-Rasmus Andersson (OFL-1.1). nano7kit's part is the nano7g target in
-`pocketjs/nano7g.patch`.
+Rasmus Andersson (OFL-1.1,
+[LICENSES/Inter-OFL-1.1.txt](../LICENSES/Inter-OFL-1.1.txt), also
+[fonts/LICENSE.txt](../untether/artifacts/extra/Data/PocketJS/fonts/LICENSE.txt)).
+dlmalloc 2.8.6 is public domain / CC0 ([LICENSES/dlmalloc-CC0.txt](../LICENSES/dlmalloc-CC0.txt)).
+nano7kit's part is the nano7g target in `pocketjs/nano7g.patch`.
