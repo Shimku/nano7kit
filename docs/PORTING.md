@@ -174,30 +174,36 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   is silent. Ka3D SjLj is a host `jmp_buf` around `__Unwind_SjLj_Register`.
 - **Runtime** (`rt/`): guest memory (`rt_core.c`), iOS calls (`rt_imports.c`),
   GLES 1.1 with CPU clip (`fngl.c`). Landscape 480x320 fills the 240x432 panel
-  with Home on the right (panel x = game-y-down * 0.75, panel y = game-x * 0.9).
-- **Assets** (`tools/convert_assets.py`): wav/mp3 skipped; PVR/PNG with a side
-  over 256 are halved (so `INGAME.pvr` 992x935 RGBA4444 is not a 1.8 MB decode)
-  and matching sprite `.dat` coords are scaled. Lua 5.1 bytecode is copied as-is.
-- **Nano side** (`nano/`): the translated engine is Thumb + software float so
-  the loaded image is about 2.20 MiB (ARM+VFP was 3.2 MiB text and left no
-  guest block). Runtime, GL and `setjmp` stay ARM+VFP; newlib's Thumb `setjmp`
-  saves d0-d31 and fails the Thumb-FP gate. PC-relative ARM literal pools are
-  folded into C, so guest.img maps only `__cstring` through DATA (~80 KB) and
-  the guest block can sit around 1.6 to 2.1 MB while still holding the 1.29 MB
-  heap peak. Double-tap or Volume Up/Down zooms (picture and slingshot stay
-  aligned); a drag on the top or bottom 28 px of the panel pans (slingshot is
-  the rest). GLES 1.x has no shader files; `gr::createShaders` registers the
-  built-in `EGL_Shader_Default` templates.
-- **Host harness** (`host/`): headless software raster. After VFPv2 VMLA/VMLS
-  (UAL) decode, identity MVP for Ka3D clip-space verts, `glFrontFace` (Ka3D
-  2D is GL_CW), Home-on-right mapping, and POT-padded `glTexImage2D` (Ka3D
-  allocates POT then SubImage of the NPOT PNG; UVs are pixel/POT), splash,
-  menu, and level 1 draw as rectangles. Guest heap peak after the menu is
-  about 1.02 MB (budget 1.29 MB). PLAY, TUTORIAL_OK, and a slingshot drag
-  work through LBUTTON plus `mouseMove`.
-- **Writes:** `Angry Birds.hbapp` (code only, about 2.2 MB; no game assets)
-  and `/Apps/Data/AngryBirds` from the user's ipa. Untested on a real nano;
-  host harness and the test suite are the check so far.
+  with Home on the right, same map as PvZ `n7gl_dev_a.inc`: panel x = GL fy *
+  0.75, panel y = game x * 0.9 (logical top sits at portrait RIGHT). Touch is
+  the inverse (`Nano7PanelToGame`). Host PPM is 432x240 via PvZ `n7soft_shot`
+  (`px = 239-gy, py = gx`) so a landscape screenshot matches the iPod.
+- **Assets** (`tools/convert_assets.py`): wav/mp3 skipped; INGAME sheets keep
+  max side 256. MENU, SPLASHES and TUTORIALS keep 512 (one fewer halve than
+  1024-class sheets at 256). MENU_1 (hills, 512x512 POT) and the other UI
+  sheets stay 256: host peak with those three at 512 is 2,105,344 bytes, which
+  is what fits after the 2 MB guest block on the 6.4/4.0 probe. Original 1024
+  sheets cannot upload (nano `be_tex_image` cap 512). Sprite `.dat` stays at
+  original pixels; UV wrap is undone from `texscale`. Lua 5.1 bytecode is copied
+  as-is.
+- **Nano side** (`nano/`): most of the translated engine is Thumb + software
+  float so the loaded image stays about 2.2 MiB (ARM+VFP for everything was
+  3.2 MiB text). Box2D in `recomp_14.c`/`recomp_15.c` is ARM+softfp+VFP like
+  Fruit Ninja. Runtime, GL and `setjmp` stay ARM+VFP. On-device log:
+  `/Apps/Data/AngryBirds/log.txt` (body counts, ground, tex fails, free mem).
+  Guest.img maps only `__cstring` through DATA (~80 KB). Double-tap or Volume
+  Up/Down zooms; a drag on the top or bottom 28 px of the panel pans.
+- **Host harness** (`host/`): headless software raster, same 512 texture cap
+  as the nano, and the same home-on-right landscape dump as PvZ (`P6 432 240`,
+  `px=239-gy, py=gx`). `AB_PHYS_TEST=1` loads Level1 then lua `loadNextLevel`
+  for 2-4, steps 300 frames, and checks contacts plus dynamic Y still near the
+  ground. VCMP writes FPSCR only (APSR via FMSTAT), matching ARM; the old
+  immediate `n_=` collapsed Box2D AABBs to a point. Guest heap peak after
+  the menu is about 1.02 MB. PLAY, TUTORIAL_OK, and a slingshot drag work
+  through LBUTTON plus `mouseMove`.
+- **Writes:** `Angry Birds.hbapp` (code only, about 2.3 MB; no game assets)
+  and `/Apps/Data/AngryBirds` from the user's ipa. `nabase add` copies with
+  `replace=True`; `nabase remove` is not needed to overwrite.
 
 ## Adding a game to nano7kit
 

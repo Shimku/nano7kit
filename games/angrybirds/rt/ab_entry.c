@@ -18,6 +18,7 @@ static int started;
 static int fed_down, fed_id;
 static float fed_x, fed_y;
 static float view_zoom = 1.f;
+static int guest_ok(uint32_t a, uint32_t n);
 
 static uint32_t mk_string(const char *s) {
     uint32_t o = g_malloc(16), p = g_strdup(s);
@@ -106,16 +107,16 @@ int ab_start(void) {
     return 0;
 }
 
-/* panel 240x432 (portrait) -> game 480x320 landscape, home on the right.
- * emit_tri: panel_x = off_x + (fb_h - fy)*scale with fy GL-up = lua y-down
- * inverted, so panel_x = off_x + lua_y * scale. Lua menus and the slingshot
- * hit-test y-down (PLAY is at 180, not GL fy 140). */
+/* Inverse of emit_tri, matching PvZ Nano7PanelToGame (n7gl_dev_a.inc):
+ *   gx = (py - y0) / kx; gy_down = gh - (px - x0) / ky
+ * emit_tri: panel_x = off_x + fy * scale, panel_y = off_y + fx * scale_y
+ * with fy GL-up = fe_fb_h - lua y-down. PLAY is lua (240, 180), not GL fy 140. */
 static void panel_to_game(float px, float py, float *gx, float *gy) {
     float sx = fe_scale, sy = fe_scale_y;
     if (sx < 1e-6f) sx = 1e-6f;
     if (sy < 1e-6f) sy = 1e-6f;
-    *gy = (px - fe_off_x) / sx;
     *gx = (py - fe_off_y) / sy;
+    *gy = fe_fb_h - (px - fe_off_x) / sx;
 }
 
 #ifndef AB_MouseMove
@@ -126,6 +127,12 @@ static void panel_to_game(float px, float py, float *gx, float *gy) {
 #endif
 #ifndef AB_LuaCall
 #define AB_LuaCall 0x7497cu
+#endif
+#ifndef AB_SetPhysicsEnabled
+#define AB_SetPhysicsEnabled 0x5ff8u
+#endif
+#ifndef AB_WorldStep
+#define AB_WorldStep 0x128d20u
 #endif
 #define AB_LBUTTON 57u
 static void send_touch(int began, int moved, int ended, int id, float gx, float gy) {
@@ -174,8 +181,8 @@ void ab_zoom_by(float factor) {
     if (view_zoom > 2.5f) view_zoom = 2.5f;
     fe_scale = 0.75f * view_zoom;
     fe_scale_y = 0.9f * view_zoom;
-    /* keep the panel centre on the same game point */
-    fe_off_x = cx - gy * fe_scale;
+    /* keep the panel centre on the same game point (emit_tri: px = off + fy*sx) */
+    fe_off_x = cx - (fe_fb_h - gy) * fe_scale;
     fe_off_y = cy - gx * fe_scale_y;
 }
 
@@ -187,11 +194,30 @@ void ab_pan_by(float dx, float dy) {
 void ab_frame_q(float dt, const ab_tsample *q, int n) {
     int i;
     if (!started) return;
+    /* Tutorial lua calls setPhysicsEnabled(false) until TUTORIAL_OK is tapped.
+     * GameLua::update then skips b2World::Step. Enable before the update so a
+     * tap in the same frame can still run, and if lua left it off, Step once
+     * after (same 1/30, 10, 10 as GameLua at 0x7fcc) so Level 1 is not frozen. */
+    {
+        ab_phys_info info;
+        ab_phys_snapshot(&info);
+        if (info.dynamic_n > 0 && !info.phys_on)
+            ab_phys_enable(1);
+    }
     for (i = 0; i < n; i++) ab_touch(0, q[i].down, q[i].x, q[i].y);
     if (dt > 0.1f) dt = 0.1f;
     if (dt < 0.001f) dt = 0.001f;
     be_frame_begin();
     if (app && AB_Update) rt_call("update", AB_Update, app, F2U(dt), ctx, 0, 0, 0);
+    {
+        ab_phys_info info;
+        ab_phys_snapshot(&info);
+        if (info.dynamic_n > 0 && !info.phys_on && info.world && guest_ok(info.world, 4u)) {
+            uint32_t st[2] = {0, 0};
+            ab_phys_enable(1);
+            rt_call("b2Step", AB_WorldStep, info.world, 0x3d088889u, 10u, 10u, st, 2);
+        }
+    }
     be_frame_end();
 }
 
@@ -207,6 +233,11 @@ void ab_load_level(const char *name) {
     s = mk_string(name);
     rt_log("ab_load_level %s lua=%08x", name, glu);
     rt_call("loadLevel", AB_LoadLevel, glu, s, 0, 0, 0, 0);
+    /* Menu calls setPhysicsEnabled(false). loadLevel never turns it back on;
+     * lua does after the tutorial OK. The host test and a missed lua bind
+     * would otherwise leave bodies frozen (or, on device, we force it on). */
+    ab_phys_enable(1);
+    ab_phys_log(name);
 }
 
 /* lua::LuaObject::call(char const*): the menu's PLAY sprite is hit-tested at
@@ -222,4 +253,197 @@ void ab_call_lua(const char *name) {
     p = g_strdup(name);
     rt_log("ab_call_lua %s lua=%08x", name, glu);
     rt_call("luaCall", AB_LuaCall, glu, p, 0, 0, 0, 0);
+}
+
+/* b2World lives at GameLua+180; layout from the 1.0 ARM (CreateBody / World ctor):
+ * world+0x19000+552 bodyList, +560 bodyCount, +564 jointCount, +568/+572 gravity,
+ * body+0 type (0 static, 2 dynamic), +12/+16 position, +104 next, +108 fixtures, +112 fixtureCount.
+ * GameLua+364 is the physics-enable byte; +376 the 1/30 accumulator. */
+#define AB_LUA_OFF 652u
+#define AB_WORLD_OFF 180u
+#define AB_PHYS_ON_OFF 364u
+#define AB_ACC_OFF 376u
+#define B2_TAIL 0x19000u
+#define B2_BODY_LIST (B2_TAIL + 552u)
+#define B2_BODY_COUNT (B2_TAIL + 560u)
+#define B2_JOINT_COUNT (B2_TAIL + 564u)
+#define B2_GRAV_X (B2_TAIL + 568u)
+#define B2_GRAV_Y (B2_TAIL + 572u)
+
+static int guest_ok(uint32_t a, uint32_t n) {
+    return a >= g_lo && a + n <= g_hi && a + n >= a;
+}
+
+void ab_phys_snapshot(ab_phys_info *o) {
+    uint32_t glu, world, list, b;
+    int nwalk, nmax;
+    if (!o) return;
+    memset(o, 0, sizeof *o);
+    o->dyn_ymin = 1e9f; o->dyn_ymax = -1e9f;
+    o->stat_ymin = 1e9f; o->stat_ymax = -1e9f;
+    if (!app || !g_mem) return;
+    glu = gr32(app + AB_LUA_OFF);
+    o->lua = glu;
+    if (!guest_ok(glu, AB_ACC_OFF + 4u)) return;
+    o->phys_on = (int)G8(glu + AB_PHYS_ON_OFF)[0];
+    o->acc = U2F(gr32(glu + AB_ACC_OFF));
+    world = gr32(glu + AB_WORLD_OFF);
+    o->world = world;
+    if (!guest_ok(world, B2_GRAV_Y + 4u)) return;
+    nmax = (int)gr32(world + B2_BODY_COUNT);
+    o->contacts_hint = (int)gr32(world + B2_JOINT_COUNT);
+    {
+        uint32_t cm = world + B2_TAIL + 0x1d8u;
+        if (guest_ok(cm, 80u)) {
+            o->contacts = (int)gr32(cm + 64u);
+            o->filter = gr32(cm + 68u);
+        }
+    }
+    o->grav_x = U2F(gr32(world + B2_GRAV_X));
+    o->grav_y = U2F(gr32(world + B2_GRAV_Y));
+    list = gr32(world + B2_BODY_LIST);
+    b = list;
+    for (nwalk = 0; b && nwalk < 256 && nwalk < (nmax > 0 ? nmax + 2 : 256); nwalk++) {
+        int type, nfix, fi;
+        float x, y;
+        uint32_t fx;
+        if (!guest_ok(b, 116u)) break;
+        type = (int)gr32(b + 0u);
+        x = U2F(gr32(b + 12u));
+        y = U2F(gr32(b + 16u));
+        nfix = (int)gr32(b + 112u);
+        o->bodies++;
+        o->fixtures += nfix > 0 ? nfix : 0;
+        if (type == 0) {
+            o->static_n++;
+            if (y < o->stat_ymin) o->stat_ymin = y;
+            if (y > o->stat_ymax) o->stat_ymax = y;
+        } else if (type == 2) {
+            o->dynamic_n++;
+            if (y < o->dyn_ymin) o->dyn_ymin = y;
+            if (y > o->dyn_ymax) o->dyn_ymax = y;
+        }
+        if (o->sample_n < AB_PHYS_SAMPLE) {
+            int k = o->sample_n++;
+            o->sample_type[k] = type;
+            o->sample_x[k] = x;
+            o->sample_y[k] = y;
+        }
+        /* count the fixture list as well, in case m_fixtureCount is stale */
+        fx = gr32(b + 108u);
+        for (fi = 0; fx && fi < 32; fi++) {
+            if (!guest_ok(fx, 28u)) break;
+            fx = gr32(fx + 20u);
+        }
+        if (nfix <= 0 && fi > 0) o->fixtures += fi;
+        b = gr32(b + 104u);
+    }
+    if (o->static_n == 0) { o->stat_ymin = 0.f; o->stat_ymax = 0.f; }
+    if (o->dynamic_n == 0) { o->dyn_ymin = 0.f; o->dyn_ymax = 0.f; }
+}
+
+int ab_phys_resting(const ab_phys_info *o) {
+    /* Level 1 spawn (host dump, physics off): 5 static, 16 dynamic, fixtures on
+     * every body, dyn Y in about -22..-1, static Y in about -1..5. Gravity is
+     * (0,+20). After 10 s of free fall with no ground, dyn Y is y0+1000.
+     * A rest is: physics on, ground statics present, dynamics not fallen away
+     * from the static range. */
+    if (!o || !o->world || !o->phys_on) return 0;
+    if (o->static_n < 1 || o->dynamic_n < 1 || o->fixtures < o->bodies) return 0;
+    if (o->contacts < 1) return 0;
+    if (o->dyn_ymin < -40.f || o->dyn_ymax > 40.f) return 0;
+    return 1;
+}
+
+void ab_phys_enable(int on) {
+    uint32_t glu = app ? gr32(app + AB_LUA_OFF) : 0;
+    if (!glu || !AB_SetPhysicsEnabled) return;
+    rt_call("setPhysicsEnabled", AB_SetPhysicsEnabled, glu, on ? 1u : 0u, 0, 0, 0, 0);
+}
+
+void ab_phys_log(const char *tag) {
+    ab_phys_info i;
+    extern int be_stat_tex_fail;
+    ab_phys_snapshot(&i);
+    rt_log("phys %s lua=%08x world=%08x on=%d n=%d st=%d dyn=%d fix=%d contacts=%d filter=%08x joints=%d "
+           "g=%.2f,%.2f acc=%.3f dynY=%.2f..%.2f stY=%.2f..%.2f rest=%d heap=%u peak=%u tex=%d peak=%d fail=%d",
+           tag ? tag : "-", i.lua, i.world, i.phys_on, i.bodies, i.static_n, i.dynamic_n,
+           i.fixtures, i.contacts, i.filter, i.contacts_hint, (double)i.grav_x, (double)i.grav_y,
+           (double)i.acc, (double)i.dyn_ymin, (double)i.dyn_ymax, (double)i.stat_ymin,
+           (double)i.stat_ymax, ab_phys_resting(&i),
+           (unsigned)rt_heap_used(), (unsigned)rt_heap_peak(),
+           fe_stat_tex_bytes, fe_stat_tex_peak, be_stat_tex_fail);
+    if (i.lua && guest_ok(i.lua, 24u))
+        rt_log("phys %s vtbl lua=%08x +16=%08x +20=%08x filt[0]=%08x",
+               tag ? tag : "-", gr32(i.lua), gr32(i.lua + 16u), gr32(i.lua + 20u),
+               i.filter && guest_ok(i.filter, 4u) ? gr32(i.filter) : 0);
+    if (i.sample_n > 0) {
+        int k;
+        char buf[192];
+        int n = 0;
+        n = snprintf(buf, sizeof buf, "phys %s bodies", tag ? tag : "-");
+        for (k = 0; k < i.sample_n && n > 0 && n < (int)sizeof buf - 24; k++)
+            n += snprintf(buf + n, sizeof buf - (size_t)n, " t%d=%.1f,%.1f",
+                          i.sample_type[k], (double)i.sample_x[k], (double)i.sample_y[k]);
+        rt_log("%s", buf);
+    }
+    if (i.world && guest_ok(i.world, B2_BODY_LIST + 4u)) {
+        uint32_t b = gr32(i.world + B2_BODY_LIST);
+        int nwalk;
+        char buf[220];
+        int n = snprintf(buf, sizeof buf, "phys %s fx", tag ? tag : "-");
+        for (nwalk = 0; b && nwalk < 8 && n > 0 && n < (int)sizeof buf - 48; nwalk++) {
+            uint32_t fx, sh;
+            if (!guest_ok(b, 116u)) break;
+            fx = gr32(b + 108u);
+            sh = fx && guest_ok(fx, 56u) ? gr32(fx + 28u) : 0;
+            n += snprintf(buf + n, sizeof buf - (size_t)n,
+                          " t%d fl=%x prx=%d nvert=%d hx=%.2f hy=%.2f",
+                          (int)gr32(b), (unsigned)(gr32(b + 4u) & 0xffffu),
+                          fx && guest_ok(fx, 44u) ? (int)gr32(fx + 40u) : -2,
+                          sh && guest_ok(sh, 152u) ? (int)gr32(sh + 148u) : -1,
+                          sh && guest_ok(sh, 32u) ? (double)U2F(gr32(sh + 28u)) : -1.0,
+                          sh && guest_ok(sh, 44u) ? (double)U2F(gr32(sh + 40u)) : -1.0);
+            b = gr32(b + 104u);
+        }
+        rt_log("%s", buf);
+    }
+    if (i.world && guest_ok(i.world, B2_GRAV_Y + 4u)) {
+        uint32_t bp = i.world + B2_TAIL + 0x1d8u;
+        uint32_t nodes = guest_ok(bp, 8u) ? gr32(bp + 4u) : 0;
+        uint32_t b = gr32(i.world + B2_BODY_LIST);
+        int nwalk;
+        rt_log("phys %s bp move=%d pair=%d nodes=%08x R0=%.3f,%.3f",
+               tag ? tag : "-",
+               guest_ok(bp, 44u) ? (int)gr32(bp + 40u) : -1,
+               guest_ok(bp, 56u) ? (int)gr32(bp + 52u) : -1,
+               nodes,
+               i.sample_n > 0 && guest_ok(gr32(i.world + B2_BODY_LIST), 36u)
+                   ? (double)U2F(gr32(gr32(i.world + B2_BODY_LIST) + 20u)) : 0.0,
+               i.sample_n > 0 && guest_ok(gr32(i.world + B2_BODY_LIST), 36u)
+                   ? (double)U2F(gr32(gr32(i.world + B2_BODY_LIST) + 32u)) : 0.0);
+        for (nwalk = 0; b && nwalk < 6; nwalk++) {
+            uint32_t fx, nid, node;
+            int prx;
+            if (!guest_ok(b, 116u)) break;
+            fx = gr32(b + 108u);
+            prx = fx && guest_ok(fx, 44u) ? (int)gr32(fx + 40u) : -2;
+            nid = (prx >= 0) ? (uint32_t)prx : 0xffffffffu;
+            node = (nodes && nid != 0xffffffffu) ? nodes + (nid << 5) : 0;
+            rt_log("phys %s aabb t%d y=%.2f prx=%d fx=%.1f,%.1f..%.1f,%.1f node=%.1f,%.1f..%.1f,%.1f ud=%08x cat=%04x",
+                   tag ? tag : "-",
+                   (int)gr32(b), (double)U2F(gr32(b + 16u)), prx,
+                   fx && guest_ok(fx, 16u) ? (double)U2F(gr32(fx + 0u)) : 0.0,
+                   fx && guest_ok(fx, 16u) ? (double)U2F(gr32(fx + 4u)) : 0.0,
+                   fx && guest_ok(fx, 16u) ? (double)U2F(gr32(fx + 8u)) : 0.0,
+                   fx && guest_ok(fx, 16u) ? (double)U2F(gr32(fx + 12u)) : 0.0,
+                   node && guest_ok(node, 16u) ? (double)U2F(gr32(node + 0u)) : 0.0,
+                   node && guest_ok(node, 16u) ? (double)U2F(gr32(node + 4u)) : 0.0,
+                   node && guest_ok(node, 16u) ? (double)U2F(gr32(node + 8u)) : 0.0,
+                   node && guest_ok(node, 16u) ? (double)U2F(gr32(node + 12u)) : 0.0,
+                   node && guest_ok(node, 20u) ? gr32(node + 16u) : 0,
+                   fx && guest_ok(fx, 48u) ? (unsigned)(gr32(fx + 44u) & 0xffffu) : 0);
+            b = gr32(b + 104u);
+        }
+    }
 }

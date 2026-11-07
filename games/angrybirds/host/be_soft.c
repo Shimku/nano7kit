@@ -14,6 +14,7 @@ typedef struct { int used, w, h, fmt_seen; uint8_t *rgba; uint32_t format, type;
 #define MAXT 512
 static tex T[MAXT];
 int be_stat_pvrtc, be_stat_uncompressed, be_tex_peak_bytes, be_tex_bytes;
+int be_stat_tex_fail, be_stat_live_tex;
 int be_check_tiny;           /* triangles under 2 square pixels (the nano driver rule) */
 int be_frame_tris, be_frame_tris_max, be_frame_big, be_frame_big_max;   /* big: what the nano draws */
 
@@ -27,6 +28,13 @@ static void put_rgba(tex *t, int w, int h) {
 }
 void be_tex_image(int h, int level, int w, int ht, uint32_t format, uint32_t type, const void *px) {
     if (h <= 0 || h >= MAXT || level != 0) return;
+    /* Same 512 cap as nano/be_nano.c: a larger upload is a silent no-op on device
+     * (white silhouettes) while the host used to succeed and hide the miss. */
+    if (w > 512 || ht > 512) {
+        be_stat_tex_fail++;
+        fprintf(stderr, "tex fail %dx%d >512 (nano be_tex_image cap)\n", w, ht);
+        return;
+    }
     tex *t = &T[h];
     t->format = format; t->type = type;
     be_stat_uncompressed++;

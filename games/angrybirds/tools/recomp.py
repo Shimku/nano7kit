@@ -1032,9 +1032,13 @@ class Emitter:
                     return Dset(dd, "-(%s)" % D(dm))
                 if opc == 3 and (w & 0x40):
                     return Dset(dd, "sqrt(%s)" % D(dm))
-                if opc in (8, 9, 10, 11):  # FCMP
-                    return ("{double a_=%s,b_=%s;n_=a_<b_;z_=a_==b_;c_=!(a_<b_);v_=a_!=a_||b_!=b_;"
-                            "FPSCR=(FPSCR&0x0fffffffu)|(n_<<31)|(z_<<30)|(c_<<29)|(v_<<28);}" % (
+                if opc in (8, 9, 10, 11):  # FCMP: FPSCR only. APSR stays until FMSTAT.
+                    # ARM VCMP does not write APSR; Box2D ComputeAABB is
+                    # VCMP / VMRS / VCMP / VMOVPL, so assigning n_ here made
+                    # the second compare clobber the first and collapsed AABBs
+                    # to the last vertex (ground became a point, pigs fell through).
+                    return ("{double a_=%s,b_=%s;uint32_t nn_=a_<b_,zz_=a_==b_,cc_=!(a_<b_),vv_=a_!=a_||b_!=b_;"
+                            "FPSCR=(FPSCR&0x0fffffffu)|(nn_<<31)|(zz_<<30)|(cc_<<29)|(vv_<<28);}" % (
                         D(dd), "0.0" if opc in (10, 11) else D(dm)))
                 if opc == 15 and (w & 0x40):  # FCVTSD (double encoding, dest is S)
                     sd = (vd << 1) | dbit
@@ -1057,8 +1061,8 @@ class Emitter:
                 if opc == 3 and (w & 0x40):
                     return Sset(dd, "sqrtf(%s)" % S(dm))
                 if opc in (8, 9, 10, 11):
-                    return ("{float a_=%s,b_=%s;n_=a_<b_;z_=a_==b_;c_=!(a_<b_);v_=a_!=a_||b_!=b_;"
-                            "FPSCR=(FPSCR&0x0fffffffu)|(n_<<31)|(z_<<30)|(c_<<29)|(v_<<28);}" % (
+                    return ("{float a_=%s,b_=%s;uint32_t nn_=a_<b_,zz_=a_==b_,cc_=!(a_<b_),vv_=a_!=a_||b_!=b_;"
+                            "FPSCR=(FPSCR&0x0fffffffu)|(nn_<<31)|(zz_<<30)|(cc_<<29)|(vv_<<28);}" % (
                         S(dd), "0.f" if opc in (10, 11) else S(dm)))
                 if opc == 15 and (w & 0x40):  # FCVTDS (single encoding, dest is D)
                     ddbl = vd | (dbit << 4)

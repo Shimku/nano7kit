@@ -125,11 +125,19 @@ class SourceTests(unittest.TestCase):
         self.assertIn("vmov_rr_d", src)
         self.assertIn("0xec532b16", src)
         self.assertIn("0xa112c", src)
+        # VCMP writes FPSCR only. APSR (n_/z_/c_/v_) is copied by FMSTAT.
+        # Assigning n_ inside VCMP made Box2D ComputeAABB keep the last vertex.
+        self.assertIn("uint32_t nn_=a_<b_", src)
+        self.assertIn("FMSTAT", src)
+        self.assertNotIn("n_=a_<b_;z_=a_==b_;c_=!(a_<b_);v_=a_!=a_||b_!=b_;", src)
 
     def test_nano_image_is_thumb_soft_with_arm_setjmp(self):
         mk = (GAME / "nano" / "Makefile").read_text()
         self.assertIn("ARCH_RECOMP := -mthumb", mk)
         self.assertIn("-mfloat-abi=soft", mk)
+        self.assertIn("recomp_14.o", mk)
+        self.assertIn("recomp_15.o", mk)
+        self.assertIn("Box2D", mk)
         jmp = (GAME / "nano" / "fn_jmp.S").read_text()
         self.assertIn(".set setjmp, fn_setjmp", jmp)
         self.assertIn(".set longjmp, fn_longjmp", jmp)
@@ -145,7 +153,8 @@ class SourceTests(unittest.TestCase):
         self.assertIn("ab_pan_by", nano)
         self.assertIn("HB_BTN_VOL_UP", nano)
         self.assertIn("fe_scale = 0.75f * view_zoom", entry)
-        self.assertIn("*gy = (px - fe_off_x) / sx", entry)
+        self.assertIn("*gy = fe_fb_h - (px - fe_off_x) / sx", entry)
+        self.assertIn("Nano7PanelToGame", entry)
         self.assertIn("lua y-down", entry)
         self.assertIn("AB_LBUTTON", entry)
         self.assertIn("mouseMove", entry)
@@ -155,17 +164,45 @@ class SourceTests(unittest.TestCase):
         self.assertIn("for(int i_=0;i_<%du;i_++)", (GAME / "tools" / "recomp.py").read_text())
         gl = (GAME / "rt" / "fngl.c").read_text()
         self.assertIn("Home on the right", gl)
+        self.assertIn("n7gl_dev_a.inc", gl)
+        self.assertIn("sv[i].x = fe_off_x + fy * fe_scale", gl)
+        self.assertNotIn("gyd = fe_fb_h - fy", gl)
         self.assertIn("init_once()", gl)
         self.assertIn("frontface == 0x0900u", gl)
         self.assertIn("_glFrontFace", gl)
         self.assertIn("_glTexSubImage2D", gl)
         self.assertIn("I__glTexImage2D", gl)
+        host = (GAME / "host" / "main.c").read_text()
+        self.assertIn("P6 432 240", host)
+        self.assertIn("n7soft_shot", host)
+        self.assertIn("px = 239 - gy", host)
+        self.assertIn("AB_PHYS_TEST", host)
+        self.assertIn("ab_phys_snapshot", entry)
+        self.assertIn("ab_phys_resting", entry)
+        self.assertIn("o->contacts < 1", entry)
+        self.assertIn("Level1", host)
+        self.assertIn("Level4", host)
+        self.assertIn("loadNextLevel", host)
+        self.assertIn("300", host)
+        self.assertIn("TUTORIAL_OK", host)
+        self.assertIn("49.f, 324.f", host)
+        self.assertIn("0x128d20u", entry)
+        self.assertIn("b2Step", entry)
+        nano_be = (GAME / "nano" / "be_nano.c").read_text()
+        self.assertIn("tex fail", nano_be)
+        self.assertIn("w > 512", (GAME / "host" / "be_soft.c").read_text())
 
     def test_convert_skips_audio(self):
         src = (GAME / "tools" / "convert_assets.py").read_text()
         self.assertIn(".wav", src)
         self.assertIn(".mp3", src)
-        self.assertIn("MAX_KEEP = 256", src)
+        self.assertIn("INGAME_KEEP = 256", src)
+        self.assertIn("UI_KEEP = 512", src)
+        self.assertIn("keep_for", src)
+        self.assertIn("HQ_KEEP", src)
+        self.assertIn('"MENU"', src)
+        self.assertIn('"SPLASHES"', src)
+        self.assertIn('"TUTORIALS"', src)
         self.assertIn("needed_shift", src)
         self.assertIn("texscale", src)
         self.assertIn('dest / "texscale"', src)
@@ -188,3 +225,28 @@ class PayloadTests(unittest.TestCase):
         self.assertTrue(facts["ok"], facts.get("problems"))
         self.assertEqual(facts["sha256"], ab.EXE_SHA256)
         self.assertEqual(facts["cryptid"], 0)
+
+
+ABHOST = ROOT / "build" / "angrybirds_rc" / "recomp" / "abhost"
+ABDATA = ROOT / "build" / "angrybirds_rc" / "data"
+
+
+@unittest.skipUnless(ABHOST.is_file() and (ABDATA / "guest.img").is_file(),
+                     "needs a built abhost and converted data/")
+class PhysicsHarnessTests(unittest.TestCase):
+    def test_levels_1_4_bodies_rest_on_ground(self):
+        import subprocess
+        env = os.environ.copy()
+        env["AB_PHYS_TEST"] = "1"
+        env["AB_PHYS_WARM"] = "200"
+        env["AB_PHYS_STEPS"] = "300"
+        out = ROOT / "build" / "angrybirds_rc" / "phys-test"
+        out.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(
+            [str(ABHOST), str(ABDATA), str(ABDATA / "guest.img"), str(out), "1", "0"],
+            env=env, capture_output=True, text=True, timeout=300)
+        err = (r.stderr or "") + (r.stdout or "")
+        self.assertIn("AB_PHYS_TEST PASS", err, err[-6000:])
+        self.assertEqual(r.returncode, 0, err[-3000:])
+        self.assertIn("Level1", err)
+        self.assertIn("Level4", err)

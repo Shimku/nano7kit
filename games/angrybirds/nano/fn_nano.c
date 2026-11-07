@@ -24,10 +24,10 @@
 
 #define BLOCK_MAX   0x200000u           /* 2.0 MB: cstring+DATA ~80 KB + 1.29 MB heap peak + 128 KB stack */
 #define BLOCK_MIN   0x190000u           /* 1.56 MB: leftover in the 4.0 MB hole after a ~2.45 MB image */
-#define GL_KEEP     0x100000u           /* left to the GL driver; textures are pre-scaled at convert time */
+#define GL_KEEP     0x180000u           /* left to the GL driver; MENU/splash/tutorials at 512, rest 256 */
 #define DATA_DIR_GL "/Apps/Data/AngryBirds"
 #define BYTES_PER_TRIANGLE 3000u        /* the GL driver's cost per triangle, as measured for Temple Run */
-#define AFTER_MIN   0xE0000u            /* free after the block: downscaled splash/INGAME sheets + triangles */
+#define AFTER_MIN   0x1A0000u           /* free after the block: UI 512 sheets (~1.5 MB live) + triangles */
 extern int be_budget, be_panel_w, be_panel_h, be_stat_tris, be_stat_tiny, be_stat_over, be_stat_draws,
            be_stat_live_tex, be_stat_tex_fail;
 extern void plat_log_flush(void);
@@ -264,6 +264,8 @@ void fn_nano_frame(int w, int h, uint32_t n) {
     if (was_down || nq) w_down++;
     if (!nq && was_down) { w_dry++; if (++w_dry_run > w_dry_max) w_dry_max = w_dry_run; } else w_dry_run = 0;
     ab_frame_q(dt, q, nq);
+    if (frames == 0 || frames % 90u == 0)
+        ab_phys_log(frames == 0 ? "start" : "tick");
     if (t_report) {
         t_report = 0;
         logf_("nano7kit press %u at %d,%d: %u samples from the OS list, %u from the mailbox, %u stale",
@@ -287,9 +289,11 @@ void fn_nano_frame(int w, int h, uint32_t n) {
         w_ms0 = ms; w_frames = w_down = w_dry = w_dry_max = w_dt_max = 0; w_dt_min = 0;
     }
     if (frames == 60 || ms - last_flush_ms > 20000u) {
-        logf_("nano7kit frame %u: %d tris (%d small, %d over budget), %d draws, heap free %u, guest heap %u, textures %d live %d failed, archive reads %u (%u KB)",
+        logf_("nano7kit frame %u: %d tris (%d small, %d over budget), %d draws, heap free %u largest %u, guest heap %u, textures %d live %d failed %d bytes, archive reads %u (%u KB)",
               (unsigned)frames, be_stat_tris, be_stat_tiny, be_stat_over, be_stat_draws, (unsigned)hb_os_heap_free(),
-              (unsigned)rt_heap_used(), be_stat_live_tex, be_stat_tex_fail, (unsigned)rt_varch_reads, (unsigned)(rt_varch_bytes >> 10));
+              (unsigned)hb_os_heap_largest(), (unsigned)rt_heap_used(), be_stat_live_tex, be_stat_tex_fail,
+              fe_stat_tex_bytes, (unsigned)rt_varch_reads, (unsigned)(rt_varch_bytes >> 10));
+        ab_phys_log("flush");
         if (host_outside_count)
             logf_("nano7kit front end outside the block: %u bytes now, %u peak, %u allocations",
                   (unsigned)host_outside, (unsigned)host_outside_peak, (unsigned)host_outside_count);

@@ -31,22 +31,22 @@ IPA_SHA256_PREFIX = "cdea1290"
 CMD = "./start nabase add 'Angry Birds' --payload /path/to/AngryBirds.ipa"
 FAT_EXE = "/Apps/Executables/Angry Birds.hbapp"
 FAT_DATA = "/Apps/Data/AngryBirds"
-RECIPE = 1
+RECIPE = 3
 
 # Memory model. IMAGE_BYTES is the loaded .hbapp span (code + log in .bss).
 # The translated engine is Thumb + software float so this fits; runtime/GL stay ARM+VFP.
 # Guest.img is __cstring through DATA (~80 KB); original ARM TEXT is not mapped
 # (PC-relative pools are folded into C). Lua/Box2D heap still peaks at 1.29 MB.
-# Textures are halved at convert time so INGAME.pvr is not a 1.8 MB decode.
-IMAGE_BYTES = 2_307_904 + 4096          # span of angrybirds.hbapp from mkrelocapp, plus align; updated after nano link
+# Textures: MENU/SPLASHES/TUTORIALS keep 512, the rest 256 (see convert_assets).
+IMAGE_BYTES = 2_392_192 + 4096          # span of angrybirds.hbapp from mkrelocapp, plus align
 BLOCK_MAX = 0x200000
 BLOCK_MIN = 0x190000
-GL_KEEP = 0x100000
-AFTER_MIN = 0xE0000
+GL_KEEP = 0x180000
+AFTER_MIN = 0x1A0000
 SLOP = 0x10000
 HEAP_PEAK = 1_300_000
 SMALL_BYTES = 40_000
-TEXTURE_BYTES = 1_520_000                 # pre-scaled RGBA4444 sheets, POT-padded (Ka3D UV space)
+TEXTURE_BYTES = 2_105_344                 # host peak, MENU+SPLASHES+TUTORIALS keep 512, rest 256
 BYTES_PER_TRIANGLE = 3000
 BUDGET_MIN, BUDGET_MAX = 300, 1200
 TRIS_DRAWN_MAX = 800
@@ -160,7 +160,7 @@ def build(payload: Path, *, force: bool = False) -> dict:
     print("==> recomp.py (ARM+VFP -> C)")
     _run_make([str(py), str(game_dir() / "tools" / "recomp.py"), str(facts["exe"]), str(recomp)],
               out, out / "recomp.log")
-    print("==> convert_assets.py (skip wav/mp3, half large PVR/PNG)")
+    print("==> convert_assets.py (skip wav/mp3, MENU/SPLASHES/TUTORIALS keep 512, rest 256)")
     _run_make([str(py), str(game_dir() / "tools" / "convert_assets.py"), str(facts["app"]), str(data)],
               out, out / "convert.log")
     print("==> arm-none-eabi-gcc libab_nano.a")

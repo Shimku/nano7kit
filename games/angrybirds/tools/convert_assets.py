@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Downscale Angry Birds 1.0 textures for the nano heap. Never commits game files.
 
-Copies data/ from the user's .app: Lua as-is, named sprite .dat coords scaled with
-their texture, wav/mp3 skipped. Large PVR/PNG (max side > 256) are halved so
-INGAME.pvr's 992x935 RGBA4444 does not decode to a 1.8 MB guest allocation.
+Copies data/ from the user's .app: Lua as-is, named sprite .dat left at original
+pixel sizes (UV wrap is undone from texscale). wav/mp3 skipped.
+
+INGAME sheets fill a zoomed camera on a 240-wide panel, so keep 256. Menu, splash,
+fonts, cutscenes, tutorials and level-select fill the 480x320 frame: keep 512
+(one fewer halve than INGAME). Original 1024 sheets are ~1 MB POT 16-bit each
+and do not fit the 6.4/4.0 probe together with the guest block; 512 does.
+The nano GLES upload cap is 512 on a side (be_tex_image).
 """
 from __future__ import annotations
 
@@ -16,7 +21,27 @@ from pathlib import Path
 SKIP_AUDIO = {".wav", ".mp3", ".caf", ".aif", ".aiff", ".m4a"}
 # named sprite-sheet .dat: u16 BE name, u16 BE count, then name + 6 x u16 BE per sprite
 SHEET_DAT = True
-MAX_KEEP = 256
+INGAME_KEEP = 256
+UI_KEEP = 512
+MAX_KEEP = UI_KEEP  # default / tests: UI sheets; INGAME uses INGAME_KEEP
+# Host PHYS_TEST with every 1024-class UI sheet at 512 was 3,211,264 live
+# (all sheets preload). After the 2 MB guest block the 6.4/4.0 probe has
+# about 2.30 MB. All-256 live is ~1.52 MB (PVRTC INGAME_6/7/8).
+# MENU+SPLASHES+TUTORIALS at 512 measured 2,105,344 (196 KB spare). Adding
+# fonts (2,228,224) left 73 KB, too tight for the GL driver. MENU_1 is hills
+# as 512x512 (+384 KB) and does not fit with the three 512x256 sheets.
+HQ_KEEP = {
+    "MENU", "SPLASHES", "TUTORIALS",
+}
+
+
+def keep_for(stem: str) -> int:
+    u = stem.upper()
+    if u.startswith("INGAME"):
+        return INGAME_KEEP
+    if u in HQ_KEEP:
+        return UI_KEEP
+    return INGAME_KEEP
 
 
 def pvr_header(data: bytes):
@@ -292,15 +317,15 @@ def scale_sheet_dat(data: bytes, shift: int) -> bytes:
     return bytes(out)
 
 
-def needed_shift(w: int, h: int) -> int:
+def needed_shift(w: int, h: int, keep: int = MAX_KEEP) -> int:
     s = 0
-    while max(w, h) > MAX_KEEP and s < 8:
+    while max(w, h) > keep and s < 8:
         w, h = max(1, w // 2), max(1, h // 2)
         s += 1
     return s
 
 
-def convert_pvr(src: Path, dst: Path, shift: int) -> tuple:
+def convert_pvr(src: Path, dst: Path, shift: int, keep: int = MAX_KEEP) -> tuple:
     raw = src.read_bytes()
     h = pvr_header(raw)
     body = raw[h["hl"]:h["hl"] + h["datalen"]]
@@ -318,7 +343,7 @@ def convert_pvr(src: Path, dst: Path, shift: int) -> tuple:
         return w, ht, False
     did = False
     for _ in range(shift):
-        if max(w, ht) <= MAX_KEEP:
+        if max(w, ht) <= keep:
             break
         rgba, w, ht = box_half(rgba, w, ht)
         did = True
@@ -326,11 +351,11 @@ def convert_pvr(src: Path, dst: Path, shift: int) -> tuple:
     return w, ht, did
 
 
-def convert_png(src: Path, dst: Path, shift: int) -> tuple:
+def convert_png(src: Path, dst: Path, shift: int, keep: int = MAX_KEEP) -> tuple:
     rgba, w, h = load_png(src.read_bytes())
     did = False
     for _ in range(shift):
-        if max(w, h) <= MAX_KEEP:
+        if max(w, h) <= keep:
             break
         rgba, w, h = box_half(rgba, w, h)
         did = True
@@ -363,8 +388,9 @@ def convert_tree(app: Path, dest: Path) -> dict:
         out.parent.mkdir(parents=True, exist_ok=True)
         if suf == ".pvr":
             hdr = pvr_header(src.read_bytes())
-            need = needed_shift(hdr["w"], hdr["h"])
-            w, h, did = convert_pvr(src, out, need)
+            keep = keep_for(src.stem)
+            need = needed_shift(hdr["w"], hdr["h"], keep)
+            w, h, did = convert_pvr(src, out, need, keep)
             if did:
                 scaled[src.stem] = need
                 n_scale += 1
@@ -372,8 +398,9 @@ def convert_tree(app: Path, dest: Path) -> dict:
                 n_copy += 1
         elif suf == ".png":
             _, pw, ph = load_png(src.read_bytes())
-            need = needed_shift(pw, ph)
-            w, h, did = convert_png(src, out, need)
+            keep = keep_for(src.stem)
+            need = needed_shift(pw, ph, keep)
+            w, h, did = convert_png(src, out, need, keep)
             if did:
                 scaled[src.stem] = need
                 n_scale += 1

@@ -45,10 +45,18 @@ int plat_file_write(const char *name, const void *src, uint32_t n) {
     fprintf(stderr, "saved %s (%u bytes)\n", name, n); return 0;
 }
 static void shot(int frame) {
+    /* Same home-on-right landscape dump as PvZ n7soft_shot: rotate the portrait
+     * panel (240x432, y down) so Home is on the right. A raw 240x432 P6 looked
+     * "upright" in a portrait viewer and hid the 180-turn / horizontal mirror
+     * that the iPod shows when held like the other landscape nano7kit apps. */
     char p[512]; snprintf(p, sizeof p, "%s/frame-%05d.ppm", out_dir, frame);
     FILE *f = fopen(p, "wb"); if (!f) return;
-    fprintf(f, "P6 240 432 255\n");
-    for (int y = 0; y < 432; y++) for (int x = 0; x < 240; x++) fwrite(be_fb[y][x], 1, 3, f);
+    fprintf(f, "P6 432 240 255\n");
+    for (int gy = 0; gy < 240; gy++)
+        for (int gx = 0; gx < 432; gx++) {
+            int px = 239 - gy, py = gx;
+            fwrite(be_fb[py][px], 1, 3, f);
+        }
     fclose(f);
 }
 int main(int argc, char **argv) {
@@ -66,6 +74,52 @@ int main(int argc, char **argv) {
     if (rt_init(block, size)) return 1;
     if (ab_start()) return 1;
     fprintf(stderr, "init ok: heap used %u peak %u\n", rt_heap_used(), rt_heap_peak());
+    if (getenv("AB_PHYS_TEST")) {
+        static const char *levels[] = { "Level1", "Level2", "Level3", "Level4" };
+        int warm = atoi(getenv("AB_PHYS_WARM") ? getenv("AB_PHYS_WARM") : "200");
+        int steps = atoi(getenv("AB_PHYS_STEPS") ? getenv("AB_PHYS_STEPS") : "300");
+        int fail = 0, li;
+        for (int f = 0; f < warm; f++) { fake_us += 33333; ab_frame(1.f / 30.f); }
+        ab_call_lua("gotoFirstLevel");
+        ab_phys_enable(1);
+        for (int f = 0; f < 30; f++) { fake_us += 33333; ab_frame(1.f / 30.f); }
+        /* TUTORIAL_OK gold check, measured on the PvZ-style 432x240 dump
+         * (landscape ~324,190 -> panel 49,324). Dismisses the overlay so lua
+         * itself sets physicsEnabled; ab_frame_q also Steps if it stays off. */
+        ab_touch(0, 1, 49.f, 324.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        ab_touch(0, 0, 49.f, 324.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        ab_phys_log("warm");
+        for (li = 0; li < 4; li++) {
+            int f, ok0, ok;
+            ab_phys_info a, b;
+            if (li > 0) {
+                /* Same path as the in-game next-level button. C++ loadLevel("Level2")
+                 * from the harness did not spawn bodies; lua loadNextLevel does. */
+                ab_call_lua("loadNextLevel");
+                ab_phys_enable(1);
+                ab_phys_log(levels[li]);
+            }
+            ab_phys_enable(1);
+            ab_phys_snapshot(&a);
+            ok0 = ab_phys_resting(&a);
+            for (f = 0; f < steps; f++) { fake_us += 33333; ab_frame(1.f / 30.f); }
+            ab_phys_snapshot(&b);
+            ab_phys_log(levels[li]);
+            ok = ab_phys_resting(&b);
+            fprintf(stderr, "AB_PHYS_TEST %s: start rest=%d n=%d st=%d dyn=%d fix=%d dynY=%.2f after %d rest=%d n=%d st=%d dyn=%d fix=%d dynY=%.2f..%.2f stY=%.2f\n",
+                    levels[li], ok0, a.bodies, a.static_n, a.dynamic_n, a.fixtures, (double)a.dyn_ymin,
+                    steps, ok, b.bodies, b.static_n, b.dynamic_n, b.fixtures,
+                    (double)b.dyn_ymin, (double)b.dyn_ymax, (double)b.stat_ymin);
+            /* must not auto-win immediately (bodies gone / fallen) and must rest on ground */
+            if (!ok || b.dynamic_n < 1 || (ok0 && b.dynamic_n == 0)) fail++;
+            if (every) shot(1000 + li);
+        }
+        fprintf(stderr, "AB_PHYS_TEST %s (%d levels failed)\n", fail ? "FAIL" : "PASS", fail);
+        return fail ? 1 : 0;
+    }
     for (int f = 0; f < frames; f++) {
         fake_us += 33333;
         /* script: "t0:x0,y0,x1,y1,len;..." a drag from (x0,y0) to (x1,y1) over len frames, panel px */
@@ -83,6 +137,8 @@ int main(int argc, char **argv) {
             ab_load_level(getenv("AB_LOAD_LEVEL"));
         if (getenv("AB_LUA") && f == atoi(getenv("AB_LUA_AT") ? getenv("AB_LUA_AT") : "200"))
             ab_call_lua(getenv("AB_LUA"));
+        if (getenv("AB_PHYS") && (f == 1 || f % 30 == 0))
+            ab_phys_log(f == 1 ? "f1" : "frame");
         if (getenv("AB_BURST") && f == 110) {   /* the nano case: a whole drag sampled inside one frame */
             int nb = atoi(getenv("AB_BURST")); ab_tsample q[8];
             for (int i = 0; i < nb && i < 8; i++) {

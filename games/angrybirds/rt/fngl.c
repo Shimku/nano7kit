@@ -386,11 +386,15 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         float iw = 1.f / p->p[3];
         float nx = p->p[0] * iw, ny = p->p[1] * iw, nz = p->p[2] * iw;
         float fx = (float)vx + (nx * 0.5f + 0.5f) * (float)vw, fy = (float)vy + (ny * 0.5f + 0.5f) * (float)vh;
-        /* landscape-right onto the portrait panel: hold the nano with Home on the right.
-         * game x (0..480, toward Home) -> panel y; game y-down (0..320) -> panel x. */
-        float gx = fx, gyd = fe_fb_h - fy;
-        sv[i].x = fe_off_x + gyd * fe_scale;
-        sv[i].y = fe_off_y + gx * fe_scale_y;
+        /* Same home-on-right map as PvZ n7gl_dev_a.inc:
+         *   px = x0 + fy * ky, py = y0 + fx * kx
+         * (logical top / GL fy = framebuffer height sits at large panel x = portrait RIGHT).
+         * Fruit Ninja is already portrait in GL so it only scales fx,fy. An extra
+         * (fb_h - fy) here put Angry Birds' top on portrait LEFT, which is a 180
+         * turn vs PvZ/FN when held with Home on the right, and a horizontal mirror
+         * if the player instead holds Home on the left to make the sky upright. */
+        sv[i].x = fe_off_x + fy * fe_scale;
+        sv[i].y = fe_off_y + fx * fe_scale_y;
         if (getenv("AB_DUMP_V")) {
             static int dumpn;
             if (dumpn < 400) {
@@ -406,9 +410,9 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
     }
     if (en_cull && cullmode != 0x408) {
         float area = (sv[1].x - sv[0].x) * (sv[2].y - sv[0].y) - (sv[2].x - sv[0].x) * (sv[1].y - sv[0].y);
-        /* Home-on-right is a y-flip and an x/y swap, so winding is preserved from
-         * GL (unlike Fruit Ninja's y-flip only). Panel y still points down. */
-        int ccw = area > 0;
+        /* (fx,fy) -> (fy,fx) is a reflection (det -1), so GL winding reverses in
+         * panel pixels, same as Fruit Ninja's y-flip. Panel y still points down. */
+        int ccw = area < 0;
         int front = frontface == 0x0900u ? !ccw : ccw; /* GL_CW vs GL_CCW */
         if ((cullmode == 0x405 && !front) || (cullmode == 0x404 && front)) return;
     }

@@ -33,6 +33,11 @@ $(BUILD)/nano/%.o: %.c
 $(BUILD)/nano/fn_jmp.o: fn_jmp.S
 	@mkdir -p $(dir $@)
 	$(CC) $(ARCH) -c $< -o $@
+# Box2D (b2World::Step, CreateBody, collide) lives in recomp_14/15. Fruit Ninja
+# compiles the whole engine ARM+softfp+VFP; Angry Birds keeps Thumb+soft for
+# size except these two files, so device float matches the working FN ABI.
+$(BUILD)/recomp/recomp_14.o $(BUILD)/recomp/recomp_15.o: CFLAGS_RECOMP := $(ARCH) $(CCOMMON) -fomit-frame-pointer \
+          -fno-align-functions -fno-align-jumps -fno-align-loops -fno-align-labels
 $(BUILD)/recomp/%.o: $(RECOMP)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS_RECOMP) -w -c $< -o $@

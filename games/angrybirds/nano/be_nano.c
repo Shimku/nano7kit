@@ -6,6 +6,7 @@
  * a per-frame triangle budget, at most FN_MAX_TEX live textures). */
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 #include "gl.h"
 #include "../rt/fngl.h"
@@ -117,13 +118,24 @@ void be_tex_param(int h, uint32_t p, uint32_t v) {
 }
 void be_tex_image(int h, int level, int w, int ht, uint32_t format, uint32_t type, const void *px) {
     if (!h || level) return;
-    if (w > 512 || ht > 512) { be_stat_tex_fail++; return; }
+    if (w > 512 || ht > 512) {
+        char b[80];
+        be_stat_tex_fail++;
+        snprintf(b, sizeof b, "tex fail %dx%d >512", w, ht);
+        plat_log_line(b);
+        return;
+    }
     while (glGetError()) {}
     glBindTexture(GL_TEXTURE_2D, (GLuint)h);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexImage2D(GL_TEXTURE_2D, 0, (GLint)format, w, ht, 0, format, type, px);
-    if (glGetError()) be_stat_tex_fail++;
+    if (glGetError()) {
+        char b[80];
+        be_stat_tex_fail++;
+        snprintf(b, sizeof b, "tex upload fail %dx%d", w, ht);
+        plat_log_line(b);
+    }
 }
 void be_tex_compressed(int h, int level, uint32_t fmt, int w, int ht, const void *data, uint32_t size) {
     if (!h || level) return;
@@ -132,5 +144,10 @@ void be_tex_compressed(int h, int level, uint32_t fmt, int w, int ht, const void
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glCompressedTexImage2D(GL_TEXTURE_2D, 0, fmt, w, ht, 0, (GLsizei)size, data);
-    if (glGetError()) be_stat_tex_fail++;
+    if (glGetError()) {
+        char b[96];
+        be_stat_tex_fail++;
+        snprintf(b, sizeof b, "tex compressed fail %dx%d", w, ht);
+        plat_log_line(b);
+    }
 }

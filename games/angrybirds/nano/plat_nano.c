@@ -105,7 +105,7 @@ uint64_t plat_time_us(void) {
 }
 
 /* ---- log: kept in memory, written to log.txt after start-up, every so often and on a fatal - */
-#define LOG_CAP 16384u
+#define LOG_CAP 32768u
 /* the log and the archive chunk live in .bss, inside the app image the resident frees on
  * unload: an hb_os_alloc here would outlive the app (there is no quit callback) */
 static char log_store[LOG_CAP + SLACK] __attribute__((aligned(64)));
