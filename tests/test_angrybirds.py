@@ -49,6 +49,8 @@ class FitTests(unittest.TestCase):
         self.assertIn("256u * 1024u", core)
         self.assertIn("plat_os_largest", core)
         self.assertIn("AB_NO_OUTSIDE", core)
+        self.assertIn("Address-ordered", core)
+        self.assertIn("guest overflow", core)
         rth = (GAME / "rt" / "rt.h").read_text()
         self.assertIn("#define AT(a, n) (M + (uint32_t)(a))", rth)
         self.assertIn("rt_outside_ptr", rth)
@@ -196,8 +198,22 @@ class SourceTests(unittest.TestCase):
         self.assertIn("n7soft_shot", host)
         self.assertIn("px = 239 - gy", host)
         self.assertIn("AB_PHYS_TEST", host)
+        self.assertIn("AB_LEVELS_TEST", host)
+        self.assertIn("play_pixels", host)
+        self.assertIn("AB_LEVELS_MIN", host)
+        self.assertIn("ab_load_lua_level", host)
         self.assertIn("ab_phys_snapshot", entry)
         self.assertIn("ab_phys_resting", entry)
+        self.assertIn("ab_cam_fit_play", entry)
+        self.assertIn("ab_load_lua_level", entry)
+        self.assertIn("castleCameraData", entry)
+        self.assertIn("0.20f", entry)
+        self.assertIn("hx < 80.f", entry)
+        self.assertIn("levelLeftEdge", entry)
+        self.assertIn("fe_reset_matrices", entry)
+        self.assertIn("fe_reset_matrices", (GAME / "rt" / "fngl.c").read_text())
+        self.assertIn("AB_SetTheme", entry)
+        self.assertIn("screenToWorldTransform", entry)
         self.assertIn("o->contacts < 1", entry)
         self.assertIn("Level1", host)
         self.assertIn("Level4", host)
@@ -205,6 +221,13 @@ class SourceTests(unittest.TestCase):
         self.assertIn("300", host)
         self.assertIn("TUTORIAL_OK", host)
         self.assertIn("49.f, 324.f", host)
+        self.assertIn("55.f, 333.f", host)
+        self.assertIn("pouch bird", host)
+        self.assertIn("pix < 800", host)
+        self.assertIn("0.19f", host)
+        self.assertIn("pin_touch_count", entry)
+        self.assertIn("ab_ready_slingshot", entry)
+        self.assertIn("birdReady", entry)
         self.assertIn("0x128d20u", entry)
         self.assertIn("b2Step", entry)
         nano_be = (GAME / "nano" / "be_nano.c").read_text()
@@ -272,11 +295,12 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("guest block 2097152", err)
         self.assertNotIn("guest heap exhausted", err)
 
-    def test_menu_png_exhausts_device_heap_without_outside(self):
+    def test_menu_png_fits_guest_with_address_ordered_first_fit(self):
         """Same 2 MB first-fit heap and splash->INGAME->MENU load as the iPod.
 
-        HQ MENU 512 is 505x255 RGBA = 515100. With decode kept in the guest
-        block (AB_NO_OUTSIDE) that new[] fails: ~770 KB free, no 515 KB hole.
+        HQ MENU 512 is 505x255 RGBA = 515100. Address-ordered fpush coalesces
+        so that decode fits in-guest when AB_NO_OUTSIDE forces it. Play still
+        puts 256 KB+ on the OS heap so lua/Box2D keep the 2 MB block.
         """
         import subprocess
         env = os.environ.copy()
@@ -287,11 +311,10 @@ class PhysicsHarnessTests(unittest.TestCase):
             [str(ABHOST), str(ABDATA), str(ABDATA / "guest.img"), str(out), "300", "0"],
             env=env, capture_output=True, text=True, timeout=180)
         err = (r.stderr or "") + (r.stdout or "")
-        self.assertEqual(r.returncode, 3, err[-4000:])
+        self.assertEqual(r.returncode, 0, err[-4000:])
         self.assertIn("Loading image data/data/MENU.png", err)
-        self.assertIn("515100 bytes wanted", err)
-        self.assertIn("out of guest memory (new[])", err)
-        self.assertIn("guest heap exhausted", err)
+        self.assertNotIn("guest heap exhausted", err)
+        self.assertNotIn("out of guest memory", err)
 
     def test_playthrough_splash_menu_level1_slingshot(self):
         import subprocess
@@ -311,3 +334,43 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("before rest=1", err)
         self.assertNotIn("guest heap exhausted", err)
         self.assertNotIn("out of guest memory", err)
+
+    def test_every_shipped_level_draws_objects(self):
+        import subprocess
+        levels = sorted(
+            int(p.stem[5:]) for p in ABDATA.glob("Level*.lua") if p.stem[5:].isdigit())
+        self.assertGreaterEqual(len(levels), 2)
+        env = os.environ.copy()
+        env["AB_LEVELS_TEST"] = "1"
+        env["AB_PHYS_WARM"] = "180"
+        env["AB_LEVELS_SETTLE"] = "8"
+        out = ROOT / "build" / "angrybirds_rc" / "levels-test"
+        out.mkdir(parents=True, exist_ok=True)
+        # Fresh guest heap per batch: one process through many levels packs the
+        # 2 MB block. Each batch is a reboot-sized session like picking a
+        # level from the map. If a sequential pair (L14 then L15, same theme)
+        # leaves sky tiles behind, retry each level alone the way the map does.
+        def run_range(lo, hi):
+            env["AB_LEVELS_MIN"] = str(lo)
+            env["AB_LEVELS_MAX"] = str(hi)
+            r = subprocess.run(
+                [str(ABHOST), str(ABDATA), str(ABDATA / "guest.img"), str(out), "1", "0"],
+                env=env, capture_output=True, text=True, timeout=180)
+            err = (r.stderr or "") + (r.stdout or "")
+            return r, err
+
+        for i in range(0, len(levels), 5):
+            batch = levels[i:i + 5]
+            r, err = run_range(batch[0], batch[-1])
+            if "AB_LEVELS_TEST PASS" not in err or r.returncode != 0:
+                for lv in batch:
+                    r2, err2 = run_range(lv, lv)
+                    self.assertIn("AB_LEVELS_TEST PASS", err2, err2[-6000:])
+                    self.assertEqual(r2.returncode, 0, err2[-3000:])
+                    self.assertNotIn("guest heap exhausted", err2)
+                    self.assertNotIn("out of guest memory", err2)
+            else:
+                self.assertNotIn("guest heap exhausted", err)
+                self.assertNotIn("out of guest memory", err)
+        self.assertIn(1, levels)
+        self.assertIn(2, levels)

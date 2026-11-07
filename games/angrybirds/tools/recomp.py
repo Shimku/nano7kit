@@ -1265,6 +1265,16 @@ def main():
         "MouseMove": "__ZN7GameApp9mouseMoveEii",
         "LoadLevel": "__ZN7GameLua9loadLevelEN4lang6StringE",
         "LuaCall": "__ZN3lua9LuaObject4callEPKc",
+        "SetPhysicsEnabled": "__ZN7GameLua17setPhysicsEnabledEb",
+        "SetTopLeft": "__ZN7GameLua10setTopLeftEff",
+        "SetWorldScale": "__ZN7GameLua13setWorldScaleEf",
+        "LuaSetNumber": "__ZN3lua8LuaTable9setNumberEPKcf",
+        "LuaSetString": "__ZN3lua8LuaTable9setStringEPKcS2_",
+        "LuaSetBool": "__ZN3lua8LuaTable10setBooleanEPKcb",
+        "LuaGetTable": "__ZN3lua8LuaTable8getTableEPKc",
+        "LuaGetString": "__ZNK3lua8LuaTable9getStringEPKc",
+        "LuaTableD1": "__ZN3lua8LuaTableD1Ev",
+        "SetTheme": "__ZN7GameLua8setThemeEN4lang6StringE",
     }
     with open(os.path.join(outdir, "rt_entry.h"), "w") as fh:
         fh.write("/* generated */\n")

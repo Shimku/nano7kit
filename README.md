@@ -39,7 +39,7 @@ NanoApps' firmware & 40+ apps selection and adds:
 
 ## Install
 
-Already on NanoApps 1.0? Put the iPod in Disk Mode ([docs/BUTTONS.md](docs/BUTTONS.md)) and:
+Already on NanoApps 1.0? Plug the iPod in so Finder mounts it (usually `/Volumes/IPOD`). Use Disk Mode ([docs/BUTTONS.md](docs/BUTTONS.md)) only if that volume is not mounted yet, then:
 
 ```sh
 git clone https://github.com/shimku/nano7kit.git && cd nano7kit && ./install
@@ -76,7 +76,7 @@ In C, with the NanoApps SDK (NanoApps apps run unchanged on this launcher):
 ```sh
 ./start sdk new my_app --title "My App"
 ./start sdk build my_app
-./start nabase add "My App"        # Disk Mode
+./start nabase add "My App"        # copies onto the mounted iPod volume
 ```
 
 Porting a big game: [docs/PORTING.md](docs/PORTING.md) walks through Mario 64, PvZ,

@@ -306,7 +306,7 @@ def _nabase_root(args):
     nano = require_one_nano()
     root = mounted_root(nano)
     if root is None:
-        raise Refused("the iPod is not mounted: put it in Disk Mode and let Finder show it")
+        raise Refused("the iPod is not mounted: plug it in so Finder shows /Volumes/IPOD. Use Disk Mode if it is not mounted yet.")
     return root
 
 
@@ -2366,7 +2366,11 @@ def build_parser() -> argparse.ArgumentParser:
     nb_fl.add_argument("--backup-sha256", default=None)
     nb_fl.add_argument("--serial", default=None)
     for name in ("add", "remove"):
-        x = nb_sub.add_parser(name)
+        x = nb_sub.add_parser(
+            name,
+            help=("copy an app onto the mounted iPod volume (usually /Volumes/IPOD). "
+                  "Disk Mode only if that volume is not mounted yet") if name == "add" else None,
+        )
         x.add_argument("names", nargs="+")
         x.add_argument("--volume", default=None)
         x.add_argument("--rom", default=None)

@@ -6,7 +6,7 @@ the approach of olievans123/nano-templerun; none of its code is used). Nothing f
 Rovio is in git: the translated C, guest.img and converted data/ files are written
 to gitignored build/angrybirds_rc and artifacts/extra only.
 
-Host only. nabase add copies the staged files in Disk Mode afterwards (slot B).
+Host only. nabase add copies the staged files onto the mounted iPod volume afterwards (slot B).
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ IPA_SHA256_PREFIX = "cdea1290"
 CMD = "./start nabase add 'Angry Birds' --payload /path/to/AngryBirds.ipa"
 FAT_EXE = "/Apps/Executables/Angry Birds.hbapp"
 FAT_DATA = "/Apps/Data/AngryBirds"
-RECIPE = 4
+RECIPE = 7
 
 # Memory model. IMAGE_BYTES is the loaded .hbapp span (code + log in .bss).
 # The translated engine is Thumb + software float so this fits; runtime/GL stay ARM+VFP.

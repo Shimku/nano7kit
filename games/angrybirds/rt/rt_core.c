@@ -70,9 +70,14 @@ static void funlink(uint32_t b) {
     if (n) fset_prev(n, p);
 }
 static void fpush(uint32_t b) {
-    fset_next(b, free_head); fset_prev(b, 0);
-    if (free_head) fset_prev(free_head, b);
-    free_head = b;
+    /* Address-ordered so first-fit can use coalesced runs. Prepending left
+     * 70 KB free in holes of 4 KB and Level 8's 12 KB new[] failed. */
+    uint32_t p = 0, n = free_head;
+    while (n && n < b) { p = n; n = fnext(n); }
+    fset_next(b, n);
+    fset_prev(b, p);
+    if (n) fset_prev(n, b);
+    if (p) fset_next(p, b); else free_head = b;
 }
 static void heap_init(uint32_t lo, uint32_t hi) {
     heap_lo = (lo + 7) & ~7u; heap_hi = hi & ~7u;
@@ -98,7 +103,7 @@ static uint32_t heap_largest_free(void) {
  * Host (64-bit): 0xB0000000 + slot*2MB, looked up in out_slot. */
 #define OUT_MIN    (256u * 1024u)
 #define OUT_BASE   0xB0000000u
-#define OUT_MAX    16
+#define OUT_MAX    512
 #define OUT_STRIDE (2u << 20)
 #define OUT_MAGIC  0x4F555442u          /* 'OUTB' header on the nano */
 typedef struct { uint32_t mag, n, raw, pad; } ohdr;
@@ -222,11 +227,13 @@ static uint32_t out_size(uint32_t p) {
 #endif
 }
 uint32_t g_malloc(uint32_t n) {
-    int try_out = n >= OUT_MIN;
+    int no_out = 0;
 #ifndef FN_NANO
-    if (try_out && getenv("AB_NO_OUTSIDE")) try_out = 0;
+    no_out = getenv("AB_NO_OUTSIDE") != 0;
 #endif
-    if (try_out) {
+    /* 256 KB+ decode always prefers the OS heap so the 2 MB guest block
+     * stays for lua/Box2D. Anything the guest cannot fit overflows the same way. */
+    if (n >= OUT_MIN && !no_out) {
         uint32_t p = g_malloc_outside(n);
         if (p) return p;
     }
@@ -249,6 +256,16 @@ uint32_t g_malloc(uint32_t n) {
         bset(b, size, 1);
         used_bytes += size; if (used_bytes > peak_bytes) peak_bytes = used_bytes;
         return b + 4;
+    }
+    /* 8 KB+ sprite new[] can sit on the OS heap when the guest block is packed.
+     * Tiny lua cells stay in-guest so the host outside table is not filled. */
+    if (!no_out && n >= 8192u) {
+        uint32_t p = g_malloc_outside(n);
+        if (p) {
+            rt_log("guest overflow %u to os (used %u hole %u of %u)",
+                   n, used_bytes, heap_largest_free(), heap_hi - heap_lo);
+            return p;
+        }
     }
     malloc_fail++;
     rt_log("guest heap exhausted: %u bytes wanted, %u used of %u, largest hole %u",

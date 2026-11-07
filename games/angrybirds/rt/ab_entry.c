@@ -2,6 +2,7 @@
  * Skip UIApplicationMain / ObjC. Allocate IphoneOSInterface + EGL_Context(480,320,landscape)
  * and call framework::init; each frame GameApp::update; touches App::touchBegan/Moved/Ended.
  * TouchEvent is 3 words (pointer id, x, y) in 480x320 landscape pixels. */
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,12 +14,14 @@
 #define AB_BeginScene 0xa8880u
 #endif
 
-static uint32_t osi, ctx, app, str_data, str_docs;
+static uint32_t osi, ctx, app, str_data, str_docs, view_rect;
 static int started;
 static int fed_down, fed_id;
 static float fed_x, fed_y;
 static float view_zoom = 1.f;
 static int guest_ok(uint32_t a, uint32_t n);
+static uint32_t intern_str(const char *s);
+static void ab_lua_iphone_screen(void);
 
 static uint32_t mk_string(const char *s) {
     uint32_t o = g_malloc(16), p = g_strdup(s);
@@ -86,9 +89,9 @@ int ab_start(void) {
     /* The iOS view called setViewport / setOrthographicProjection. Image::draw
      * clips every sprite if the viewport rect is still 0,0,0,0. */
     if (ctx) {
-        uint32_t rect = g_malloc(16);
-        gw32(rect, 0); gw32(rect + 4, 0); gw32(rect + 8, 480); gw32(rect + 12, 320);
-        rt_call("setViewport", 0xa9560u, ctx, rect, 0, 0, 0, 0);
+        view_rect = g_malloc(16);
+        gw32(view_rect, 0); gw32(view_rect + 4, 0); gw32(view_rect + 8, 480); gw32(view_rect + 12, 320);
+        rt_call("setViewport", 0xa9560u, ctx, view_rect, 0, 0, 0, 0);
         rt_call("setOrtho", 0xa8afcu, ctx, 0, 0, 0, 0, 0);
     }
     rt_log("ab_start: framework::init osi=%08x ctx=%08x", osi, ctx);
@@ -98,6 +101,7 @@ int ab_start(void) {
     rt_log("ab_start: App::get -> %08x", app);
     if (app && AB_SetDataPath) rt_call("setDataPath", AB_SetDataPath, app, str_data, 0, 0, 0, 0);
     started = 1;
+    ab_lua_iphone_screen();
     rt_log("ab_start: ok, guest heap %u, ctx vtbl=%08x ref=%u present_cb=%08x",
            rt_heap_used(), ctx ? gr32(ctx) : 0, ctx ? gr32(ctx + 4) : 0,
            ctx ? gr32(ctx + 0x2d4u) : 0);
@@ -134,9 +138,63 @@ static void panel_to_game(float px, float py, float *gx, float *gy) {
 #ifndef AB_WorldStep
 #define AB_WorldStep 0x128d20u
 #endif
+#ifndef AB_SetTopLeft
+#define AB_SetTopLeft 0x6000u
+#endif
+#ifndef AB_SetWorldScale
+#define AB_SetWorldScale 0x600cu
+#endif
+#ifndef AB_LuaSetNumber
+#define AB_LuaSetNumber 0x78c7cu
+#endif
+#ifndef AB_LuaSetString
+#define AB_LuaSetString 0x78d94u
+#endif
+#ifndef AB_LuaSetBool
+#define AB_LuaSetBool 0x786fcu
+#endif
+#ifndef AB_LuaGetTable
+#define AB_LuaGetTable 0x7ccf8u
+#endif
+#ifndef AB_LuaTableD1
+#define AB_LuaTableD1 0x77de8u
+#endif
+#ifndef AB_LuaGetString
+#define AB_LuaGetString 0x7d200u
+#endif
+#ifndef AB_SetTheme
+#define AB_SetTheme 0x92b8u
+#endif
 #define AB_LBUTTON 57u
+/* GameLua::update copies App::touches().size() (App+628) into lua `touches`.
+ * updateGame only starts a slingshot drag when that count is exactly 1.
+ * TouchBegan/Ended grow a 12-byte slot vector; a missed Ended after a menu
+ * tap leaves count at 2+ and the pouch never grabs. Pin the count. */
+static void pin_touch_count(uint32_t a, int down, int id, float gx, float gy) {
+    uint32_t data;
+    if (!a || !guest_ok(a, 636u)) return;
+    data = gr32(a + 624u);
+    if (down) {
+        if (!data || !guest_ok(data, 12u)) {
+            data = g_malloc(36);
+            if (!data) return;
+            memset(G8(data), 0, 36);
+            gw32(a + 624u, data);
+            gw32(a + 632u, 3u);
+        }
+        gw32(data, (uint32_t)id);
+        gw32(data + 4u, F2U(gx));
+        gw32(data + 8u, F2U(gy));
+        gw32(a + 628u, 1u);
+    } else {
+        gw32(a + 628u, 0u);
+    }
+}
+
 static void send_touch(int began, int moved, int ended, int id, float gx, float gy) {
-    uint32_t ev = g_malloc(16);
+    static uint32_t ev;
+    uint32_t glu, app2;
+    if (!ev) ev = g_malloc(16);
     int32_t ix = (int32_t)(gx + (gx < 0.f ? -0.5f : 0.5f));
     int32_t iy = (int32_t)(gy + (gy < 0.f ? -0.5f : 0.5f));
     gw32(ev, (uint32_t)id);
@@ -147,16 +205,21 @@ static void send_touch(int began, int moved, int ended, int id, float gx, float 
     else if (ended) fn = AB_TouchEnded;
     else fn = AB_TouchMoved;
     if (fn && app) rt_call("touch", fn, app, ev, 0, 0, 0, 0);
-    g_free(ev);
     if (!app) return;
+    glu = gr32(app + 652u);
+    app2 = guest_ok(glu, 32u) ? gr32(glu + 28u) : 0;
+    pin_touch_count(app, began || moved, id, gx, gy);
+    if (app2 && app2 != app) pin_touch_count(app2, began || moved, id, gx, gy);
     /* iOS mapped a finger to LBUTTON + mouseMove; Lua menus read those, not only TouchEvent. */
     if (AB_MouseMove) rt_call("mouseMove", AB_MouseMove, app, (uint32_t)ix, (uint32_t)iy, 0, 0, 0);
     G8(app + 532u + AB_LBUTTON)[0] = (uint8_t)((began || moved) ? 1 : 0);
     if (began && AB_KeyDown) rt_call("keyDown", AB_KeyDown, app, AB_LBUTTON, 0, 0, 0, 0);
     if (ended && AB_KeyUp) rt_call("keyUp", AB_KeyUp, app, AB_LBUTTON, 0, 0, 0, 0);
     if (getenv("AB_TOUCH_LOG"))
-        rt_log("touch b=%d m=%d e=%d game=%d,%d lua=%08x kDown=%u kHold=%u kUp=%u",
-               began, moved, ended, ix, iy, gr32(app + 652u),
+        rt_log("touch b=%d m=%d e=%d game=%d,%d lua=%08x app2=%08x n=%d n2=%d kDown=%u kHold=%u kUp=%u",
+               began, moved, ended, ix, iy, glu, app2,
+               guest_ok(app, 632u) ? (int)gr32(app + 628u) : -1,
+               guest_ok(app2, 632u) ? (int)gr32(app2 + 628u) : -1,
                G8(app + 721u)[0], G8(app + 532u + AB_LBUTTON)[0], G8(app + 807u)[0]);
 }
 
@@ -207,11 +270,27 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
     for (i = 0; i < n; i++) ab_touch(0, q[i].down, q[i].x, q[i].y);
     if (dt > 0.1f) dt = 0.1f;
     if (dt < 0.001f) dt = 0.001f;
+    fe_stat_tris = 0;
+    fe_stat_draws = 0;
+    /* C++ + lua camera before update so screenToWorldTransform (slingshot)
+     * matches the 480x320 play view. cameraFunction runs at the end of
+     * updateGame, so patch again before lua drawGame / drawGameNative. */
+    ab_cam_fit_play();
+    fe_reset_matrices();
+    if (ctx && view_rect) {
+        rt_call("setViewport", 0xa9560u, ctx, view_rect, 0, 0, 0, 0);
+        rt_call("setOrtho", 0xa8afcu, ctx, 0, 0, 0, 0, 0);
+    }
     be_frame_begin();
     if (app && AB_Update) rt_call("update", AB_Update, app, F2U(dt), ctx, 0, 0, 0);
     {
         ab_phys_info info;
         ab_phys_snapshot(&info);
+        if (info.dynamic_n > 0) {
+            ab_cam_fit_play();
+            if (info.lua)
+                rt_call("luaCall", AB_LuaCall, info.lua, intern_str("drawGame"), 0, 0, 0, 0);
+        }
         if (info.dynamic_n > 0 && !info.phys_on && info.world && guest_ok(info.world, 4u)) {
             uint32_t st[2] = {0, 0};
             ab_phys_enable(1);
@@ -250,7 +329,7 @@ void ab_call_lua(const char *name) {
         rt_log("ab_call_lua: no GameLua");
         return;
     }
-    p = g_strdup(name);
+    p = intern_str(name);
     rt_log("ab_call_lua %s lua=%08x", name, glu);
     rt_call("luaCall", AB_LuaCall, glu, p, 0, 0, 0, 0);
 }
@@ -269,9 +348,135 @@ void ab_call_lua(const char *name) {
 #define B2_JOINT_COUNT (B2_TAIL + 564u)
 #define B2_GRAV_X (B2_TAIL + 568u)
 #define B2_GRAV_Y (B2_TAIL + 572u)
+#define AB_CAM_LEFT 368u
+#define AB_CAM_TOP 372u
+#define AB_CAM_SCALE 380u
+#define AB_OBJ_COUNT 192u
+#define AB_PHYS_TO_WORLD 20.f
+#define AB_VIEW_W 480.f
+#define AB_VIEW_H 320.f
 
 static int guest_ok(uint32_t a, uint32_t n) {
     return a >= g_lo && a + n <= g_hi && a + n >= a;
+}
+
+static uint32_t game_lua(void) {
+    uint32_t glu = app ? gr32(app + AB_LUA_OFF) : 0;
+    return guest_ok(glu, AB_CAM_SCALE + 4u) ? glu : 0;
+}
+
+static uint32_t intern_str(const char *s) {
+    static const char *keys[48];
+    static uint32_t ptrs[48];
+    static int n;
+    int i;
+    if (!s) return 0;
+    for (i = 0; i < n; i++)
+        if (keys[i] == s || (keys[i] && strcmp(keys[i], s) == 0)) return ptrs[i];
+    if (n >= 48) return g_strdup(s);
+    keys[n] = s;
+    ptrs[n] = g_strdup(s);
+    return ptrs[n++];
+}
+
+static void lua_table_set_num(uint32_t tbl, const char *k, float v) {
+    if (!tbl || !k) return;
+    rt_call("luaSetNumber", AB_LuaSetNumber, tbl, intern_str(k), F2U(v), 0, 0, 0);
+}
+
+/* LuaTable::getTable returns by value (hidden r0, this r1, key r2). Scratch
+ * slots are reused; D1 drops the previous lua registry ref. */
+static uint32_t lua_subtable(uint32_t parent, const char *name) {
+    static uint32_t slot[4];
+    static int si;
+    uint32_t t;
+    int i;
+    if (!parent || !name) return 0;
+    if (!slot[0]) {
+        for (i = 0; i < 4; i++) {
+            slot[i] = g_malloc(32);
+            if (slot[i]) memset(G8(slot[i]), 0, 32);
+        }
+    }
+    t = slot[si];
+    si = (si + 1) & 3;
+    if (gr32(t)) rt_call("LuaTableD1", AB_LuaTableD1, t, 0, 0, 0, 0, 0);
+    memset(G8(t), 0, 32);
+    rt_call("getTable", AB_LuaGetTable, t, parent, intern_str(name), 0, 0, 0);
+    return guest_ok(t, 16u) && gr32(t + 8u) ? t : 0;
+}
+
+static void ab_lua_set_number(const char *name, float v) {
+    uint32_t glu = game_lua();
+    if (!glu || !name) return;
+    lua_table_set_num(glu, name, v);
+}
+
+static void ab_lua_set_string(const char *name, const char *val) {
+    uint32_t glu = game_lua(), k, v;
+    if (!glu || !name || !val) return;
+    k = intern_str(name);
+    v = g_strdup(val);
+    rt_call("luaSetString", AB_LuaSetString, glu, k, v, 0, 0, 0);
+}
+
+static void ab_lua_set_bool(const char *name, int on) {
+    uint32_t glu = game_lua();
+    if (!glu || !name) return;
+    rt_call("luaSetBool", AB_LuaSetBool, glu, intern_str(name), on ? 1u : 0u, 0, 0, 0);
+}
+
+/* updateGame returns before the slingshot while birdTutorialPopups is
+ * non-empty. Taps on TUTORIAL_OK drain that list; these flags let the
+ * pouch accept a pull once the overlay is gone. */
+void ab_ready_slingshot(void) {
+    ab_lua_set_bool("birdReady", 1);
+    ab_lua_set_bool("fillInNextBird", 1);
+    ab_lua_set_number("levelStartTimer", 10.f);
+}
+
+/* lua updateLoading calls loadLevelInternal(levelName), which createBox/createCircle.
+ * C++ GameLua::loadLevel only fills the objects table. */
+static int cam_last_bodies;
+static float cam_s_scale, cam_s_left, cam_s_top;
+
+static void cam_reset(void) {
+    cam_last_bodies = 0;
+    cam_s_scale = cam_s_left = cam_s_top = 0.f;
+}
+
+/* loadLevelInternal rescales castle/bird cameras by lua screenHeight /
+ * camera.screenHeight. iPad tables (1680x1050) stay zoomed-in if lua still
+ * thinks the screen is 1024 tall. */
+static void ab_lua_iphone_screen(void) {
+    ab_lua_set_number("screenWidth", AB_VIEW_W);
+    ab_lua_set_number("screenHeight", AB_VIEW_H);
+}
+
+void ab_load_lua_level(const char *name) {
+    if (!name) return;
+    cam_reset();
+    ab_lua_iphone_screen();
+    ab_lua_set_string("levelName", name);
+    ab_lua_set_bool("loadingPageDrawn", 1);
+    ab_lua_set_bool("showBG", 1);
+    ab_lua_set_number("levelLeftEdge", 100000.f);
+    ab_lua_set_number("levelRightEdge", -100000.f);
+    rt_log("ab_load_lua_level %s", name);
+    fe_reset_matrices();
+    ab_call_lua("updateLoading");
+    ab_phys_enable(1);
+    {
+        uint32_t glu = game_lua(), pause, ov;
+        pause = lua_subtable(glu, "pausePage");
+        ov = lua_subtable(pause, "backgroundOverlay");
+        lua_table_set_num(ov, "shade", 0.f);
+        pause = lua_subtable(glu, "loadingPage");
+        ov = lua_subtable(pause, "backgroundOverlay");
+        lua_table_set_num(ov, "shade", 0.f);
+    }
+    ab_cam_fit_play();
+    ab_phys_log(name);
 }
 
 void ab_phys_snapshot(ab_phys_info *o) {
@@ -301,11 +506,23 @@ void ab_phys_snapshot(ab_phys_info *o) {
     }
     o->grav_x = U2F(gr32(world + B2_GRAV_X));
     o->grav_y = U2F(gr32(world + B2_GRAV_Y));
+    o->cam_left = U2F(gr32(glu + AB_CAM_LEFT));
+    o->cam_top = U2F(gr32(glu + AB_CAM_TOP));
+    o->world_scale = U2F(gr32(glu + AB_CAM_SCALE));
+    if (guest_ok(glu, AB_OBJ_COUNT + 4u))
+        o->obj_n = (int)gr32(glu + AB_OBJ_COUNT);
+    {
+        uint32_t gctx = gr32(glu + 24u);
+        if (guest_ok(gctx, 696u)) {
+            o->ctx_w = (int)gr32(gctx + 672u);
+            o->ctx_h = (int)gr32(gctx + 676u);
+        }
+    }
     list = gr32(world + B2_BODY_LIST);
     b = list;
     for (nwalk = 0; b && nwalk < 256 && nwalk < (nmax > 0 ? nmax + 2 : 256); nwalk++) {
         int type, nfix, fi;
-        float x, y;
+        float x, y, wx, wy, sx, sy;
         uint32_t fx;
         if (!guest_ok(b, 116u)) break;
         type = (int)gr32(b + 0u);
@@ -314,6 +531,16 @@ void ab_phys_snapshot(ab_phys_info *o) {
         nfix = (int)gr32(b + 112u);
         o->bodies++;
         o->fixtures += nfix > 0 ? nfix : 0;
+        wx = x * AB_PHYS_TO_WORLD;
+        wy = y * AB_PHYS_TO_WORLD;
+        if (o->world_scale > 1e-4f) {
+            sx = (wx - o->cam_left) * o->world_scale;
+            sy = (wy - o->cam_top) * o->world_scale;
+            if (sx >= -40.f && sx <= AB_VIEW_W + 40.f && sy >= -40.f && sy <= AB_VIEW_H + 40.f) {
+                o->vis_all++;
+                if (type == 2) o->vis_dyn++;
+            }
+        }
         if (type == 0) {
             o->static_n++;
             if (y < o->stat_ymin) o->stat_ymin = y;
@@ -373,6 +600,10 @@ void ab_phys_log(const char *tag) {
            (double)i.stat_ymax, ab_phys_resting(&i),
            (unsigned)rt_heap_used(), (unsigned)rt_heap_peak(),
            fe_stat_tex_bytes, fe_stat_tex_peak, be_stat_tex_fail);
+    rt_log("cam %s scale=%.3f left=%.1f top=%.1f ctx=%dx%d obj=%d vis=%d/%d dyn vis=%d/%d tris=%d draws=%d",
+           tag ? tag : "-", (double)i.world_scale, (double)i.cam_left, (double)i.cam_top,
+           i.ctx_w, i.ctx_h, i.obj_n, i.vis_all, i.bodies, i.vis_dyn, i.dynamic_n,
+           fe_stat_tris, fe_stat_draws);
     if (i.lua && guest_ok(i.lua, 24u))
         rt_log("phys %s vtbl lua=%08x +16=%08x +20=%08x filt[0]=%08x",
                tag ? tag : "-", gr32(i.lua), gr32(i.lua + 16u), gr32(i.lua + 20u),
@@ -445,5 +676,174 @@ void ab_phys_log(const char *tag) {
                    fx && guest_ok(fx, 48u) ? (unsigned)(gr32(fx + 44u) & 0xffffu) : 0);
             b = gr32(b + 104u);
         }
+    }
+}
+
+/* Keep the 480x320 play camera on the slingshot-to-structure box. Lua starts
+ * on the castle close-up (and Level 1's tables are iPad 1680x1024); both hide
+ * pigs/blocks on the 240-wide panel. Volume still zooms the panel mapping.
+ *
+ * Compact levels (L1): about 0.32, slingshot and tower together. Wide levels
+ * zoom out as far as 0.20 so every in-play body stays on screen. Theme sky
+ * sprites sit near world x=0; include that so ice stages are not a white void. */
+void ab_cam_fit_play(void) {
+    uint32_t glu = game_lua(), world, b, screen;
+    int nwalk, nmax, ndyn, snap;
+    float xmin, xmax, ymin, ymax, w, h, scale, left, top, pad, natural;
+    float view_w, view_h, px, py;
+    if (!glu) return;
+    world = gr32(glu + AB_WORLD_OFF);
+    if (!guest_ok(world, B2_GRAV_Y + 4u)) return;
+    nmax = (int)gr32(world + B2_BODY_COUNT);
+    xmin = ymin = 1e9f; xmax = ymax = -1e9f;
+    ndyn = 0;
+    {
+        float xs[64], ys[64], hs[64];
+        int i, keep;
+        b = gr32(world + B2_BODY_LIST);
+        for (nwalk = 0; b && nwalk < 256 && nwalk < (nmax > 0 ? nmax + 2 : 256); nwalk++) {
+            int type, play;
+            float x, y, hx;
+            uint32_t fx, sh;
+            if (!guest_ok(b, 116u)) break;
+            type = (int)gr32(b);
+            x = U2F(gr32(b + 12u));
+            y = U2F(gr32(b + 16u));
+            hx = 0.f;
+            fx = gr32(b + 108u);
+            sh = fx && guest_ok(fx, 56u) ? gr32(fx + 28u) : 0;
+            if (sh && guest_ok(sh, 32u)) hx = U2F(gr32(sh + 28u));
+            if (!(hx == hx) || hx < 0.f || hx > 40.f) hx = 0.f;
+            play = 0;
+            /* Dynamics are birds/blocks/pigs. Statics are terrain and the
+             * ground plane (hx=1000). L14's castle is static Theme blocks;
+             * a dynamics-only box framed the birds at x~-10 and hid it. */
+            if (type == 2 && y > -45.f && y < 15.f) play = 1;
+            if (type == 0 && y > -45.f && y < 3.f && x > -40.f && x < 150.f && hx < 80.f && hx > 0.1f)
+                play = 1;
+            if (play && x == x && y == y && ndyn < 64) {
+                xs[ndyn] = x; ys[ndyn] = y; hs[ndyn] = hx; ndyn++;
+            }
+            b = gr32(b + 104u);
+        }
+        if (ndyn < 1) { cam_last_bodies = 0; return; }
+        for (i = 1; i < ndyn; i++) {
+            float tx = xs[i], ty = ys[i], th = hs[i];
+            int k = i;
+            while (k > 0 && xs[k - 1] > tx) {
+                xs[k] = xs[k - 1]; ys[k] = ys[k - 1]; hs[k] = hs[k - 1]; k--;
+            }
+            xs[k] = tx; ys[k] = ty; hs[k] = th;
+        }
+        /* L3 has a leftover dynamic around x=-43; slingshot birds sit around -16..0. */
+        while (ndyn >= 2 && xs[0] < -25.f && xs[1] - xs[0] > 20.f) {
+            for (i = 0; i < ndyn - 1; i++) {
+                xs[i] = xs[i + 1]; ys[i] = ys[i + 1]; hs[i] = hs[i + 1];
+            }
+            ndyn--;
+        }
+        keep = 0;
+        for (i = 0; i < ndyn; i++) {
+            float wx = xs[i] * AB_PHYS_TO_WORLD;
+            float wy = ys[i] * AB_PHYS_TO_WORLD;
+            float hw = hs[i] * AB_PHYS_TO_WORLD;
+            if (wx - hw < xmin) xmin = wx - hw;
+            if (wx + hw > xmax) xmax = wx + hw;
+            if (wy - hw < ymin) ymin = wy - hw;
+            if (wy + hw > ymax) ymax = wy + hw;
+            keep++;
+        }
+        if (keep < 1) { cam_last_bodies = 0; return; }
+        ndyn = keep;
+    }
+    if (xmax <= xmin || ymax <= ymin) return;
+    /* Theme sky sprites sit around world x=0. A compact castle AABB (L3)
+     * otherwise looks onto white ice with no sky. */
+    if (xmin > 0.f) xmin = 0.f;
+    pad = 70.f;
+    xmin -= pad; xmax += pad; ymin -= pad; ymax += pad;
+    w = xmax - xmin; h = ymax - ymin;
+    if (w < 280.f) { float m = 0.5f * (280.f - w); xmin -= m; xmax += m; w = 280.f; }
+    if (h < 160.f) { float m = 0.5f * (160.f - h); ymin -= m; ymax += m; h = 160.f; }
+    natural = AB_VIEW_W / w;
+    if (AB_VIEW_H / h < natural) natural = AB_VIEW_H / h;
+    natural *= 0.92f;
+    /* 0.32 is L1's full slingshot-to-tower shot. Do not go above that (sky
+     * clips). Wide stages zoom out so every in-play body stays on screen. */
+    scale = natural;
+    if (scale < 0.20f) scale = 0.20f;
+    if (scale > 0.32f) scale = 0.32f;
+    view_w = AB_VIEW_W / scale;
+    view_h = AB_VIEW_H / scale;
+    left = 0.5f * (xmin + xmax) - 0.5f * view_w;
+    if (natural >= 0.30f) {
+        /* L1 slingshot-to-tower shot: 70% of the view above world y=0. */
+        top = -0.70f * view_h;
+    } else {
+        /* Dirt tiles end around world y=180. Pin the bottom there so wide
+         * stages do not look onto the white underground void. */
+        top = 180.f - view_h;
+    }
+    snap = (cam_last_bodies != nmax || cam_s_scale < 1e-4f);
+    if (snap) {
+        cam_s_scale = scale; cam_s_left = left; cam_s_top = top;
+        rt_log("camfit bodies=%d dyn=%d x=%.0f..%.0f scale=%.3f left=%.0f top=%.0f",
+               nmax, ndyn, (double)xmin, (double)xmax, (double)scale, (double)left,
+               (double)top);
+    } else {
+        cam_s_scale += (scale - cam_s_scale) * 0.3f;
+        cam_s_left += (left - cam_s_left) * 0.3f;
+        cam_s_top += (top - cam_s_top) * 0.3f;
+    }
+    cam_last_bodies = nmax;
+    rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(cam_s_scale), 0, 0, 0, 0);
+    rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(cam_s_left), F2U(cam_s_top), 0, 0, 0);
+    ab_lua_set_number("worldScale", cam_s_scale);
+    ab_lua_set_bool("showBG", 1);
+    view_w = AB_VIEW_W / cam_s_scale;
+    view_h = AB_VIEW_H / cam_s_scale;
+    px = cam_s_left + 0.5f * view_w;
+    py = cam_s_top + 0.5f * view_h;
+    /* screenToWorldTransform reads lua screen + worldScale at the start of
+     * updateGame. Keep them on the nano play camera every frame. */
+    screen = lua_subtable(glu, "screen");
+    lua_table_set_num(screen, "x", px);
+    lua_table_set_num(screen, "y", py);
+    lua_table_set_num(screen, "left", cam_s_left);
+    lua_table_set_num(screen, "top", cam_s_top);
+    lua_table_set_num(screen, "right", cam_s_left + view_w);
+    lua_table_set_num(screen, "bottom", cam_s_top + view_h);
+    /* Nested castle/bird tables only on a new body set. */
+    if (snap) {
+        uint32_t objs, cam, theme;
+        ab_lua_set_number("animationWorldScale", cam_s_scale);
+        ab_lua_set_number("currentZoomedScale", cam_s_scale);
+        ab_lua_set_number("minWorldScale", cam_s_scale * 0.85f);
+        objs = lua_subtable(glu, "objects");
+        cam = lua_subtable(objs, "castleCameraData");
+        lua_table_set_num(cam, "sx", cam_s_scale);
+        lua_table_set_num(cam, "sy", cam_s_scale);
+        lua_table_set_num(cam, "px", px);
+        lua_table_set_num(cam, "py", py);
+        cam = lua_subtable(objs, "birdCameraData");
+        lua_table_set_num(cam, "sx", cam_s_scale);
+        lua_table_set_num(cam, "sy", cam_s_scale);
+        lua_table_set_num(cam, "px", px);
+        lua_table_set_num(cam, "py", py);
+        /* Rebuild sky tiles when the body set changes. lua setTheme no-ops
+         * if objects.theme is unchanged (L14→L15 are both theme1). */
+        {
+            static uint32_t theme_slot;
+            if (!theme_slot) {
+                theme_slot = g_malloc(16);
+                if (theme_slot) memset(G8(theme_slot), 0, 16);
+            }
+            theme = theme_slot;
+        }
+        if (theme) memset(G8(theme), 0, 16);
+        if (objs && theme && AB_LuaGetString)
+            rt_call("getString", AB_LuaGetString, theme, objs, intern_str("theme"), 0, 0, 0);
+        if (glu && theme && AB_SetTheme && gr32(theme))
+            rt_call("setTheme", AB_SetTheme, glu, theme, 0, 0, 0, 0);
     }
 }

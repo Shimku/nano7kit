@@ -530,6 +530,16 @@ IMP(_glGetIntegerv) {
 }
 
 /* every launch starts from zeroed .bss (the app image may be re-entered), so defaults go here */
+void fe_reset_matrices(void) {
+    /* Unpaired PushMatrix from an iPad-scale camera (Level 14 sx~2.37) left
+     * the next level drawing into a white void. Identity, stack depth 0. */
+    init_once();
+    for (int i = 0; i < 3; i++) { ident(&stk[i][0]); top[i] = 0; }
+    mode = 0;
+    color[0] = color[1] = color[2] = color[3] = 1.f;
+    vx = 0; vy = 0; vw = 480; vh = 320;
+}
+
 void fngl_reset(void) {
     sf = 1; df = 0; cullmode = 0x405 /* GL_BACK */; depthfunc = 0x201 /* GL_LESS */; depthmask = 1;
     frontface = 0x0901u; /* GL_CCW until Ka3D calls glFrontFace(GL_CW) for 2D */
@@ -538,4 +548,5 @@ void fngl_reset(void) {
     fe_tex_shift = 0; fe_tex_min_side = 64; fe_tex_big_side = 256; fe_tex_big_shift = 0; fe_atlas_max_side = 32;
     fe_pending_tex_shift = 0;
     memset(uv_div, 0, sizeof uv_div);
+    fe_reset_matrices();
 }

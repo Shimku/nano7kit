@@ -14,6 +14,7 @@
 
 extern uint8_t be_fb[432][240][4];
 extern int be_stat_pvrtc, be_stat_uncompressed, be_tex_peak_bytes, be_check_tiny, be_frame_tris_max, be_frame_big_max;
+extern int be_stat_tex_fail;
 static const char *data_dir, *img_path, *out_dir;
 static uint64_t fake_us;
 void plat_log_line(const char *l) { fprintf(stderr, "%s\n", l); }
@@ -45,6 +46,20 @@ int plat_file_write(const char *name, const void *src, uint32_t n) {
     snprintf(p, sizeof p, "%s/docs/%s", out_dir, name);
     FILE *f = fopen(p, "wb"); if (!f) return -1; fwrite(src, 1, n, f); fclose(f);
     fprintf(stderr, "saved %s (%u bytes)\n", name, n); return 0;
+}
+static int play_pixels(void) {
+    /* Count non-white, non-HUD-cyan panel pixels. Empty later levels were
+     * physics-in-view but only a cyan bar on white. */
+    int n = 0, y, x;
+    for (y = 0; y < 432; y++) {
+        for (x = 0; x < 240; x++) {
+            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            if (r >= 230 && g >= 230 && b >= 230) continue;
+            if (b > 200 && g > 180 && r < 180) continue;
+            n++;
+        }
+    }
+    return n;
 }
 static void shot(int frame) {
     /* Same home-on-right landscape dump as PvZ n7soft_shot: rotate the portrait
@@ -114,9 +129,10 @@ int main(int argc, char **argv) {
             int f, ok0, ok;
             ab_phys_info a, b;
             if (li > 0) {
-                /* Same path as the in-game next-level button. C++ loadLevel("Level2")
-                 * from the harness did not spawn bodies; lua loadNextLevel does. */
-                ab_call_lua("loadNextLevel");
+                /* lua loadLevelInternal spawns Box2D; C++ loadLevel does not.
+                 * loadNextLevel is the in-game next button; ab_load_lua_level is
+                 * the map-select path (set levelName + updateLoading). */
+                ab_load_lua_level(levels[li]);
                 ab_phys_enable(1);
                 ab_phys_log(levels[li]);
             }
@@ -166,38 +182,61 @@ int main(int argc, char **argv) {
         }
         fprintf(stderr, "AB_PLAY_TEST level bodies after %d cutscene frames dyn=%d\n", i, a.dynamic_n);
         if (every) shot(6);
-        tap_at(49.f, 324.f);                          /* TUTORIAL_OK */
+        /* TUTORIAL_OK lua hotspot is game (370,247) -> panel (55,333).
+         * Drain every Level 1 popup; one tap is not always enough. */
+        for (i = 0; i < 8; i++) {
+            tap_at(49.f, 324.f);
+            tap_at(55.f, 333.f);
+        }
         wait_frames(30);
         if (every) shot(4);
         ab_phys_enable(1);
         wait_frames(30);
-        /* Camera starts on the pig tower. Drag landscape-right so the slingshot
-         * (left) comes on screen. dump x grows -> panel y grows. */
-        for (i = 0; i <= 15; i++) {
-            float k = (float)i / 15.f;
-            ab_touch(0, 1, 120.f, 80.f + 220.f * k);
-            fake_us += 33333; ab_frame(1.f / 30.f);
-        }
-        ab_touch(0, 0, 120.f, 300.f);
-        fake_us += 33333; ab_frame(1.f / 30.f);
+        ab_ready_slingshot();
         wait_frames(20);
         if (every) shot(7);
         ab_phys_snapshot(&a);
         ab_phys_log("play-before-shot");
         /* pigs must already sit on the ground; the level must not have auto-won */
         if (!ab_phys_resting(&a) || a.dynamic_n < 1) fail++;
-        /* Bird in the pouch: 432x240 dump ~105,128 -> panel 111,105. Pull
-         * landscape-left/down (dump x down, y up) -> panel toward 70,50. */
-        ab_touch(0, 1, 111.f, 105.f);
-        fake_us += 33333; ab_frame(1.f / 30.f);
-        fake_us += 33333; ab_frame(1.f / 30.f);
-        for (i = 0; i <= 12; i++) {
-            float k = (float)i / 12.f;
-            ab_touch(0, 1, 111.f + (70.f - 111.f) * k, 105.f + (50.f - 105.f) * k);
+        /* Pouch bird is the leftmost in-play dynamic (L1 ~ -12.4,-8.5).
+         * Convert physics -> 480x320 -> Home-on-right panel so the tap tracks
+         * the live play camera. Pull landscape-left / down in game space. */
+        {
+            float bx = -12.4f, by = -8.5f, scale, gx, gy, p0x, p0y, p1x, p1y;
+            for (i = 0; i < a.sample_n; i++) {
+                if (a.sample_type[i] == 2 && a.sample_x[i] > -20.f && a.sample_x[i] < 0.f) {
+                    bx = a.sample_x[i]; by = a.sample_y[i];
+                    break;
+                }
+            }
+            scale = a.world_scale > 1e-4f ? a.world_scale : 0.32f;
+            gx = (bx * 20.f - a.cam_left) * scale;
+            gy = (by * 20.f - a.cam_top) * scale;
+            p0x = fe_off_x + (fe_fb_h - gy) * fe_scale;
+            p0y = fe_off_y + gx * fe_scale_y;
+            gx -= 50.f;
+            gy += 80.f;
+            p1x = fe_off_x + (fe_fb_h - gy) * fe_scale;
+            p1y = fe_off_y + gx * fe_scale_y;
+            if (p1x < 0.f) p1x = 0.f;
+            if (p1y < 0.f) p1y = 0.f;
+            if (p1x > 239.f) p1x = 239.f;
+            if (p1y > 431.f) p1y = 431.f;
+            fprintf(stderr, "AB_PLAY_TEST pouch bird=%.1f,%.1f panel %.0f,%.0f -> %.0f,%.0f scale=%.3f\n",
+                    (double)bx, (double)by, (double)p0x, (double)p0y,
+                    (double)p1x, (double)p1y, (double)scale);
+            ab_touch(0, 1, p0x, p0y);
             fake_us += 33333; ab_frame(1.f / 30.f);
+            fake_us += 33333; ab_frame(1.f / 30.f);
+            for (i = 0; i <= 12; i++) {
+                float k = (float)i / 12.f;
+                ab_touch(0, 1, p0x + (p1x - p0x) * k, p0y + (p1y - p0y) * k);
+                fake_us += 33333; ab_frame(1.f / 30.f);
+            }
+            if (every) shot(8);
+            ab_touch(0, 0, p1x, p1y);
         }
-        if (every) shot(8);
-        ab_touch(0, 0, 70.f, 50.f);
         fake_us += 33333; ab_frame(1.f / 30.f);
         wait_frames(25);
         ab_phys_snapshot(&mid);
@@ -219,6 +258,62 @@ int main(int argc, char **argv) {
         if (!flying) fail++;
         if (b.dynamic_n < 1) fail++;                  /* must not auto-win */
         fprintf(stderr, "AB_PLAY_TEST %s\n", fail ? "FAIL" : "PASS");
+        return fail ? 1 : 0;
+    }
+    if (getenv("AB_LEVELS_TEST")) {
+        int fail = 0, n, loaded = 0, vis_fail = 0;
+        int warm = atoi(getenv("AB_PHYS_WARM") ? getenv("AB_PHYS_WARM") : "200");
+        int settle = atoi(getenv("AB_LEVELS_SETTLE") ? getenv("AB_LEVELS_SETTLE") : "12");
+        int min_n = atoi(getenv("AB_LEVELS_MIN") ? getenv("AB_LEVELS_MIN") : "1");
+        int max_n = atoi(getenv("AB_LEVELS_MAX") ? getenv("AB_LEVELS_MAX") : "96");
+        wait_frames(warm);
+        ab_call_lua("gotoFirstLevel");
+        wait_frames(20);
+        ab_touch(0, 1, 49.f, 324.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        ab_touch(0, 0, 49.f, 324.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        for (n = min_n; n <= max_n; n++) {
+            char name[24], file[28];
+            ab_phys_info a;
+            int bad = 0;
+            snprintf(name, sizeof name, "Level%d", n);
+            snprintf(file, sizeof file, "Level%d.lua", n);
+            if (plat_file_size(file) < 0) continue;
+            ab_load_lua_level(name);
+            wait_frames(settle);
+            ab_phys_snapshot(&a);
+            ab_phys_log(name);
+            loaded++;
+            if (a.dynamic_n < 1) bad = 1;
+            if (a.vis_dyn < 1 || a.vis_all < 2) { bad = 1; vis_fail++; }
+            if (a.world_scale < 0.19f || a.world_scale > 0.90f) bad = 1;
+            if (fe_stat_draws < 1) bad = 1;
+            {
+                int pix = play_pixels();
+                if (pix < 800) bad = 1;
+                if (a.vis_dyn < 1) bad = 1;
+                if (be_stat_tex_fail) bad = 1;
+                if (rt_malloc_failures()) bad = 1;
+                fprintf(stderr, "AB_LEVELS_TEST %s dyn=%d vis=%d/%d scale=%.3f draws=%d pix=%d %s\n",
+                        name, a.dynamic_n, a.vis_dyn, a.vis_all, (double)a.world_scale,
+                        fe_stat_draws, pix, bad ? "FAIL" : "ok");
+            }
+            if (bad) fail++;
+            if (every) shot(2000 + n);
+        }
+        fprintf(stderr, "AB_LEVELS_TEST loaded %d failed %d vis_fail %d heap %u peak %u texfail %d\n",
+                loaded, fail, vis_fail, rt_heap_used(), rt_heap_peak(), be_stat_tex_fail);
+        if (rt_malloc_failures()) {
+            fprintf(stderr, "FATAL: %u guest allocations failed\n", rt_malloc_failures());
+            return 3;
+        }
+        if (loaded < 1) {
+            fprintf(stderr, "AB_LEVELS_TEST FAIL (no Level*.lua)\n");
+            return 1;
+        }
+        fprintf(stderr, "AB_LEVELS_TEST %s\n", fail ? "FAIL" : "PASS");
         return fail ? 1 : 0;
     }
     for (int f = 0; f < frames; f++) {

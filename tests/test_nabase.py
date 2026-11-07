@@ -364,6 +364,16 @@ class CliTests(Base):
         self.nanoapps_disk()
         lines = nabase.status_lines(self.root)
         self.assertIn("base      nanoapps", lines)
+        none = nabase.status_lines(None)
+        self.assertTrue(none)
+        self.assertIn("/Volumes/IPOD", none[0])
+        self.assertIn("Disk Mode only if it is not mounted", none[0])
+        self.assertIn("mounted iPod volume", src)
+        self.assertIn("Disk Mode only if that volume is not mounted yet", src)
+        readme = Path(__file__).resolve().parent.parent / "README.md"
+        docs = Path(__file__).resolve().parent.parent / "docs" / "NANOAPPS-BASE.md"
+        self.assertIn("only if that volume is not mounted yet", readme.read_text())
+        self.assertIn("asks for Disk Mode only when that volume is not mounted", docs.read_text())
 
     def test_command_file(self):
         p = Path(__file__).resolve().parent.parent / "Install nano7kit.command"
