@@ -194,13 +194,18 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   Guest.img maps only `__cstring` through DATA (~80 KB). Double-tap or Volume
   Up/Down zooms; a drag on the top or bottom 28 px of the panel pans.
 - **Host harness** (`host/`): headless software raster, same 512 texture cap
-  as the nano, and the same home-on-right landscape dump as PvZ (`P6 432 240`,
-  `px=239-gy, py=gx`). `AB_PHYS_TEST=1` loads Level1 then lua `loadNextLevel`
-  for 2-4, steps 300 frames, and checks contacts plus dynamic Y still near the
-  ground. VCMP writes FPSCR only (APSR via FMSTAT), matching ARM; the old
-  immediate `n_=` collapsed Box2D AABBs to a point. Guest heap peak after
-  the menu is about 1.02 MB. PLAY, TUTORIAL_OK, and a slingshot drag work
-  through LBUTTON plus `mouseMove`.
+  as the nano, the same 2 MB guest block (`BLOCK_MAX`), and the same
+  home-on-right landscape dump as PvZ (`P6 432 240`, `px=239-gy, py=gx`).
+  `AB_NO_OUTSIDE=1` reproduces the device MENU.png 515100-byte new[] OOM
+  (guest first-fit, no 515 KB hole). Decode buffers of 256 KB or more use
+  `plat_os_alloc` (nano: guest address `host_ptr - g_mem` so `AT` stays
+  `M+a`; host: `0xB0000000` slabs). `AB_PHYS_TEST=1` loads Level1 then
+  lua `loadNextLevel` for 2-4, steps 300 frames, and checks contacts plus
+  dynamic Y still near the ground. `AB_PLAY_TEST=1` taps PLAY, level 1,
+  TUTORIAL_OK, and a slingshot. VCMP writes FPSCR only (APSR via FMSTAT),
+  matching ARM; the old immediate `n_=` collapsed Box2D AABBs to a point.
+  PLAY, TUTORIAL_OK, and a slingshot drag work through LBUTTON plus
+  `mouseMove`.
 - **Writes:** `Angry Birds.hbapp` (code only, about 2.3 MB; no game assets)
   and `/Apps/Data/AngryBirds` from the user's ipa. `nabase add` copies with
   `replace=True`; `nabase remove` is not needed to overwrite.

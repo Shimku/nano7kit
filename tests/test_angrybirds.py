@@ -38,8 +38,27 @@ class FitTests(unittest.TestCase):
         self.assertIn('#define DATA_DIR "%s"' % ab.FAT_DATA, plat)
         self.assertNotIn("FN_CHUNK", plat)
         self.assertIn("plat_os_alloc", plat)
+        self.assertIn("plat_os_free", plat)
+        self.assertIn("plat_os_largest", plat)
+        self.assertIn("hb_os_heap_largest", plat)
         self.assertIn("plat_os_alloc", (GAME / "rt" / "fngl.c").read_text())
         self.assertIn("plat_os_alloc", (GAME / "nano" / "be_nano.c").read_text())
+        core = (GAME / "rt" / "rt_core.c").read_text()
+        self.assertIn("OUT_BASE", core)
+        self.assertIn("0xB0000000", core)
+        self.assertIn("256u * 1024u", core)
+        self.assertIn("plat_os_largest", core)
+        self.assertIn("AB_NO_OUTSIDE", core)
+        rth = (GAME / "rt" / "rt.h").read_text()
+        self.assertIn("#define AT(a, n) (M + (uint32_t)(a))", rth)
+        self.assertIn("rt_outside_ptr", rth)
+        self.assertIn("host_ptr - g_mem", rth)
+        host = (GAME / "host" / "main.c").read_text()
+        self.assertIn("0x200000u", host)
+        self.assertNotIn("24u << 20", host)
+        self.assertIn("AB_NO_OUTSIDE", (GAME / "rt" / "rt_core.c").read_text())
+        self.assertIn("AB_PLAY_TEST", host)
+        self.assertIn("rt_malloc_failures", host)
 
     def test_notice_allocates_nothing(self):
         n = (GAME / "nano" / "notice.c").read_text()
@@ -250,3 +269,45 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, err[-3000:])
         self.assertIn("Level1", err)
         self.assertIn("Level4", err)
+        self.assertIn("guest block 2097152", err)
+        self.assertNotIn("guest heap exhausted", err)
+
+    def test_menu_png_exhausts_device_heap_without_outside(self):
+        """Same 2 MB first-fit heap and splash->INGAME->MENU load as the iPod.
+
+        HQ MENU 512 is 505x255 RGBA = 515100. With decode kept in the guest
+        block (AB_NO_OUTSIDE) that new[] fails: ~770 KB free, no 515 KB hole.
+        """
+        import subprocess
+        env = os.environ.copy()
+        env["AB_NO_OUTSIDE"] = "1"
+        out = ROOT / "build" / "angrybirds_rc" / "oom-test"
+        out.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(
+            [str(ABHOST), str(ABDATA), str(ABDATA / "guest.img"), str(out), "300", "0"],
+            env=env, capture_output=True, text=True, timeout=180)
+        err = (r.stderr or "") + (r.stdout or "")
+        self.assertEqual(r.returncode, 3, err[-4000:])
+        self.assertIn("Loading image data/data/MENU.png", err)
+        self.assertIn("515100 bytes wanted", err)
+        self.assertIn("out of guest memory (new[])", err)
+        self.assertIn("guest heap exhausted", err)
+
+    def test_playthrough_splash_menu_level1_slingshot(self):
+        import subprocess
+        env = os.environ.copy()
+        env["AB_PLAY_TEST"] = "1"
+        out = ROOT / "build" / "angrybirds_rc" / "play-test"
+        out.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(
+            [str(ABHOST), str(ABDATA), str(ABDATA / "guest.img"), str(out), "1", "1"],
+            env=env, capture_output=True, text=True, timeout=300)
+        err = (r.stderr or "") + (r.stdout or "")
+        self.assertIn("AB_PLAY_TEST PASS", err, err[-8000:])
+        self.assertEqual(r.returncode, 0, err[-4000:])
+        self.assertIn("MENU.png", err)
+        self.assertIn("outside alloc 515100", err)
+        self.assertIn("flying=1", err)
+        self.assertIn("before rest=1", err)
+        self.assertNotIn("guest heap exhausted", err)
+        self.assertNotIn("out of guest memory", err)

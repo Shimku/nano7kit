@@ -32,6 +32,11 @@ void rt_log(const char *fmt, ...) {
 #ifdef RT_CHECK
 uint32_t rt_watch_addr;
 uint8_t *rt_checked(uint32_t a, uint32_t n) {
+    if (a >= 0x80000000u) {
+        uint8_t *p = rt_outside_ptr(a);
+        if (n) (void)rt_outside_ptr(a + n - 1);
+        return p;
+    }
     if (a < g_lo || a + n > g_hi || a + n < a) {
         rt_log("guest access %08x (%u bytes) outside %08x..%08x SP=%08x", a, n, g_lo, g_hi, SP);
         plat_fatal("bad guest access");
@@ -77,9 +82,159 @@ static void heap_init(uint32_t lo, uint32_t hi) {
     uint32_t b = heap_lo + 8, size = heap_hi - 8 - b;
     bset(b, size, 0); free_head = 0; fpush(b);
 }
+static uint32_t heap_largest_free(void) {
+    uint32_t best = 0, b;
+    for (b = free_head; b; b = fnext(b)) {
+        uint32_t size = bsize(b);
+        uint32_t payload = size > 8 ? size - 8 : 0;
+        if (payload > best) best = payload;
+    }
+    return best;
+}
+
+/* Large image decode / pixel buffers (256 KB+) live outside the guest block on
+ * the nano7kit OS heap, the same way the front end's triangle pool does.
+ * Nano (32-bit): guest address is host_ptr - g_mem, so AT remains M+a.
+ * Host (64-bit): 0xB0000000 + slot*2MB, looked up in out_slot. */
+#define OUT_MIN    (256u * 1024u)
+#define OUT_BASE   0xB0000000u
+#define OUT_MAX    16
+#define OUT_STRIDE (2u << 20)
+#define OUT_MAGIC  0x4F555442u          /* 'OUTB' header on the nano */
+typedef struct { uint32_t mag, n, raw, pad; } ohdr;
+static struct { void *h; uint32_t n; } out_slot[OUT_MAX];
+static uint32_t out_used, out_peak, out_count, malloc_fail;
+
+static int out_index(uint32_t a) {
+    uint32_t i, off;
+    if (a < OUT_BASE) return -1;
+    i = (a - OUT_BASE) / OUT_STRIDE;
+    if (i >= OUT_MAX || !out_slot[i].h) return -1;
+    off = a - OUT_BASE - i * OUT_STRIDE;
+    if (off >= out_slot[i].n) return -1;
+    return (int)i;
+}
+uint8_t *rt_outside_ptr(uint32_t a) {
+    int i;
+    if (a < 0x80000000u) return g_mem + a;
+    i = out_index(a);
+    if (i < 0) {
+        rt_log("guest pointer %08x not in block or outside table", a);
+        plat_fatal("bad guest access");
+        return g_mem;
+    }
+    return (uint8_t *)out_slot[i].h + (a - (OUT_BASE + (uint32_t)i * OUT_STRIDE));
+}
+static uint32_t g_malloc_outside(uint32_t n) {
+    uint32_t want = n ? n : 1, cap, g;
+    cap = plat_os_largest();
+    if (cap < want) {
+        rt_log("outside skip %u, os largest %u", want, cap);
+        return 0;
+    }
+#ifdef FN_NANO
+    {
+        uint32_t total = want + 32u;
+        uint8_t *raw, *pay;
+        ohdr *h;
+        if (cap < total) {
+            rt_log("outside skip %u, os largest %u", total, cap);
+            return 0;
+        }
+        raw = plat_os_alloc(total);
+        if (!raw) {
+            rt_log("outside alloc %u returned 0 (os largest %u)", want, cap);
+            return 0;
+        }
+        pay = (uint8_t *)(((uintptr_t)raw + 16u + 15u) & ~(uintptr_t)15u);
+        h = (ohdr *)pay - 1;
+        h->mag = OUT_MAGIC;
+        h->n = want;
+        h->raw = (uint32_t)(uintptr_t)raw;
+        h->pad = 0;
+        g = (uint32_t)(uintptr_t)pay - (uint32_t)(uintptr_t)g_mem;
+        out_used += want;
+        if (out_used > out_peak) out_peak = out_used;
+        out_count++;
+        rt_log("outside alloc %u at %08x (os largest %u, guest used %u hole %u)",
+               want, g, cap, used_bytes, heap_largest_free());
+        return g;
+    }
+#else
+    int i;
+    for (i = 0; i < (int)OUT_MAX; i++) if (!out_slot[i].h) break;
+    if (i == (int)OUT_MAX) {
+        rt_log("outside table full, %u bytes", want);
+        return 0;
+    }
+    if (want > OUT_STRIDE) {
+        rt_log("outside alloc %u bigger than stride", want);
+        return 0;
+    }
+    out_slot[i].h = plat_os_alloc(want);
+    if (!out_slot[i].h) {
+        rt_log("outside alloc %u returned 0 (os largest %u)", want, cap);
+        return 0;
+    }
+    out_slot[i].n = want;
+    out_used += want;
+    if (out_used > out_peak) out_peak = out_used;
+    out_count++;
+    g = OUT_BASE + (uint32_t)i * OUT_STRIDE;
+    rt_log("outside alloc %u at %08x (os largest %u, guest used %u hole %u)",
+           want, g, cap, used_bytes, heap_largest_free());
+    return g;
+#endif
+}
+static int g_free_outside(uint32_t p) {
+#ifdef FN_NANO
+    ohdr *h;
+    if (p >= g_lo && p < g_hi) return 0;   /* still in the guest block */
+    h = (ohdr *)(g_mem + p) - 1;
+    if (h->mag != OUT_MAGIC) return 0;
+    h->mag = 0;
+    out_used = out_used > h->n ? out_used - h->n : 0;
+    plat_os_free((void *)(uintptr_t)h->raw);
+    return 1;
+#else
+    int i = out_index(p);
+    uint32_t base, n;
+    if (i < 0) return 0;
+    base = OUT_BASE + (uint32_t)i * OUT_STRIDE;
+    if (p != base) { rt_log("bad free %08x", p); return 1; }
+    n = out_slot[i].n;
+    plat_os_free(out_slot[i].h);
+    out_slot[i].h = 0;
+    out_slot[i].n = 0;
+    out_used = out_used > n ? out_used - n : 0;
+    return 1;
+#endif
+}
+static uint32_t out_size(uint32_t p) {
+#ifdef FN_NANO
+    ohdr *h;
+    if (p >= g_lo && p < g_hi) return 0;
+    h = (ohdr *)(g_mem + p) - 1;
+    return h->mag == OUT_MAGIC ? h->n : 0;
+#else
+    int i = out_index(p);
+    return i >= 0 ? out_slot[i].n : 0;
+#endif
+}
 uint32_t g_malloc(uint32_t n) {
+    int try_out = n >= OUT_MIN;
+#ifndef FN_NANO
+    if (try_out && getenv("AB_NO_OUTSIDE")) try_out = 0;
+#endif
+    if (try_out) {
+        uint32_t p = g_malloc_outside(n);
+        if (p) return p;
+    }
 #ifdef RT_CHECK
-    if (n >= 192u * 1024u) { rt_log("big alloc %u (heap used %u)", n, used_bytes); plat_trace(); }
+    if (n >= 192u * 1024u) {
+        rt_log("big guest alloc %u (used %u hole %u of %u)", n, used_bytes, heap_largest_free(), heap_hi - heap_lo);
+        plat_trace();
+    }
 #endif
     uint32_t need = (n + 8 + 7) & ~7u;
     if (need < 16) need = 16;
@@ -95,11 +250,14 @@ uint32_t g_malloc(uint32_t n) {
         used_bytes += size; if (used_bytes > peak_bytes) peak_bytes = used_bytes;
         return b + 4;
     }
-    rt_log("guest heap exhausted: %u bytes wanted, %u used of %u", n, used_bytes, heap_hi - heap_lo);
+    malloc_fail++;
+    rt_log("guest heap exhausted: %u bytes wanted, %u used of %u, largest hole %u",
+           n, used_bytes, heap_hi - heap_lo, heap_largest_free());
     return 0;
 }
 void g_free(uint32_t p) {
     if (!p) return;
+    if (g_free_outside(p)) return;
     uint32_t b = p - 4;
     if (b < heap_lo || b >= heap_hi || !bused(b)) { rt_log("bad free %08x", p); return; }
     uint32_t size = bsize(b);
@@ -111,10 +269,17 @@ void g_free(uint32_t p) {
     bset(b, size, 0); fpush(b);
 }
 uint32_t g_realloc(uint32_t p, uint32_t n) {
+    uint32_t old, q, osz;
     if (!p) return g_malloc(n);
-    uint32_t old = bsize(p - 4) - 8;
-    if (n <= old) return p;
-    uint32_t q = g_malloc(n);
+    osz = out_size(p);
+    if (osz) {
+        if (n <= osz) return p;
+        old = osz;
+    } else {
+        old = bsize(p - 4) - 8;
+        if (n <= old) return p;
+    }
+    q = g_malloc(n);
     if (q) { memcpy(G8(q), G8(p), old); g_free(p); }
     return q;
 }
@@ -126,6 +291,11 @@ uint32_t g_strdup(const char *s) {
 uint32_t rt_heap_used(void) { return used_bytes; }
 uint32_t rt_heap_peak(void) { return peak_bytes; }
 uint32_t rt_heap_size(void) { return heap_hi - heap_lo; }
+uint32_t rt_heap_largest_free(void) { return heap_largest_free(); }
+uint32_t rt_outside_used(void) { return out_used; }
+uint32_t rt_outside_peak(void) { return out_peak; }
+uint32_t rt_outside_count(void) { return out_count; }
+uint32_t rt_malloc_failures(void) { return malloc_fail; }
 
 /* ---- dispatch ------------------------------------------------------------------------------ */
 static uint32_t missing_seen[64];
@@ -180,6 +350,9 @@ int rt_init(void *block, uint32_t block_size) {
     uint32_t heap = (g_imparea + 32u * rt_import_count + 4095u) & ~4095u;
     stack_lo = g_hi - GUEST_STACK;
     if (heap + 65536u > stack_lo) { rt_log("guest block too small"); return -1; }
+    used_bytes = peak_bytes = 0;
+    memset(out_slot, 0, sizeof out_slot);
+    out_used = out_peak = out_count = malloc_fail = 0;
     heap_init(heap, stack_lo);
     SP = g_hi - 64u;
     memset(VS, 0, sizeof VS);

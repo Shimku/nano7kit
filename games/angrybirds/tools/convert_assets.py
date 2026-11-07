@@ -30,6 +30,9 @@ MAX_KEEP = UI_KEEP  # default / tests: UI sheets; INGAME uses INGAME_KEEP
 # MENU+SPLASHES+TUTORIALS at 512 measured 2,105,344 (196 KB spare). Adding
 # fonts (2,228,224) left 73 KB, too tight for the GL driver. MENU_1 is hills
 # as 512x512 (+384 KB) and does not fit with the three 512x256 sheets.
+# MENU at 512 is 505x255 RGBA (515100) plus a 512x256 POT pad. Those decode
+# buffers live on the OS heap (g_malloc 256 KB+), not in the 1.82 MB guest
+# heap; keeping MENU at 256 is only needed if OS largest cannot hold 515 KB.
 HQ_KEEP = {
     "MENU", "SPLASHES", "TUTORIALS",
 }

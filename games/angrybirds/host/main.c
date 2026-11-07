@@ -20,6 +20,8 @@ void plat_log_line(const char *l) { fprintf(stderr, "%s\n", l); }
 void plat_trace(void) { void *b[24]; int n = backtrace(b, 24); char **s = backtrace_symbols(b, n);
     fprintf(stderr, "  at"); for (int i = 1; i < n; i++) { const char *p = strchr(s[i], '('); if (p && p[1] == 'F') fprintf(stderr, " %.*s", (int)(strcspn(p + 1, "+)")), p + 1); } fprintf(stderr, "\n"); }
 void *plat_os_alloc(uint32_t n) { return calloc(1, n ? n : 1); }
+void plat_os_free(void *p) { free(p); }
+uint32_t plat_os_largest(void) { return 8u << 20; }   /* host has plenty; the nano uses hb_os_heap_largest */
 void plat_fatal(const char *why) { fprintf(stderr, "FATAL: %s\n", why); plat_trace(); exit(3); }
 uint64_t plat_time_us(void) { return fake_us; }
 uint32_t plat_load_image(void *dst, uint32_t size) {
@@ -59,6 +61,17 @@ static void shot(int frame) {
         }
     fclose(f);
 }
+static void wait_frames(int n) {
+    int f;
+    for (f = 0; f < n; f++) { fake_us += 33333; ab_frame(1.f / 30.f); }
+}
+static void tap_at(float x, float y) {
+    ab_touch(0, 1, x, y);
+    fake_us += 33333; ab_frame(1.f / 30.f);
+    fake_us += 33333; ab_frame(1.f / 30.f);
+    ab_touch(0, 0, x, y);
+    fake_us += 33333; ab_frame(1.f / 30.f);
+}
 int main(int argc, char **argv) {
     if (argc < 5) { fprintf(stderr, "usage: %s DATA_DIR guest.img OUT_DIR FRAMES [SHOT_EVERY] [script]\n", argv[0]); return 2; }
     data_dir = argv[1]; img_path = argv[2]; out_dir = argv[3];
@@ -69,11 +82,16 @@ int main(int argc, char **argv) {
     if (getenv("FN_TEX_SHIFT")) fe_tex_shift = atoi(getenv("FN_TEX_SHIFT"));
     fe_atlas_max_side = getenv("FN_ATLAS") ? atoi(getenv("FN_ATLAS")) : fe_atlas_max_side;
     fe_tex_big_shift = getenv("FN_TEX_BIG") ? atoi(getenv("FN_TEX_BIG")) : fe_tex_shift;
-    uint32_t size = 24u << 20;
+    /* Same 2 MB guest block as nano BLOCK_MAX. A 24 MB host block hid the
+     * MENU.png 515100-byte new[] fragmentation the iPod hits. */
+    uint32_t size = 0x200000u;
+    if (getenv("AB_GUEST_BLOCK")) size = (uint32_t)strtoul(getenv("AB_GUEST_BLOCK"), 0, 0);
     void *block = malloc(size);
+    if (!block) { fprintf(stderr, "host block %u failed\n", size); return 1; }
     if (rt_init(block, size)) return 1;
     if (ab_start()) return 1;
-    fprintf(stderr, "init ok: heap used %u peak %u\n", rt_heap_used(), rt_heap_peak());
+    fprintf(stderr, "init ok: guest block %u heap %u used %u peak %u\n",
+            size, rt_heap_size(), rt_heap_used(), rt_heap_peak());
     if (getenv("AB_PHYS_TEST")) {
         static const char *levels[] = { "Level1", "Level2", "Level3", "Level4" };
         int warm = atoi(getenv("AB_PHYS_WARM") ? getenv("AB_PHYS_WARM") : "200");
@@ -118,6 +136,89 @@ int main(int argc, char **argv) {
             if (every) shot(1000 + li);
         }
         fprintf(stderr, "AB_PHYS_TEST %s (%d levels failed)\n", fail ? "FAIL" : "PASS", fail);
+        if (rt_malloc_failures()) {
+            fprintf(stderr, "FATAL: %u guest allocations failed\n", rt_malloc_failures());
+            return 3;
+        }
+        return fail ? 1 : 0;
+    }
+    if (getenv("AB_PLAY_TEST")) {
+        /* Splash (auto) -> main menu PLAY -> level select -> Level 1 ->
+         * intro cutscene -> TUTORIAL_OK -> pan to slingshot -> pull. */
+        int fail = 0, i, flying = 0;
+        ab_phys_info a, b, mid;
+        wait_frames(200);
+        if (every) shot(1);
+        tap_at(105.f, 216.f);                         /* MENU_PLAY lua (240,180) */
+        wait_frames(45);
+        if (every) shot(2);
+        /* Level 1: first LS_LEVEL_BG_NORMAL_OPEN. 432x240 dump ~32,88 -> panel 151,32. */
+        tap_at(151.f, 32.f);
+        wait_frames(20);
+        if (every) shot(3);
+        /* Opening cutscene (birds_intro) does not skip on a tap; wait until lua
+         * loadLevelInternal has spawned Box2D bodies, then dismiss TUTORIAL_OK. */
+        for (i = 0; i < 600; i++) {
+            fake_us += 33333; ab_frame(1.f / 30.f);
+            if (i == 30 || i == 90 || i == 180) tap_at(105.f, 216.f);
+            ab_phys_snapshot(&a);
+            if (a.dynamic_n > 0) break;
+        }
+        fprintf(stderr, "AB_PLAY_TEST level bodies after %d cutscene frames dyn=%d\n", i, a.dynamic_n);
+        if (every) shot(6);
+        tap_at(49.f, 324.f);                          /* TUTORIAL_OK */
+        wait_frames(30);
+        if (every) shot(4);
+        ab_phys_enable(1);
+        wait_frames(30);
+        /* Camera starts on the pig tower. Drag landscape-right so the slingshot
+         * (left) comes on screen. dump x grows -> panel y grows. */
+        for (i = 0; i <= 15; i++) {
+            float k = (float)i / 15.f;
+            ab_touch(0, 1, 120.f, 80.f + 220.f * k);
+            fake_us += 33333; ab_frame(1.f / 30.f);
+        }
+        ab_touch(0, 0, 120.f, 300.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        wait_frames(20);
+        if (every) shot(7);
+        ab_phys_snapshot(&a);
+        ab_phys_log("play-before-shot");
+        /* pigs must already sit on the ground; the level must not have auto-won */
+        if (!ab_phys_resting(&a) || a.dynamic_n < 1) fail++;
+        /* Bird in the pouch: 432x240 dump ~105,128 -> panel 111,105. Pull
+         * landscape-left/down (dump x down, y up) -> panel toward 70,50. */
+        ab_touch(0, 1, 111.f, 105.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        for (i = 0; i <= 12; i++) {
+            float k = (float)i / 12.f;
+            ab_touch(0, 1, 111.f + (70.f - 111.f) * k, 105.f + (50.f - 105.f) * k);
+            fake_us += 33333; ab_frame(1.f / 30.f);
+        }
+        if (every) shot(8);
+        ab_touch(0, 0, 70.f, 50.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        wait_frames(25);
+        ab_phys_snapshot(&mid);
+        ab_phys_log("play-inflight");
+        for (i = 0; i < mid.sample_n; i++)
+            if (mid.sample_type[i] == 2 && mid.sample_x[i] > -8.f && mid.sample_x[i] < 30.f)
+                flying = 1;
+        if (every) shot(9);
+        wait_frames(95);
+        if (every) shot(5);
+        ab_phys_snapshot(&b);
+        ab_phys_log("play-after-shot");
+        fprintf(stderr, "AB_PLAY_TEST heap used %u peak %u hole %u decode peak %u fails %u flying=%d before rest=%d dyn=%d after rest=%d dyn=%d contacts=%d dynY=%.2f..%.2f\n",
+                rt_heap_used(), rt_heap_peak(), rt_heap_largest_free(),
+                rt_outside_peak(), rt_malloc_failures(), flying,
+                ab_phys_resting(&a), a.dynamic_n, ab_phys_resting(&b), b.dynamic_n, b.contacts,
+                (double)b.dyn_ymin, (double)b.dyn_ymax);
+        if (rt_malloc_failures()) fail++;
+        if (!flying) fail++;
+        if (b.dynamic_n < 1) fail++;                  /* must not auto-win */
+        fprintf(stderr, "AB_PLAY_TEST %s\n", fail ? "FAIL" : "PASS");
         return fail ? 1 : 0;
     }
     for (int f = 0; f < frames; f++) {
@@ -155,7 +256,12 @@ int main(int argc, char **argv) {
             fprintf(stderr, "frame %d: heap used %u peak %u, tris max %d, gl tex now %d peak %d\n", f, rt_heap_used(), rt_heap_peak(), be_frame_tris_max, fe_stat_tex_bytes, fe_stat_tex_peak);
         }
     }
-    fprintf(stderr, "done: heap peak %u, pvrtc %d, uncompressed %d, gl tex peak %d bytes in %d textures (%d atlased in %d pages), tiny %d, tris max %d (%d drawn on the nano)\n",
-            rt_heap_peak(), be_stat_pvrtc, be_stat_uncompressed, fe_stat_tex_peak, fe_stat_tex_count_peak, fe_stat_atlased, fe_stat_atlas_pages, be_check_tiny, be_frame_tris_max, be_frame_big_max);
+    fprintf(stderr, "done: heap peak %u hole %u, decode peak %u / %u allocs, pvrtc %d, uncompressed %d, gl tex peak %d bytes in %d textures (%d atlased in %d pages), tiny %d, tris max %d (%d drawn on the nano)\n",
+            rt_heap_peak(), rt_heap_largest_free(), rt_outside_peak(), rt_outside_count(),
+            be_stat_pvrtc, be_stat_uncompressed, fe_stat_tex_peak, fe_stat_tex_count_peak, fe_stat_atlased, fe_stat_atlas_pages, be_check_tiny, be_frame_tris_max, be_frame_big_max);
+    if (rt_malloc_failures()) {
+        fprintf(stderr, "FATAL: %u guest allocations failed\n", rt_malloc_failures());
+        return 3;
+    }
     return 0;
 }

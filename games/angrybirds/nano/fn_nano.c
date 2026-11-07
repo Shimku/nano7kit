@@ -22,7 +22,7 @@
 #include "gl_left.h"
 #include "touch_pick.h"
 
-#define BLOCK_MAX   0x200000u           /* 2.0 MB: cstring+DATA ~80 KB + 1.29 MB heap peak + 128 KB stack */
+#define BLOCK_MAX   0x200000u           /* 2.0 MB: cstring+DATA ~80 KB + guest heap + 128 KB stack; 256 KB+ decode is OS heap */
 #define BLOCK_MIN   0x190000u           /* 1.56 MB: leftover in the 4.0 MB hole after a ~2.45 MB image */
 #define GL_KEEP     0x180000u           /* left to the GL driver; MENU/splash/tutorials at 512, rest 256 */
 #define DATA_DIR_GL "/Apps/Data/AngryBirds"
@@ -213,11 +213,13 @@ static int start(int w, int h) {
     uint32_t left = hb_os_heap_free();
     int b = (int)(left / BYTES_PER_TRIANGLE);
     be_budget = b < 300 ? 300 : b > 1200 ? 1200 : b;
-    logf_("nano7kit started in %u ms: heap free %u largest %u, guest heap %u of %u (peak %u, front end %u), "
-          "outside the block %u now (%u peak, %u allocations), textures %d (%d bytes), budget %d",
+    logf_("nano7kit started in %u ms: heap free %u largest %u, guest heap %u of %u (peak %u hole %u, front end %u), "
+          "outside the block %u now (%u peak, %u allocations), decode %u now (%u peak, %u), textures %d (%d bytes), budget %d",
           (unsigned)((plat_time_us() - t0) / 1000u), (unsigned)left, (unsigned)hb_os_heap_largest(),
-          (unsigned)rt_heap_used(), (unsigned)rt_heap_size(), (unsigned)rt_heap_peak(), (unsigned)host_in_guest,
+          (unsigned)rt_heap_used(), (unsigned)rt_heap_size(), (unsigned)rt_heap_peak(),
+          (unsigned)rt_heap_largest_free(), (unsigned)host_in_guest,
           (unsigned)host_outside, (unsigned)host_outside_peak, (unsigned)host_outside_count,
+          (unsigned)rt_outside_used(), (unsigned)rt_outside_peak(), (unsigned)rt_outside_count(),
           fe_stat_tex_count, fe_stat_tex_bytes, be_budget);
     plat_log_flush();
     gll_save();
@@ -289,14 +291,18 @@ void fn_nano_frame(int w, int h, uint32_t n) {
         w_ms0 = ms; w_frames = w_down = w_dry = w_dry_max = w_dt_max = 0; w_dt_min = 0;
     }
     if (frames == 60 || ms - last_flush_ms > 20000u) {
-        logf_("nano7kit frame %u: %d tris (%d small, %d over budget), %d draws, heap free %u largest %u, guest heap %u, textures %d live %d failed %d bytes, archive reads %u (%u KB)",
+        logf_("nano7kit frame %u: %d tris (%d small, %d over budget), %d draws, heap free %u largest %u, guest heap %u hole %u, textures %d live %d failed %d bytes, archive reads %u (%u KB)",
               (unsigned)frames, be_stat_tris, be_stat_tiny, be_stat_over, be_stat_draws, (unsigned)hb_os_heap_free(),
-              (unsigned)hb_os_heap_largest(), (unsigned)rt_heap_used(), be_stat_live_tex, be_stat_tex_fail,
+              (unsigned)hb_os_heap_largest(), (unsigned)rt_heap_used(), (unsigned)rt_heap_largest_free(),
+              be_stat_live_tex, be_stat_tex_fail,
               fe_stat_tex_bytes, (unsigned)rt_varch_reads, (unsigned)(rt_varch_bytes >> 10));
         ab_phys_log("flush");
         if (host_outside_count)
             logf_("nano7kit front end outside the block: %u bytes now, %u peak, %u allocations",
                   (unsigned)host_outside, (unsigned)host_outside_peak, (unsigned)host_outside_count);
+        if (rt_outside_count())
+            logf_("nano7kit decode outside the block: %u bytes now, %u peak, %u allocations",
+                  (unsigned)rt_outside_used(), (unsigned)rt_outside_peak(), (unsigned)rt_outside_count());
         plat_log_flush();
         gll_save();
         last_flush_ms = ms;

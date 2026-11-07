@@ -20,6 +20,11 @@ extern uint32_t g_lo, g_hi;          /* guest block bounds (addresses) */
 
 #define RET_MAGIC 0xFFFF0001u
 
+/* Image decode buffers of 256 KB or more live on the OS heap (plat_os_alloc).
+ * On the nano (32-bit) the guest address is host_ptr - g_mem, so AT stays M+a
+ * and the .hbapp does not grow. The 64-bit host harness cannot encode calloc
+ * that way; it uses 0xB0000000 slabs and rt_checked/G8 (RT_CHECK). */
+uint8_t *rt_outside_ptr(uint32_t a);
 #ifdef RT_CHECK
 uint8_t *rt_checked(uint32_t a, uint32_t n);
 #define AT(a, n) rt_checked((uint32_t)(a), n)
@@ -42,9 +47,15 @@ typedef uint16_t __attribute__((aligned(1), may_alias)) u16u;
 #define S8(a, v) (*(uint8_t *)AT(a, 1) = (uint8_t)(v))
 
 /* host-side access from runtime code (no local M) */
+#ifdef RT_CHECK
+#define G8(a) rt_outside_ptr((uint32_t)(a))
+static inline uint32_t gr32(uint32_t a) { uint32_t v; memcpy(&v, rt_outside_ptr(a), 4); return v; }
+static inline void gw32(uint32_t a, uint32_t v) { memcpy(rt_outside_ptr(a), &v, 4); }
+#else
 #define G8(a) (g_mem + (uint32_t)(a))
 static inline uint32_t gr32(uint32_t a) { uint32_t v; memcpy(&v, g_mem + a, 4); return v; }
 static inline void gw32(uint32_t a, uint32_t v) { memcpy(g_mem + a, &v, 4); }
+#endif
 
 #define NZ(x) do { n_ = (uint32_t)(x) >> 31; z_ = (uint32_t)(x) == 0; } while (0)
 #define ADDSD(d, A, B) do { uint32_t a_ = (A), b_ = (B), r_ = a_ + b_; c_ = r_ < a_; \
@@ -109,5 +120,8 @@ uint32_t g_malloc(uint32_t n);
 void g_free(uint32_t p);
 uint32_t g_strdup(const char *s);
 uint32_t rt_heap_used(void), rt_heap_peak(void), rt_heap_size(void);
+uint32_t rt_heap_largest_free(void);
+uint32_t rt_outside_used(void), rt_outside_peak(void), rt_outside_count(void);
+uint32_t rt_malloc_failures(void);
 void rt_log(const char *fmt, ...);
 #endif
