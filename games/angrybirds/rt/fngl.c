@@ -1,8 +1,10 @@
 /* fngl.c: GLES 1.1 state, CPU transform and clipping for the recompiled engine
  * (nano7kit, MIT). Guest pointers come in as guest addresses. */
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include "rt.h"
+#include "rt_plat.h"
 #include "fngl.h"
 
 #define IMP(name) uint64_t I_##name(uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3)
@@ -26,10 +28,12 @@ static struct { uint32_t gaddr, size; } bufs[MAXBUF];
 #define MAXTEX 512
 static int tex_bytes[MAXTEX];
 int fe_tex_shift, fe_tex_min_side, fe_tex_big_side, fe_tex_big_shift, fe_stat_tex_peak, fe_stat_tex_count, fe_stat_tex_count_peak;
+int fe_pending_tex_shift;
+static uint8_t uv_div[MAXTEX];
 static int texh[MAXTEX];
 static uint32_t bound_tex;
 static int en_blend, en_tex, en_depth, en_cull, en_alpha;
-static uint32_t sf, df, cullmode, depthfunc;
+static uint32_t sf, df, cullmode, depthfunc, frontface = 0x0901u; /* GL_CCW */
 static int depthmask;
 static float clear_rgba[4], clear_depth = 1.f;
 
@@ -55,7 +59,9 @@ IMP(_glLoadMatrixf) { UNUSED; init_once(); *cur() = gmat(r0); return 0; }
 IMP(_glMultMatrixf) { UNUSED; init_once(); mat b = gmat(r0); mul(cur(), cur(), &b); return 0; }
 IMP(_glPushMatrix) { UNUSED; init_once(); if (top[mode] < 15) { stk[mode][top[mode] + 1] = *cur(); top[mode]++; } return 0; }
 IMP(_glPopMatrix) { UNUSED; if (top[mode] > 0) top[mode]--; return 0; }
-IMP(_glViewport) { UNUSED; vx = (int)r0; vy = (int)r1; vw = (int)r2; vh = (int)r3; return 0; }
+IMP(_glViewport) { UNUSED; vx = (int)r0; vy = (int)r1; vw = (int)r2; vh = (int)r3;
+    if (getenv("AB_DUMP_V")) fprintf(stderr, "glViewport %d %d %d %d\n", vx, vy, vw, vh);
+    return 0; }
 IMP(_glClearColor) { UNUSED; clear_rgba[0] = U2F(r0); clear_rgba[1] = U2F(r1); clear_rgba[2] = U2F(r2); clear_rgba[3] = U2F(r3); return 0; }
 IMP(_glClearDepthf) { UNUSED; clear_depth = U2F(r0); return 0; }
 IMP(_glClear) { UNUSED; be_clear((r0 & 0x4000) != 0, (r0 & 0x100) != 0, clear_rgba, clear_depth); return 0; }
@@ -116,7 +122,7 @@ static uint8_t tex_named[MAXTEX];
 typedef struct { int page, cx, cy, w, h; } atl_slot;   /* page 0 = not atlased */
 static atl_slot atl[MAXTEX];
 IMP(_glGenTextures) { UNUSED;
-    for (uint32_t i = 0; i < r0; i++) { uint32_t n = 0; for (uint32_t k = 1; k < MAXTEX; k++) if (!tex_named[k]) { n = k; tex_named[k] = 1; texh[k] = 0; atl[k].page = 0; break; }
+    for (uint32_t i = 0; i < r0; i++) { uint32_t n = 0; for (uint32_t k = 1; k < MAXTEX; k++) if (!tex_named[k]) { n = k; tex_named[k] = 1; texh[k] = 0; atl[k].page = 0; uv_div[k] = 0; break; }
         gw32(r1 + 4 * i, n); }
     return 0; }
 IMP(_glBindTexture) { UNUSED; bound_tex = r1 < MAXTEX ? r1 : 0; return 0; }
@@ -126,9 +132,17 @@ IMP(_glDeleteTextures) { UNUSED;
         if (!n || n >= MAXTEX || !tex_named[n]) continue;
         if (atl[n].page) atlas_free(n);
         if (texh[n]) { be_tex_delete(texh[n]); texh[n] = 0; fe_stat_tex_count--; }
-        fe_stat_tex_bytes -= tex_bytes[n]; tex_bytes[n] = 0; tex_named[n] = 0; }
+        fe_stat_tex_bytes -= tex_bytes[n]; tex_bytes[n] = 0; tex_named[n] = 0; uv_div[n] = 0; }
     return 0; }
 IMP(_glTexParameteri) { UNUSED; if (bound_tex && texh[bound_tex] && !atl[bound_tex].page) be_tex_param(texh[bound_tex], r1, r2); return 0; }
+
+/* GLES 1.1 / Ka3D pad each side to a power of two. Image UVs are pixel / POT,
+ * not pixel / PNG. A 120x207 SubImage into a 128x256 store must stay 128x256. */
+static int pot2(int n) {
+    int p = 1;
+    while (p < n) p <<= 1;
+    return p < 1 ? 1 : p;
+}
 
 /* atlas: the nano's driver takes only about 80 textures, and the game makes about 120, most
  * of them 32x32 or smaller. Those go into 256x256 pages of 34x34 cells (one texel of border
@@ -215,6 +229,21 @@ IMP(_glTexImage2D) {
                                      : (uint16_t)((r >> 4) << 12 | (g >> 4) << 8 | (b >> 4) << 4 | (a >> 4));
         }
     }
+    {
+        int pw = pot2(ow), ph = pot2(oh);
+        if (pw != ow || ph != oh) {
+            uint16_t *pad = (uint16_t *)calloc((size_t)pw * (size_t)ph, 2u);
+            if (out && pad) {
+                for (int y = 0; y < oh; y++)
+                    memcpy(pad + (size_t)y * (size_t)pw, out + (size_t)y * (size_t)ow, (size_t)ow * 2u);
+            }
+            free(out);
+            out = pad;
+            ow = pw;
+            oh = ph;
+            if (px && !out) { rt_log("texture POT pad: no memory"); return 0; }
+        }
+    }
     if (atl[bound_tex].page) atlas_free(bound_tex);
     if (out && ow <= fe_atlas_max_side && oh <= fe_atlas_max_side) {
         uint16_t *q = out;
@@ -238,6 +267,10 @@ IMP(_glTexImage2D) {
     }
     be_tex_image(texh[bound_tex], 0, ow, oh, ofmt, otype, out);
     free(out);
+    if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
+        uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
+        fe_pending_tex_shift = 0;
+    }
     fe_stat_tex_bytes += ow * oh * 2 - tex_bytes[bound_tex]; tex_bytes[bound_tex] = ow * oh * 2;
     if (fe_stat_tex_bytes > fe_stat_tex_peak) fe_stat_tex_peak = fe_stat_tex_bytes;
     return 0;
@@ -254,6 +287,10 @@ IMP(_glCompressedTexImage2D) {
             if (++fe_stat_tex_count > fe_stat_tex_count_peak) fe_stat_tex_count_peak = fe_stat_tex_count;
         }
         be_tex_compressed(texh[bound_tex], 0, r2, (int)r3, h, G8(data), size);
+        if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
+            uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
+            fe_pending_tex_shift = 0;
+        }
         fe_stat_tex_bytes += (int)size - tex_bytes[bound_tex]; tex_bytes[bound_tex] = (int)size;
         if (fe_stat_tex_bytes > fe_stat_tex_peak) fe_stat_tex_peak = fe_stat_tex_bytes;
     }
@@ -307,9 +344,25 @@ static float plane(const cv *v, int i) {
     }
 }
 #define MAXV 768             /* triangles per flush to the backend */
+#ifdef FN_NANO
+static be_vtx *outv;
+#else
 static be_vtx outv[MAXV * 3];
+#endif
 static int outn;
 static be_state st;
+static int ensure_outv(void) {
+#ifdef FN_NANO
+    if (!outv) {
+        uint32_t n = (uint32_t)(MAXV * 3 * (int)sizeof(be_vtx));
+        outv = (be_vtx *)plat_os_alloc(n);
+        if (outv) memset(outv, 0, n);
+    }
+    return outv != 0;
+#else
+    return 1;
+#endif
+}
 static void flush_out(void) { if (outn) { be_tris(&st, outv, outn); fe_stat_tris += outn / 3; outn = 0; } }
 static void emit_tri(const cv *a, const cv *b, const cv *c) {
     cv poly[2][12]; int n = 3, cur_ = 0;
@@ -338,6 +391,15 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         float gx = fx, gyd = fe_fb_h - fy;
         sv[i].x = fe_off_x + gyd * fe_scale;
         sv[i].y = fe_off_y + gx * fe_scale_y;
+        if (getenv("AB_DUMP_V")) {
+            static int dumpn;
+            if (dumpn < 400) {
+                fprintf(stderr, "v[%d] fx=%.1f fy=%.1f ndc=%.3f,%.3f w=%.3f uv=%.3f,%.3f c=%u,%u,%u,%u tex=%u vp=%dx%d panel=%.1f,%.1f\n",
+                        i, fx, fy, nx, ny, p->p[3], p->u, p->v, sv[i].c[0], sv[i].c[1], sv[i].c[2], sv[i].c[3],
+                        bound_tex, vw, vh, sv[i].x, sv[i].y);
+                dumpn++;
+            }
+        }
         sv[i].z = nz; sv[i].w = p->p[3];
         sv[i].u = p->u; sv[i].v = p->v;
         for (int k = 0; k < 4; k++) { float cc = p->c[k]; sv[i].c[k] = (uint8_t)(cc <= 0 ? 0 : cc >= 1 ? 255 : cc * 255.f + 0.5f); }
@@ -346,9 +408,11 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         float area = (sv[1].x - sv[0].x) * (sv[2].y - sv[0].y) - (sv[2].x - sv[0].x) * (sv[1].y - sv[0].y);
         /* Home-on-right is a y-flip and an x/y swap, so winding is preserved from
          * GL (unlike Fruit Ninja's y-flip only). Panel y still points down. */
-        int front = area > 0;
+        int ccw = area > 0;
+        int front = frontface == 0x0900u ? !ccw : ccw; /* GL_CW vs GL_CCW */
         if ((cullmode == 0x405 && !front) || (cullmode == 0x404 && front)) return;
     }
+    if (!ensure_outv()) return;
     for (int i = 1; i + 1 < n; i++) {
         if (outn + 3 > MAXV * 3) flush_out();
         outv[outn++] = sv[0]; outv[outn++] = sv[i]; outv[outn++] = sv[i + 1];
@@ -378,7 +442,15 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
         if (va_.size < 4) pos[3] = 1;
         if (va_.size < 3) pos[2] = 0;
         xform(&mvp, pos, v.p);
+        if (getenv("AB_DUMP_V") && n == 0) {
+            fprintf(stderr, "draw mode=%u n=%d pos0=%.3f,%.3f,%.3f,%.3f mvp0=%.4f,%.4f,%.4f,%.4f tex=%u\n",
+                    modep, count, pos[0], pos[1], pos[2], pos[3], mvp.m[0], mvp.m[5], mvp.m[12], mvp.m[13], bound_tex);
+        }
         if (ta_.on) { float t[4]; fetch(&ta_, i, t, 0, 0); v.u = t[0]; v.v = t[1]; } else { v.u = v.v = 0; }
+        if (bound_tex && uv_div[bound_tex]) {
+            float d = (float)(1 << uv_div[bound_tex]);
+            v.u /= d; v.v /= d;
+        }
         if (as) {
             float u = v.u < 0.f ? 0.f : v.u > 1.f ? 1.f : v.u, vv = v.v < 0.f ? 0.f : v.v > 1.f ? 1.f : v.v;
             v.u = ((float)(as->cx + 1) + u * (float)as->w) * (1.f / ATL_SIDE);
@@ -413,7 +485,7 @@ IMP(_glNormalPointer) { UNUSED; return 0; }
 IMP(_glPixelStorei) { UNUSED; return 0; }
 IMP(_glScissor) { UNUSED; return 0; }
 IMP(_glLineWidth) { UNUSED; return 0; }
-IMP(_glFrontFace) { UNUSED; return 0; }
+IMP(_glFrontFace) { UNUSED; frontface = r0; return 0; }
 IMP(_glLightfv) { UNUSED; return 0; }
 IMP(_glMaterialfv) { UNUSED; return 0; }
 IMP(_glTexSubImage2D) {
@@ -421,8 +493,8 @@ IMP(_glTexSubImage2D) {
     int w = (int)stackarg(0), h = (int)stackarg(1);
     uint32_t fmt = stackarg(2), type = stackarg(3), px = stackarg(4);
     if (!bound_tex || !tex_named[bound_tex] || r1 != 0 || !px) return 0;
-    /* Ka3D glTexImage2D(NULL) then fills with SubImage. A 0,0 origin upload is
-     * the real image (the splash is one shot, not a dirty rectangle). */
+    /* Ka3D glTexImage2D(POT, NULL) then SubImage of the PNG. TexImage2D pads
+     * to POT so a 0,0 SubImage keeps the UV space the engine used. */
     if (r2 == 0 && r3 == 0) {
         uint32_t s0 = gr32(SP), s1 = gr32(SP + 4), s2 = gr32(SP + 8), s3 = gr32(SP + 12), s4 = gr32(SP + 16);
         gw32(SP, (uint32_t)h);
@@ -456,7 +528,10 @@ IMP(_glGetIntegerv) {
 /* every launch starts from zeroed .bss (the app image may be re-entered), so defaults go here */
 void fngl_reset(void) {
     sf = 1; df = 0; cullmode = 0x405 /* GL_BACK */; depthfunc = 0x201 /* GL_LESS */; depthmask = 1;
+    frontface = 0x0901u; /* GL_CCW until Ka3D calls glFrontFace(GL_CW) for 2D */
     /* 480x320 landscape fills 240x432 when held Home-on-right: 0.75 * 320 = 240, 0.9 * 480 = 432 */
     fe_scale = 0.75f; fe_scale_y = 0.9f; fe_off_x = 0.f; fe_off_y = 0.f; fe_fb_h = 320.f; fe_view_h = 320;
     fe_tex_shift = 0; fe_tex_min_side = 64; fe_tex_big_side = 256; fe_tex_big_shift = 0; fe_atlas_max_side = 32;
+    fe_pending_tex_shift = 0;
+    memset(uv_div, 0, sizeof uv_div);
 }

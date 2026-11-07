@@ -3,10 +3,12 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 #include <time.h>
 #include "rt.h"
 #include "rt_plat.h"
+#include "fngl.h"
 
 #define IMP(name) uint64_t I_##name(uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3)
 #define UNUSED (void)r0; (void)r1; (void)r2; (void)r3
@@ -217,22 +219,111 @@ IMP(_qsort) {
 }
 
 /* ---- files: FILE* is a guest block {magic, handle} ----------------------------------------- */
-#define MAX_FILES 32
-static struct { char name[96]; uint32_t pos, size, wr; uint32_t wbuf, wcap; int used; } files[MAX_FILES];
+#define MAX_FILES 256                   /* Ka3D keeps every SFX FILE* until the bank is built */
+static struct { char name[96]; uint32_t pos, size, wr; uint32_t wbuf, wcap; int used, dummy; } files[MAX_FILES];
 static uint32_t fileobj[MAX_FILES];
+/* 16 kHz mono s16 LE, 16 silent frames: Ka3D loads every SFX wav at menu start. */
+static const uint8_t silent_wav[] = {
+    'R','I','F','F', 68,0,0,0, 'W','A','V','E',
+    'f','m','t',' ', 16,0,0,0, 1,0, 1,0, 0x80,0x3e,0,0, 0x00,0x7d,0,0, 2,0, 16,0,
+    'd','a','t','a', 32,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+};
+/* first two frames of Angry Birds 1.0 level_complete.mp3, Xing frames=1. */
+static const uint8_t silent_mp3[] = {
+    255,243,136,196,0,0,0,0,0,0,0,0,0,88,105,110,
+    103,0,0,0,15,0,0,0,1,0,0,1,248,0,3,13,
+    17,21,26,29,29,32,35,38,41,43,43,46,49,51,54,58,
+    58,65,68,71,73,76,80,80,83,86,88,92,95,95,97,100,
+    103,107,109,109,112,115,118,120,123,123,126,128,131,133,136,139,
+    139,143,146,148,151,153,153,157,160,163,165,168,168,172,175,178,
+    181,184,184,187,190,194,197,199,202,202,205,209,212,215,218,218,
+    222,225,227,230,234,234,236,240,243,245,248,248,251,254,254,255,
+    255,0,0,0,58,76,65,77,69,51,46,57,56,114,2,80,
+    0,0,0,0,46,71,0,0,20,48,36,6,66,34,0,0,
+    48,0,0,58,164,157,60,77,39,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    255,243,104,196,0,46,187,250,4,1,67,72,1,255,235,191,
+    93,221,221,220,226,32,132,220,12,13,2,6,33,5,16,32,
+    97,26,52,98,178,116,115,164,2,177,91,123,238,123,4,104,
+    231,252,33,8,77,26,52,123,4,8,33,237,116,98,180,104,
+    209,163,64,129,2,4,8,24,132,17,206,136,2,128,16,0,
+    0,0,48,0,192,216,173,186,132,20,64,141,28,247,255,224,
+    141,189,130,4,12,89,24,32,8,10,9,24,134,127,234,16,
+    132,45,116,98,129,64,160,145,2,8,103,254,161,8,121,163,
+    20,10,16,100,209,163,111,103,57,206,115,218,81,27,116,128,
+    128,145,6,77,2,4,8,16,32,64,129,0,172,86,43,71,
+    58,81,140,172,254,16,132,63,207,255,255,206,123,224,129,3,
+    22,129,139,70,141,28,231,56,67,206,115,159,130,54,223,110,
+    134,0,120,3,128,58,30,30,112,58,47,23,139,196,227,113,
+    248,220,126,63,31,139,150,75,
+};
 static const char *base_name(const char *path) {
     const char *b = strrchr(path, '/');
     return b ? b + 1 : path;
 }
+static int audio_kind(const char *name) {
+    const char *d = strrchr(name, '.');
+    if (!d) return 0;
+    if (!strcmp(d, ".wav")) return 1;
+    if (!strcmp(d, ".mp3")) return 2;
+    return 0;
+}
+static int tex_file_shift(const char *name) {
+    static int loaded, nshift;
+    static struct { char stem[40]; int sh; } tab[64];
+    if (!loaded) {
+        loaded = 1;
+        int32_t sz = plat_file_size("texscale");
+        if (sz > 0 && sz < 4096) {
+            char buf[4096];
+            int32_t got = plat_file_read("texscale", 0, buf, (uint32_t)sz);
+            if (got > 0) {
+                buf[got] = 0;
+                char *p = buf;
+                while (*p && nshift < 64) {
+                    char stem[40];
+                    int sh = 0;
+                    if (sscanf(p, "%39s %d", stem, &sh) == 2 && sh > 0) {
+                        snprintf(tab[nshift].stem, sizeof tab[nshift].stem, "%s", stem);
+                        tab[nshift].sh = sh;
+                        nshift++;
+                    }
+                    char *nl = strchr(p, '\n');
+                    p = nl ? nl + 1 : p + strlen(p);
+                }
+            }
+        }
+    }
+    const char *dot = strrchr(name, '.');
+    size_t n = dot ? (size_t)(dot - name) : strlen(name);
+    for (int i = 0; i < nshift; i++)
+        if (strlen(tab[i].stem) == n && !strncmp(tab[i].stem, name, n)) return tab[i].sh;
+    return 0;
+}
 IMP(_fopen) {
     UNUSED;
     const char *path = gstr(r0), *mode = gstr(r1), *name = base_name(path);
+    int tsh = tex_file_shift(name);
+    if (tsh) fe_pending_tex_shift = tsh;
     int w = strchr(mode, 'w') != NULL || strchr(mode, 'a') != NULL;
+    int dummy = 0;
     int32_t size = plat_file_size(name);
-    if (!w && size < 0) { rt_log("fopen %s: missing", name); RET(0); }
+    if (!w && size < 0) {
+        dummy = audio_kind(name);
+        if (dummy == 1) { size = (int32_t)sizeof silent_wav; rt_log("fopen %s: silent stub", name); }
+        else if (dummy == 2) { size = (int32_t)sizeof silent_mp3; rt_log("fopen %s: silent stub", name); }
+        else { rt_log("fopen %s: missing", name); RET(0); }
+    }
     for (int i = 0; i < MAX_FILES; i++) if (!files[i].used) {
         files[i].used = 1; files[i].pos = 0; files[i].size = w ? 0 : (uint32_t)size; files[i].wr = (uint32_t)w;
-        files[i].wbuf = 0; files[i].wcap = 0;
+        files[i].wbuf = 0; files[i].wcap = 0; files[i].dummy = dummy;
         snprintf(files[i].name, sizeof files[i].name, "%s", name);
         if (!fileobj[i]) fileobj[i] = g_malloc(16);
         gw32(fileobj[i], 0x46494c45u); gw32(fileobj[i] + 4, (uint32_t)i);
@@ -252,7 +343,14 @@ IMP(_fread) {
     if (r0 == VARCH) { files[i].pos = files[i].size; RET(r2); }
     uint32_t want = r1 * r2, left = files[i].size > files[i].pos ? files[i].size - files[i].pos : 0;
     if (want > left) want = left - left % r1;
-    int32_t got = want ? plat_file_read(files[i].name, files[i].pos, G8(r0), want) : 0;
+    int32_t got = 0;
+    if (files[i].dummy) {
+        const uint8_t *src = files[i].dummy == 2 ? silent_mp3 : silent_wav;
+        if (want) memcpy(G8(r0), src + files[i].pos, want);
+        got = (int32_t)want;
+    } else {
+        got = want ? plat_file_read(files[i].name, files[i].pos, G8(r0), want) : 0;
+    }
     if (got < 0) got = 0;
     files[i].pos += (uint32_t)got;
     RET((uint32_t)got / r1);

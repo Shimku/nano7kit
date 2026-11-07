@@ -27,4 +27,5 @@ extern int fe_stat_tris, fe_stat_draws, fe_stat_tex_bytes, fe_stat_tex_peak;
 extern int fe_tex_shift, fe_tex_min_side, fe_tex_big_side, fe_tex_big_shift, fe_stat_tex_count, fe_stat_tex_count_peak;   /* texture policy (see fngl.c) */
 extern int fe_atlas_max_side, fe_stat_atlased, fe_stat_atlas_pages;   /* 0 = no atlas */
 void fngl_reset(void);                 /* defaults; call before anything else */
+extern int fe_pending_tex_shift;       /* convert-time downsample; UV is divided by 2^this */
 #endif

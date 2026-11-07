@@ -78,7 +78,7 @@ uint32_t rt_sjlj_landed(void);
 uint32_t rt_sjlj_top(void);
 void rt_sjlj_register(uint32_t ctx);
 void rt_sjlj_unregister(uint32_t ctx);
-void rt_sjlj_raise(uint32_t exception) __attribute__((noreturn));
+void rt_sjlj_raise(uint32_t exception);
 
 static inline float U2F(uint32_t u) { float f; memcpy(&f, &u, 4); return f; }
 static inline uint32_t F2U(float f) { uint32_t u; memcpy(&u, &f, 4); return u; }

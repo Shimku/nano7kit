@@ -292,6 +292,14 @@ def scale_sheet_dat(data: bytes, shift: int) -> bytes:
     return bytes(out)
 
 
+def needed_shift(w: int, h: int) -> int:
+    s = 0
+    while max(w, h) > MAX_KEEP and s < 8:
+        w, h = max(1, w // 2), max(1, h // 2)
+        s += 1
+    return s
+
+
 def convert_pvr(src: Path, dst: Path, shift: int) -> tuple:
     raw = src.read_bytes()
     h = pvr_header(raw)
@@ -354,42 +362,33 @@ def convert_tree(app: Path, dest: Path) -> dict:
         out = dest / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         if suf == ".pvr":
-            w, h, did = convert_pvr(src, out, 1 if max(pvr_header(src.read_bytes())["w"], pvr_header(src.read_bytes())["h"]) > MAX_KEEP else 0)
+            hdr = pvr_header(src.read_bytes())
+            need = needed_shift(hdr["w"], hdr["h"])
+            w, h, did = convert_pvr(src, out, need)
             if did:
-                scaled[src.stem] = 1
+                scaled[src.stem] = need
                 n_scale += 1
             else:
                 n_copy += 1
         elif suf == ".png":
-            rgba_w = load_png(src.read_bytes())[1:3]
-            need = 1 if max(rgba_w) > MAX_KEEP else 0
+            _, pw, ph = load_png(src.read_bytes())
+            need = needed_shift(pw, ph)
             w, h, did = convert_png(src, out, need)
             if did:
-                scaled[src.stem] = 1
+                scaled[src.stem] = need
                 n_scale += 1
             else:
                 n_copy += 1
         elif suf == ".dat":
-            raw = src.read_bytes()
-            stem = src.stem
-            sh = scaled.get(stem, 0)
-            if sh:
-                out.write_bytes(scale_sheet_dat(raw, sh))
-                n_scale += 1
-            else:
-                # may belong to a texture we will scale: two-pass
-                out.write_bytes(raw)
-                n_copy += 1
+            # Keep original sprite pixel sizes so Image::draw dest quads stay
+            # 480x320. UV wrap from the smaller PNG is undone in fngl using texscale.
+            out.write_bytes(src.read_bytes())
+            n_copy += 1
         else:
             out.write_bytes(src.read_bytes())
             n_copy += 1
-    # second pass: scale .dat whose texture was scaled after the dat was copied
-    for src in sorted(data.glob("*.dat")):
-        sh = scaled.get(src.stem, 0)
-        if not sh:
-            continue
-        out = dest / src.name
-        out.write_bytes(scale_sheet_dat(src.read_bytes(), sh))
+    lines = ["%s %d\n" % (stem, sh) for stem, sh in sorted(scaled.items()) if sh]
+    (dest / "texscale").write_text("".join(lines) if lines else "")
     return {"copy": n_copy, "skip": n_skip, "scale": n_scale, "scaled": sorted(scaled)}
 
 

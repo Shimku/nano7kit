@@ -9,11 +9,20 @@
 #include <string.h>
 #include "gl.h"
 #include "../rt/fngl.h"
+#include "../rt/rt_plat.h"
 #include "gl_left.h"
 
 #define POOL_VERTS 3600                 /* 1200 triangles a frame at most (the budget cap) */
 typedef struct { float x, y, z, w, u, v; uint32_t color; } ov;
-static ov pool[POOL_VERTS];
+static ov *pool;
+static ov *pool_mem(void) {
+    if (!pool) {
+        uint32_t n = (uint32_t)(POOL_VERTS * (int)sizeof(ov));
+        pool = (ov *)plat_os_alloc(n);
+        if (pool) memset(pool, 0, n);
+    }
+    return pool;
+}
 static int used, batch_from;
 static be_state cur;
 static int have_cur;
@@ -53,6 +62,7 @@ static void flush(void) {
 void be_frame_begin(void) {
     used = batch_from = 0; have_cur = 0;
     be_stat_tris = be_stat_tiny = be_stat_over = be_stat_draws = 0;
+    if (!pool_mem()) return;
     glViewport(0, 0, be_panel_w, be_panel_h);
     glMatrixMode(GL_PROJECTION); glLoadIdentity();
     glMatrixMode(GL_MODELVIEW); glLoadIdentity();
@@ -82,7 +92,7 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
     float sx = 2.f / (float)be_panel_w, sy = 2.f / (float)be_panel_h;
     for (int i = 0; i + 2 < n; i += 3) {
         if (!drawable(&v[i], &v[i + 1], &v[i + 2])) { be_stat_tiny++; continue; }
-        if ((be_budget && be_stat_tris >= be_budget) || used + 3 > POOL_VERTS) { be_stat_over++; continue; }
+        if (!pool || (be_budget && be_stat_tris >= be_budget) || used + 3 > POOL_VERTS) { be_stat_over++; continue; }
         for (int k = 0; k < 3; k++) {
             const be_vtx *a = &v[i + k];
             ov *o = &pool[used++];

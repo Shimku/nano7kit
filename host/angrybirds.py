@@ -35,17 +35,18 @@ RECIPE = 1
 
 # Memory model. IMAGE_BYTES is the loaded .hbapp span (code + log in .bss).
 # The translated engine is Thumb + software float so this fits; runtime/GL stay ARM+VFP.
-# Guest block holds guest.img (~1.3 MB of TEXT+DATA) plus Lua/Box2D heap.
+# Guest.img is __cstring through DATA (~80 KB); original ARM TEXT is not mapped
+# (PC-relative pools are folded into C). Lua/Box2D heap still peaks at 1.29 MB.
 # Textures are halved at convert time so INGAME.pvr is not a 1.8 MB decode.
-IMAGE_BYTES = 2_611_584 + 4096          # span of angrybirds.hbapp from mkrelocapp, plus align
-BLOCK_MAX = 0x300000
-BLOCK_MIN = 0x250000
+IMAGE_BYTES = 2_307_904 + 4096          # span of angrybirds.hbapp from mkrelocapp, plus align; updated after nano link
+BLOCK_MAX = 0x200000
+BLOCK_MIN = 0x190000
 GL_KEEP = 0x100000
 AFTER_MIN = 0xE0000
 SLOP = 0x10000
 HEAP_PEAK = 1_300_000
 SMALL_BYTES = 40_000
-TEXTURE_BYTES = 1_200_000                 # pre-scaled RGBA4444 sheets
+TEXTURE_BYTES = 1_520_000                 # pre-scaled RGBA4444 sheets, POT-padded (Ka3D UV space)
 BYTES_PER_TRIANGLE = 3000
 BUDGET_MIN, BUDGET_MAX = 300, 1200
 TRIS_DRAWN_MAX = 800
@@ -194,14 +195,17 @@ def heap_fit(heap_free: int, largest: Optional[int] = None) -> dict:
     out = {"after_image": after_image, "block": 0, "textures": TEXTURE_BYTES,
            "left_for_gl": 0, "budget": 0}
     block = BLOCK_MAX if big > BLOCK_MAX + SLOP else max(0, (big - SLOP) & ~0xFFFF)
-    if big < BLOCK_MIN + SLOP or block < BLOCK_MIN or after_image < block + AFTER_MIN:
+    image_in_largest_ok = largest is None or largest - IMAGE_BYTES >= BLOCK_MIN + SLOP
+    if big < BLOCK_MIN + SLOP or block < BLOCK_MIN or after_image < block + AFTER_MIN \
+            or not image_in_largest_ok:
         out["verdict"] = "NO_FIT"
+        out["image_in_largest_ok"] = image_in_largest_ok
         return out
     after = after_image - block
     left = after - SMALL_BYTES - TEXTURE_BYTES
     budget = max(BUDGET_MIN, min(BUDGET_MAX, left // BYTES_PER_TRIANGLE)) if left > 0 else BUDGET_MIN
     out.update(block=block, left_for_gl=left, budget=budget,
-               image_in_largest_ok=largest is None or largest - IMAGE_BYTES >= BLOCK_MIN + SLOP)
+               image_in_largest_ok=image_in_largest_ok)
     out["verdict"] = "FITS" if budget >= TRIS_DRAWN_MAX else "FITS_REDUCED"
     return out
 

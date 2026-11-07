@@ -19,6 +19,8 @@ class FitTests(unittest.TestCase):
         fit = ab.heap_fit(6_710_886, 4_194_304)          # Probe 6.4M / 4.0M
         self.assertIn(fit["verdict"], ("FITS", "FITS_REDUCED"))
         self.assertEqual(fit["block"], ab.BLOCK_MAX)
+        self.assertTrue(fit["image_in_largest_ok"])
+        self.assertLessEqual(ab.IMAGE_BYTES, 4_194_304 - ab.BLOCK_MIN - ab.SLOP)
         self.assertTrue(ab.BUDGET_MIN <= fit["budget"] <= ab.BUDGET_MAX)
 
     def test_music_playing_refuses_like_the_app(self):
@@ -35,6 +37,9 @@ class FitTests(unittest.TestCase):
         plat = (GAME / "nano" / "plat_nano.c").read_text()
         self.assertIn('#define DATA_DIR "%s"' % ab.FAT_DATA, plat)
         self.assertNotIn("FN_CHUNK", plat)
+        self.assertIn("plat_os_alloc", plat)
+        self.assertIn("plat_os_alloc", (GAME / "rt" / "fngl.c").read_text())
+        self.assertIn("plat_os_alloc", (GAME / "nano" / "be_nano.c").read_text())
 
     def test_notice_allocates_nothing(self):
         n = (GAME / "nano" / "notice.c").read_text()
@@ -108,10 +113,18 @@ class SourceTests(unittest.TestCase):
         self.assertIn("__ZN7GameApp13activateAudioEb", src)
         self.assertIn("__ZN2gr13createShadersEPNS_11EGL_ContextE", src)
         self.assertIn("ARM+VFP", src)
-        # VFPv2 FMSC/FNMAC were decoded with Fn/Fd swapped; Image::draw then sheared every sprite.
-        self.assertIn("FNMAC Fd=Fn*Fm-Fd", src)
-        self.assertIn('"%s*%s-(%s)" % (S(dn), S(dm), S(dd))', src)
+        # VMLS is Fd-Fn*Fm (op=00 bit6=1); swapping it with VNMLS sheared Image::draw.
+        self.assertIn("VMLS  (op=00 bit6=1) Fd=Fd-Fn*Fm", src)
         self.assertIn('"%s-(%s*%s)" % (S(dd), S(dn), S(dm))', src)
+        self.assertIn('"%s*%s-(%s)" % (S(dn), S(dm), S(dd))', src)
+        self.assertIn("fold_pc", src)
+        self.assertIn("__cstring", src)
+        self.assertIn("GUEST_STACK 0x20000u", src)
+        self.assertIn("createAudio", src)
+        self.assertIn("init_mp3", src)
+        self.assertIn("vmov_rr_d", src)
+        self.assertIn("0xec532b16", src)
+        self.assertIn("0xa112c", src)
 
     def test_nano_image_is_thumb_soft_with_arm_setjmp(self):
         mk = (GAME / "nano" / "Makefile").read_text()
@@ -132,10 +145,19 @@ class SourceTests(unittest.TestCase):
         self.assertIn("ab_pan_by", nano)
         self.assertIn("HB_BTN_VOL_UP", nano)
         self.assertIn("fe_scale = 0.75f * view_zoom", entry)
+        self.assertIn("*gy = (px - fe_off_x) / sx", entry)
+        self.assertIn("lua y-down", entry)
+        self.assertIn("AB_LBUTTON", entry)
+        self.assertIn("mouseMove", entry)
+        self.assertIn("ab_call_lua", entry)
+        self.assertIn("0x7497cu", entry)
+        self.assertIn("LuaCall", (GAME / "tools" / "recomp.py").read_text())
+        self.assertIn("for(int i_=0;i_<%du;i_++)", (GAME / "tools" / "recomp.py").read_text())
         gl = (GAME / "rt" / "fngl.c").read_text()
         self.assertIn("Home on the right", gl)
         self.assertIn("init_once()", gl)
-        self.assertIn("int front = area > 0", gl)
+        self.assertIn("frontface == 0x0900u", gl)
+        self.assertIn("_glFrontFace", gl)
         self.assertIn("_glTexSubImage2D", gl)
         self.assertIn("I__glTexImage2D", gl)
 
@@ -144,6 +166,19 @@ class SourceTests(unittest.TestCase):
         self.assertIn(".wav", src)
         self.assertIn(".mp3", src)
         self.assertIn("MAX_KEEP = 256", src)
+        self.assertIn("needed_shift", src)
+        self.assertIn("texscale", src)
+        self.assertIn('dest / "texscale"', src)
+        imports = (GAME / "rt" / "rt_imports.c").read_text()
+        self.assertIn("silent_wav", imports)
+        self.assertIn("silent stub", imports)
+        self.assertIn("#define MAX_FILES 256", imports)
+        self.assertIn("tex_file_shift", imports)
+        self.assertIn("fe_pending_tex_shift", imports)
+        self.assertIn("fe_pending_tex_shift", (GAME / "rt" / "fngl.c").read_text())
+        self.assertIn("uv_div", (GAME / "rt" / "fngl.c").read_text())
+        self.assertIn("static int pot2(int n)", (GAME / "rt" / "fngl.c").read_text())
+        self.assertIn("pixel / POT", (GAME / "rt" / "fngl.c").read_text())
 
 
 @unittest.skipUnless(IPA, "set NANO7KIT_ANGRY_IPA to the Angry Birds 1.0 ipa to run")

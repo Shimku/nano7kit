@@ -14,7 +14,8 @@ CCOMMON := -Os -ffp-contract=off -std=gnu99 -ffunction-sections -fdata-sections 
           -fno-common -fno-strict-aliasing -fwrapv -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-exceptions -MMD -MP -DFN_NANO \
           -I$(NANOAPPS)/sdk -I../rt -I$(RECOMP)
 CFLAGS := $(ARCH) $(CCOMMON)
-CFLAGS_RECOMP := $(ARCH_RECOMP) $(CCOMMON) -fno-align-functions -fno-align-jumps -fno-align-loops -fno-align-labels
+CFLAGS_RECOMP := $(ARCH_RECOMP) $(CCOMMON) -fomit-frame-pointer \
+          -fno-align-functions -fno-align-jumps -fno-align-loops -fno-align-labels
 RT := rt_core rt_imports fngl ab_entry
 NANO := be_nano plat_nano fn_nano notice gl_left
 GEN := $(basename $(notdir $(wildcard $(RECOMP)/recomp_*.c)))

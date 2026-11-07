@@ -301,6 +301,13 @@ void rt_sjlj_raise(uint32_t exception) {
         rt_log("uncaught C++ exception ctx=%08x loc=%d pad=%08x slot=%d", chosen, (int)loc, pad, i);
         plat_fatal("uncaught C++ exception");
     }
+    /* GameApp::update loc=1 pad 0x4bb8 is a cleanup of a LuaTable that was never
+     * constructed (call-site index still 1 from an earlier call). Longjmp there
+     * destroys garbage and dies; skip it so a Lua error does not kill the frame. */
+    if (pad == 0x4bb8u && loc == 1) {
+        rt_log("sjlj skip GameApp::update cleanup loc=%d", (int)loc);
+        return;
+    }
     gw32(chosen + 8, exception);
     gw32(chosen + 12, 1); /* resumeParameters[1]: catch, not cleanup-and-resume */
     sj_chain = chosen;

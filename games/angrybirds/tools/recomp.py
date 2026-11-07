@@ -49,6 +49,13 @@ ROOT_NAMES = (
 STUBS = {
     "__ZN7GameApp13activateAudioEb",
     "__ZN9framework3App13activateAudioEb",
+    # libmad III walks a NULL-80 pointer. Skip the mp3 reader so createAudio
+    # still registers each clip; SFX wavs load as silent stubs.
+    "__ZN5audio11AudioReader8init_mp3Ev",
+    "__ZN5audio11AudioReader14readHeader_mp3Ev",
+    "__ZN5audio11AudioReader12readData_mp3EPvii",
+    "__ZN5audio11AudioReader10deinit_mp3Ev",
+    "_init_layer3",
     # IphoneOSInterface::setOrientation walks an ObjC UIDevice at this+4. The shell
     # never constructs that object, so the method is a no-op (orientation is already landscape).
     "__ZN17IphoneOSInterface14setOrientationEN2gr7Context15OrientationTypeE",
@@ -440,11 +447,17 @@ class Emitter:
             out.append("\n".join(l for l in lines if not l.startswith(" uint32_t r4")))
             return
         lines.append(" ENTER(0x%x);" % start)
+        if name in ("__ZN3lua8LuaTableD1Ev", "__ZN3lua8LuaTableD0Ev", "__ZN3lua8LuaTableD2Ev"):
+            lines.append(" if(!r0) RETURN();")
         order = sorted(body)
         for a in order:
             ins = body[a]
             if a in labels:
                 lines.append("L_%x:;" % a)
+            if a == 0xa112c:
+                # luaH_next: invalid key used to luaG_runerror and kill the frame
+                lines.append(" r0=0;goto L_a15e4;")
+                continue
             stmt = self.translate(ins, start, end, labels, body)
             lines.append(" " + stmt)
         lines.append(" RETURN();")
@@ -634,6 +647,21 @@ class Emitter:
         if (ww or not p) and rn != 15:
             newb = "%s+%s" % (base, off_e) if not p else addr
             wb = self.set_reg(rn, newb, a)
+        if l and rn == 15 and p and i:
+            imm8 = ((w >> 4) & 0xF0) | (w & 0xF)
+            loc = (a + 8) + (imm8 if u else -imm8)
+            n = 1 if (s_bit and not h) else 2 if h else 4
+            bits = self.fold_pc(loc, n)
+            if bits is not None:
+                if s_bit and h:
+                    self.stats["pc_fold"] += 1
+                    return self.set_reg(rd, "(uint32_t)(int32_t)(int16_t)0x%xu" % (bits & 0xFFFF), a)
+                if s_bit:
+                    self.stats["pc_fold"] += 1
+                    return self.set_reg(rd, "(uint32_t)(int32_t)(int8_t)0x%xu" % (bits & 0xFF), a)
+                if h:
+                    self.stats["pc_fold"] += 1
+                    return self.set_reg(rd, "0x%xu" % bits, a)
         # ARMv5TE: LDRD is L=0 S=1 H=0; STRD is L=0 S=1 H=1. L=1 S=1 H=0 is LDRSB.
         if s_bit and not l:
             if h:
@@ -775,6 +803,19 @@ class Emitter:
         self.stats["unk_%08x" % w] += 1
         return "rt_undef(0x%xu);/*%08x*/" % (a, w)
 
+    def fold_pc(self, va, n=4):
+        """Integer bits at a PC-relative pool address, or None if unmapped."""
+        try:
+            if n == 4:
+                return self.img.m.u32(va)
+            if n == 2:
+                return self.img.m.u16(va)
+            if n == 1:
+                return self.img.m.read(va, 1)[0]
+        except Exception:
+            return None
+        return None
+
     def ldr_addr(self, a, w):
         p, u, i = (w >> 24) & 1, (w >> 23) & 1, (w >> 25) & 1
         rn = (w >> 16) & 15
@@ -817,6 +858,14 @@ class Emitter:
         wb = ""
         if (ww or not p) and rn != 15:
             wb = self.set_reg(rn, "%s+%s" % (base, off_e), a)
+        # ARM literal pools sit in __text. Fold PC-relative loads so guest.img
+        # need not map the original ARM instructions (only __cstring and DATA).
+        if l and rn == 15 and p and not (w & (1 << 25)):
+            loc = (a + 8) + ((w & 0xFFF) if u else -(w & 0xFFF))
+            bits = self.fold_pc(loc, 1 if b else 4)
+            if bits is not None:
+                self.stats["pc_fold"] += 1
+                return self.set_reg(rd, "0x%xu" % bits, a)
         if l:
             if b:
                 load = "L8(%s)" % addr
@@ -879,11 +928,35 @@ class Emitter:
         if cp not in (10, 11):
             self.stats["unknown_op"] += 1
             return ";"  # ignore unknown coprocessor
+        # VMOV Rt,Rt2,Dm / VMOV Dm,Rt,Rt2 (softfp double <-> rN,rN+1).
+        # cond 1100010 L Rt2 Rt 1011 ... (bits 27-21 = 1100010). GNU: 0xec532b16
+        # is vmov r2, r3, d6. P=U=W=0, bit22=1 is the opcode, not VLDM.
+        if ((w >> 21) & 0x7F) == 0x62 and cp == 11 and (w & 0x10):
+            rt, rt2 = vd, rn
+            dm = (w & 15) | (((w >> 5) & 1) << 4)
+            self.stats["vmov_rr_d"] += 1
+            if l:
+                return "%s=VS[%d];%s=VS[%d];" % (REG[rt], dm * 2, REG[rt2], dm * 2 + 1)
+            return "VS[%d]=%s;VS[%d]=%s;" % (dm * 2, REG[rt], dm * 2 + 1, REG[rt2])
         base = "0x%xu" % (a + 8) if rn == 15 else REG[rn]
         dbl = cp == 11
         if p and not ww:
             # VLDR / VSTR
             addr = "%s+%s%du" % (base, "" if u else "-", off)
+            if l and rn == 15:
+                loc = (a + 8) + (off if u else -off)
+                if dbl:
+                    lo, hi = self.fold_pc(loc, 4), self.fold_pc(loc + 4, 4)
+                    if lo is not None and hi is not None:
+                        idx = vd | (d << 4)
+                        self.stats["pc_fold"] += 1
+                        return "VS[%d]=0x%xu;VS[%d]=0x%xu;" % (idx * 2, lo, idx * 2 + 1, hi)
+                else:
+                    bits = self.fold_pc(loc, 4)
+                    if bits is not None:
+                        idx = (vd << 1) | d
+                        self.stats["pc_fold"] += 1
+                        return "VS[%d]=0x%xu;" % (idx, bits)
             if dbl:
                 idx = vd | (d << 4)
                 if l:
@@ -901,22 +974,16 @@ class Emitter:
             start_e = base if not p else "(%s+0)" % base
         if p and not u:
             start_e = "(%s-%du)" % (base, off)  # DB
+        # Unrolled VSTM/VLDM of d8-d15 was ~16 stores per function and blew the
+        # Thumb image past the 4.0 MB largest-block budget. A short loop is the
+        # same guest stores, much less C.
+        vs0 = ((vd | (d << 4)) * 2) if dbl else ((vd << 1) | d)
         lines = ["{uint32_t a_=%s;" % start_e]
-        if dbl:
-            idx0 = vd | (d << 4)
-            count = n // 2
-            for i in range(count):
-                if l:
-                    lines.append("VS[%d]=L32(a_+%du);VS[%d]=L32(a_+%du);" % ((idx0 + i) * 2, 8 * i, (idx0 + i) * 2 + 1, 8 * i + 4))
-                else:
-                    lines.append("S32(a_+%du,VS[%d]);S32(a_+%du,VS[%d]);" % (8 * i, (idx0 + i) * 2, 8 * i + 4, (idx0 + i) * 2 + 1))
-        else:
-            idx0 = (vd << 1) | d
-            for i in range(n):
-                if l:
-                    lines.append("VS[%d]=L32(a_+%du);" % (idx0 + i, 4 * i))
-                else:
-                    lines.append("S32(a_+%du,VS[%d]);" % (4 * i, idx0 + i))
+        if n > 0:
+            if l:
+                lines.append("for(int i_=0;i_<%du;i_++)VS[%d+i_]=L32(a_+4u*(uint32_t)i_);" % (n, vs0))
+            else:
+                lines.append("for(int i_=0;i_<%du;i_++)S32(a_+4u*(uint32_t)i_,VS[%d+i_]);" % (n, vs0))
         if ww and rn != 15:
             if u:
                 lines.append("%s+=%du;" % (REG[rn], off))
@@ -1008,14 +1075,20 @@ class Emitter:
             self.stats["vfp_ext_%08x" % (w & 0x0fffffff)] += 1
             return ";"
         # three-operand: bit23=0 (or FDIV bit23=1, bits21-20=00)
-        # VFPv2: FMAC Fd=Fd+Fn*Fm; FNMAC Fd=Fn*Fm-Fd; FMSC Fd=Fd-Fn*Fm; FNMSC Fd=-(Fd+Fn*Fm)
+        # VFPv2 three-operand, ARM ARM DDI 0406 / GNU UAL:
+        # VMLA  (op=00 bit6=0) Fd=Fd+Fn*Fm
+        # VMLS  (op=00 bit6=1) Fd=Fd-Fn*Fm
+        # VNMLS (op=01 bit6=0) Fd=Fn*Fm-Fd
+        # VNMLA (op=01 bit6=1) Fd=-(Fd+Fn*Fm)
+        # An earlier decode swapped VMLS and VNMLS. Image::draw then did
+        # s6 = m00*tx - x (= -x with identity RS2D), so clip corners sheared.
         if dbl:
             if op_hi == 0 and op_mid == 0 and not op2:
                 return Dset(dd, "%s*%s+%s" % (D(dn), D(dm), D(dd)))
             if op_hi == 0 and op_mid == 0 and op2:
-                return Dset(dd, "%s*%s-(%s)" % (D(dn), D(dm), D(dd)))
-            if op_hi == 0 and op_mid == 1 and not op2:
                 return Dset(dd, "%s-(%s*%s)" % (D(dd), D(dn), D(dm)))
+            if op_hi == 0 and op_mid == 1 and not op2:
+                return Dset(dd, "%s*%s-(%s)" % (D(dn), D(dm), D(dd)))
             if op_hi == 0 and op_mid == 1 and op2:
                 return Dset(dd, "-(%s*%s+%s)" % (D(dn), D(dm), D(dd)))
             if op_hi == 0 and op_mid == 2 and not op2:
@@ -1034,9 +1107,9 @@ class Emitter:
         if op_hi == 0 and op_mid == 0 and not op2:
             return Sset(dd, "%s*%s+%s" % (S(dn), S(dm), S(dd)))
         if op_hi == 0 and op_mid == 0 and op2:
-            return Sset(dd, "%s*%s-(%s)" % (S(dn), S(dm), S(dd)))
-        if op_hi == 0 and op_mid == 1 and not op2:
             return Sset(dd, "%s-(%s*%s)" % (S(dd), S(dn), S(dm)))
+        if op_hi == 0 and op_mid == 1 and not op2:
+            return Sset(dd, "%s*%s-(%s)" % (S(dn), S(dm), S(dd)))
         if op_hi == 0 and op_mid == 1 and op2:
             return Sset(dd, "-(%s*%s+%s)" % (S(dn), S(dm), S(dd)))
         if op_hi == 0 and op_mid == 2 and not op2:
@@ -1151,14 +1224,15 @@ def main():
         for n in imps:
             fh.write('__attribute__((weak)) uint64_t I_%s(uint32_t a,uint32_t b,uint32_t c,uint32_t d)'
                      '{(void)a;(void)b;(void)c;(void)d;rt_missing_import("%s");return 0;}\n' % (cname(n), n))
-    # ARM literal pools and switch tables live in __text, so the guest image
-    # starts at the TEXT segment (not at __cstring, which is enough for Thumb).
-    tseg = [x for x in img.m.segments if x[0] == "__TEXT"][0]
+    # PC-relative LDR/VLDR in __text are folded into C constants, so the guest
+    # image does not map original ARM instructions. ADR of strings still needs
+    # __cstring/__const, then DATA (vtables, globals, BSS).
+    cstr = img.m.sect("__TEXT", "__cstring")
+    gbase = (cstr["addr"] if cstr else [x for x in img.m.segments if x[0] == "__TEXT"][0][1]) & ~0xFFF
     dseg = [x for x in img.m.segments if x[0] == "__DATA"][0]
-    gbase = tseg[1]
     with open(os.path.join(outdir, "rt_layout.h"), "w") as fh:
         fh.write("/* generated */\n#define GUEST_BASE 0x%xu\n#define GUEST_IMAGE_END 0x%xu\n"
-                 "#define GUEST_DATA_END 0x%xu\n#define GUEST_STACK 0x40000u\n"
+                 "#define GUEST_DATA_END 0x%xu\n#define GUEST_STACK 0x20000u\n"
                  % (gbase, dseg[1] + dseg[4], dseg[1] + dseg[2]))
     with open(os.path.join(outdir, "guest.img"), "wb") as fh:
         fh.write(read_span(img.m, gbase, dseg[1] + dseg[4] - gbase))
@@ -1184,6 +1258,9 @@ def main():
         "GameAppC2": "__ZN7GameAppC2EPN2gr7ContextEPN9framework11OSInterfaceE",
         "KeyDown": "__ZN7GameApp7keyDownEN9framework3App7KeyTypeE",
         "KeyUp": "__ZN7GameApp5keyUpEN9framework3App7KeyTypeE",
+        "MouseMove": "__ZN7GameApp9mouseMoveEii",
+        "LoadLevel": "__ZN7GameLua9loadLevelEN4lang6StringE",
+        "LuaCall": "__ZN3lua9LuaObject4callEPKc",
     }
     with open(os.path.join(outdir, "rt_entry.h"), "w") as fh:
         fh.write("/* generated */\n")

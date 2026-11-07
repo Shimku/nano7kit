@@ -107,8 +107,9 @@ int ab_start(void) {
 }
 
 /* panel 240x432 (portrait) -> game 480x320 landscape, home on the right.
- * Zoom and pan live in fe_scale / fe_off so the picture and the slingshot
- * finger stay in the same place. */
+ * emit_tri: panel_x = off_x + (fb_h - fy)*scale with fy GL-up = lua y-down
+ * inverted, so panel_x = off_x + lua_y * scale. Lua menus and the slingshot
+ * hit-test y-down (PLAY is at 180, not GL fy 140). */
 static void panel_to_game(float px, float py, float *gx, float *gy) {
     float sx = fe_scale, sy = fe_scale_y;
     if (sx < 1e-6f) sx = 1e-6f;
@@ -117,8 +118,20 @@ static void panel_to_game(float px, float py, float *gx, float *gy) {
     *gx = (py - fe_off_y) / sy;
 }
 
+#ifndef AB_MouseMove
+#define AB_MouseMove 0x44c4u
+#endif
+#ifndef AB_LoadLevel
+#define AB_LoadLevel 0xdb94u
+#endif
+#ifndef AB_LuaCall
+#define AB_LuaCall 0x7497cu
+#endif
+#define AB_LBUTTON 57u
 static void send_touch(int began, int moved, int ended, int id, float gx, float gy) {
     uint32_t ev = g_malloc(16);
+    int32_t ix = (int32_t)(gx + (gx < 0.f ? -0.5f : 0.5f));
+    int32_t iy = (int32_t)(gy + (gy < 0.f ? -0.5f : 0.5f));
     gw32(ev, (uint32_t)id);
     gw32(ev + 4, F2U(gx));
     gw32(ev + 8, F2U(gy));
@@ -128,6 +141,16 @@ static void send_touch(int began, int moved, int ended, int id, float gx, float 
     else fn = AB_TouchMoved;
     if (fn && app) rt_call("touch", fn, app, ev, 0, 0, 0, 0);
     g_free(ev);
+    if (!app) return;
+    /* iOS mapped a finger to LBUTTON + mouseMove; Lua menus read those, not only TouchEvent. */
+    if (AB_MouseMove) rt_call("mouseMove", AB_MouseMove, app, (uint32_t)ix, (uint32_t)iy, 0, 0, 0);
+    G8(app + 532u + AB_LBUTTON)[0] = (uint8_t)((began || moved) ? 1 : 0);
+    if (began && AB_KeyDown) rt_call("keyDown", AB_KeyDown, app, AB_LBUTTON, 0, 0, 0, 0);
+    if (ended && AB_KeyUp) rt_call("keyUp", AB_KeyUp, app, AB_LBUTTON, 0, 0, 0, 0);
+    if (getenv("AB_TOUCH_LOG"))
+        rt_log("touch b=%d m=%d e=%d game=%d,%d lua=%08x kDown=%u kHold=%u kUp=%u",
+               began, moved, ended, ix, iy, gr32(app + 652u),
+               G8(app + 721u)[0], G8(app + 532u + AB_LBUTTON)[0], G8(app + 807u)[0]);
 }
 
 void ab_touch(int id, int down, float px, float py) {
@@ -173,3 +196,30 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
 }
 
 void ab_frame(float dt) { ab_frame_q(dt, 0, 0); }
+
+void ab_load_level(const char *name) {
+    uint32_t glu = app ? gr32(app + 652u) : 0;
+    uint32_t s;
+    if (!glu || !name) {
+        rt_log("ab_load_level: no GameLua");
+        return;
+    }
+    s = mk_string(name);
+    rt_log("ab_load_level %s lua=%08x", name, glu);
+    rt_call("loadLevel", AB_LoadLevel, glu, s, 0, 0, 0, 0);
+}
+
+/* lua::LuaObject::call(char const*): the menu's PLAY sprite is hit-tested at
+ * game (240, 180) (MENU_PLAY pivot, not the .dat src rect). gotoFirstLevel is
+ * the game's own path onto Level1 after createMenuPages. */
+void ab_call_lua(const char *name) {
+    uint32_t glu = app ? gr32(app + 652u) : 0;
+    uint32_t p;
+    if (!glu || !name) {
+        rt_log("ab_call_lua: no GameLua");
+        return;
+    }
+    p = g_strdup(name);
+    rt_log("ab_call_lua %s lua=%08x", name, glu);
+    rt_call("luaCall", AB_LuaCall, glu, p, 0, 0, 0, 0);
+}

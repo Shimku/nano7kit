@@ -165,6 +165,10 @@ int plat_file_write(const char *name, const void *src, uint32_t n) {
     hb_fs_mkdir(DATA_DIR);
     return hb_fs_write(p, src, n) ? 0 : -1;
 }
+void *plat_os_alloc(uint32_t n) {
+    /* GL scratch (triangle pool, clip buffer) stays off the guest heap and off .bss. */
+    return hb_os_alloc(n ? n : 1u);
+}
 uint32_t plat_load_image(void *dst, uint32_t size) {
     /* the guest block has the heap after the image, so the read may run past size by SLACK */
     return hb_fs_read(DATA_DIR "/guest.img", dst, size + SLACK) == size ? size : 0;

@@ -19,6 +19,7 @@ static uint64_t fake_us;
 void plat_log_line(const char *l) { fprintf(stderr, "%s\n", l); }
 void plat_trace(void) { void *b[24]; int n = backtrace(b, 24); char **s = backtrace_symbols(b, n);
     fprintf(stderr, "  at"); for (int i = 1; i < n; i++) { const char *p = strchr(s[i], '('); if (p && p[1] == 'F') fprintf(stderr, " %.*s", (int)(strcspn(p + 1, "+)")), p + 1); } fprintf(stderr, "\n"); }
+void *plat_os_alloc(uint32_t n) { return calloc(1, n ? n : 1); }
 void plat_fatal(const char *why) { fprintf(stderr, "FATAL: %s\n", why); plat_trace(); exit(3); }
 uint64_t plat_time_us(void) { return fake_us; }
 uint32_t plat_load_image(void *dst, uint32_t size) {
@@ -77,6 +78,11 @@ int main(int argc, char **argv) {
             }
             s = strchr(s, ';'); if (s) s++;
         }
+        if (getenv("AB_DUMP_AT") && f == atoi(getenv("AB_DUMP_AT"))) setenv("AB_DUMP_V", "1", 1);
+        if (getenv("AB_LOAD_LEVEL") && f == atoi(getenv("AB_LOAD_AT") ? getenv("AB_LOAD_AT") : "180"))
+            ab_load_level(getenv("AB_LOAD_LEVEL"));
+        if (getenv("AB_LUA") && f == atoi(getenv("AB_LUA_AT") ? getenv("AB_LUA_AT") : "200"))
+            ab_call_lua(getenv("AB_LUA"));
         if (getenv("AB_BURST") && f == 110) {   /* the nano case: a whole drag sampled inside one frame */
             int nb = atoi(getenv("AB_BURST")); ab_tsample q[8];
             for (int i = 0; i < nb && i < 8; i++) {

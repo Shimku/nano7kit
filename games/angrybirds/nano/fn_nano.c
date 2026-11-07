@@ -22,8 +22,8 @@
 #include "gl_left.h"
 #include "touch_pick.h"
 
-#define BLOCK_MAX   0x300000u           /* 3.0 MB: guest image ~1.3 MB + heap for Lua/Box2D + 256 KB stack */
-#define BLOCK_MIN   0x250000u           /* 2.3 MB: so a leftover hole after the ~2.5 MB image can still start */
+#define BLOCK_MAX   0x200000u           /* 2.0 MB: cstring+DATA ~80 KB + 1.29 MB heap peak + 128 KB stack */
+#define BLOCK_MIN   0x190000u           /* 1.56 MB: leftover in the 4.0 MB hole after a ~2.45 MB image */
 #define GL_KEEP     0x100000u           /* left to the GL driver; textures are pre-scaled at convert time */
 #define DATA_DIR_GL "/Apps/Data/AngryBirds"
 #define BYTES_PER_TRIANGLE 3000u        /* the GL driver's cost per triangle, as measured for Temple Run */

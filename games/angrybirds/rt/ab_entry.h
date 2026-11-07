@@ -9,4 +9,6 @@ void ab_frame_q(float dt, const ab_tsample *q, int n);
 void ab_touch(int id, int down, float panel_x, float panel_y);
 void ab_zoom_by(float factor);
 void ab_pan_by(float dx, float dy);
+void ab_load_level(const char *name);
+void ab_call_lua(const char *name);
 #endif

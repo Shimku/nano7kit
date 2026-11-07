@@ -179,24 +179,25 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   over 256 are halved (so `INGAME.pvr` 992x935 RGBA4444 is not a 1.8 MB decode)
   and matching sprite `.dat` coords are scaled. Lua 5.1 bytecode is copied as-is.
 - **Nano side** (`nano/`): the translated engine is Thumb + software float so
-  the loaded image is about 2.49 MiB (ARM+VFP was 3.2 MiB text and left no
+  the loaded image is about 2.20 MiB (ARM+VFP was 3.2 MiB text and left no
   guest block). Runtime, GL and `setjmp` stay ARM+VFP; newlib's Thumb `setjmp`
-  saves d0-d31 and fails the Thumb-FP gate. Guest block 2.3 to 3.0 MB.
-  Double-tap or Volume Up/Down zooms (picture and slingshot stay aligned); a
-  drag on the top or bottom 28 px of the panel pans (slingshot is the rest).
-  GLES 1.x has no shader files; `gr::createShaders` registers the built-in
-  `EGL_Shader_Default` templates.
-- **Host harness** (`host/`): headless software raster. After VFPv2 FMAC/FMSC
-  decode, identity MVP for Ka3D clip-space verts, Home-on-right winding, and
-  `glTexSubImage2D` (Ka3D `glTexImage2D(NULL)` then fills), the Clickgamer
-  splash draws. Guest heap peak 1,291,096 bytes, 1 texture (256x512 then
-  240x415), about 4 triangles a frame on the splash. Sprites come out sheared
-  (Image::draw clip-space corners are a parallelogram, not a rectangle).
-- **Writes:** `Angry Birds.hbapp` (code only, about 2.4 MB; no game assets)
+  saves d0-d31 and fails the Thumb-FP gate. PC-relative ARM literal pools are
+  folded into C, so guest.img maps only `__cstring` through DATA (~80 KB) and
+  the guest block can sit around 1.6 to 2.1 MB while still holding the 1.29 MB
+  heap peak. Double-tap or Volume Up/Down zooms (picture and slingshot stay
+  aligned); a drag on the top or bottom 28 px of the panel pans (slingshot is
+  the rest). GLES 1.x has no shader files; `gr::createShaders` registers the
+  built-in `EGL_Shader_Default` templates.
+- **Host harness** (`host/`): headless software raster. After VFPv2 VMLA/VMLS
+  (UAL) decode, identity MVP for Ka3D clip-space verts, `glFrontFace` (Ka3D
+  2D is GL_CW), Home-on-right mapping, and POT-padded `glTexImage2D` (Ka3D
+  allocates POT then SubImage of the NPOT PNG; UVs are pixel/POT), splash,
+  menu, and level 1 draw as rectangles. Guest heap peak after the menu is
+  about 1.02 MB (budget 1.29 MB). PLAY, TUTORIAL_OK, and a slingshot drag
+  work through LBUTTON plus `mouseMove`.
+- **Writes:** `Angry Birds.hbapp` (code only, about 2.2 MB; no game assets)
   and `/Apps/Data/AngryBirds` from the user's ipa. Untested on a real nano;
-  host harness and the test suite are the check so far. The 4.0 MB largest
-  heap hole is tight: the image plus a 2.3 MB guest block may only fit if a
-  second hole remains after load.
+  host harness and the test suite are the check so far.
 
 ## Adding a game to nano7kit
 
