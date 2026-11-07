@@ -84,6 +84,8 @@ ITEMS: Tuple[Item, ...] = (
          bundle="com.imangi.templerun", version="1.0"),
     Item("Fruit Ninja", "Fruit Ninja", "games", "your decrypted Fruit Ninja 1.0 .ipa", "ipa",
          bundle="com.Halfbrick.Fruit", version="1.0"),
+    Item("Angry Birds", "Angry Birds", "games", "your decrypted Angry Birds 1.0 .ipa", "ipa",
+         bundle="com.clickgamer.AngryBirds", version="1.0", tested=False),
     Item("PvZ Portable", "PvZ Portable", "games",
          "your PC Plants vs. Zombies GOTY folder (main.pak + properties/)", "folder"),
     Item("Flappy Bird", "Flappy Bird", "games", "your Flappy Bird 1.2 .ipa", "ipa", tested=False,

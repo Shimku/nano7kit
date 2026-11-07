@@ -2,9 +2,9 @@ nano7kit licensing
 ==================
 
 nano7kit's own code is MIT (see LICENSE). That covers host/, install,
-start, scripts/, tests/, docs/, pocketjs/, games/fruitninja/, the
-nano7kit apps under nanoapps/ (Lap, Free RAM, JS Hero, JS Samples,
-JS QuickJS, JS Hello) and the installer.
+start, scripts/, tests/, docs/, pocketjs/, games/fruitninja/,
+games/angrybirds/, the nano7kit apps under nanoapps/ (Lap, Free RAM,
+JS Hero, JS Samples, JS QuickJS, JS Hello) and the installer.
 
 Exceptions:
 

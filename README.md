@@ -64,7 +64,7 @@ Otherwise see [Full setup](#full-setup) at the bottom.
 Put the files in `mygames/` (git ignores it) or drag them into Terminal when the
 installer asks. Each file is hash-checked, so only those exact versions work. Nothing
 built from them is committed. Hashes and the untested extras (Mario Kart 64, Flappy
-Bird, Doodle Jump): [docs/GAMES.md](docs/GAMES.md).
+Bird, Doodle Jump, Angry Birds): [docs/GAMES.md](docs/GAMES.md).
 
 ## Writing apps
 

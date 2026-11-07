@@ -38,8 +38,8 @@ Credits for those are in nano7-untethered.
   in pieces, separate screen handlers per app type, freeing an app when you go back
   to Home) and `.nanoapp` packaging for Paint and Free RAM
 - the PocketJS nano 7G target, JS QuickJS, JS Hero, JS Samples and Free RAM
-- the PvZ Portable port and the Fruit Ninja recompile (the approach follows
-  olievans123's Temple Run port; none of its code is used)
+- the PvZ Portable port and the Fruit Ninja and Angry Birds recompiles (the
+  approach follows olievans123's Temple Run port; none of its code is used)
 - memory changes to olievans123's Temple Run port, applied at build time
 - FAT32 conversion on a Mac, Disk Mode music sync and library restore
 - the NanoApps 1.0 base install (`host/nabase.py`) and `nabase flash` (`host/nabase_fw.py`)

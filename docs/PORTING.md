@@ -160,6 +160,44 @@ olievans123's Temple Run port; none of its code is used.
   The host harness showed the blade dying; `tests/test_fruitninja_rc.py` checks the fix.
 - **Writes:** `Fruit Ninja.hbapp` (about 920 KB) and `/Apps/Data/FruitNinja` (about 9.2 MB).
 
+### Angry Birds (iOS, recompiled by nano7kit)
+
+Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
+(olievans123-style static recompile; none of that tree's code is used).
+
+- **Input:** decrypted Angry Birds 1.0, `com.clickgamer.AngryBirds`, thin armv6
+  executable `e1dadaf6...6ec6e8` (1,822,112 bytes). All 2281 text functions are
+  ARM with VFPv2, not Thumb.
+- **Recompiler** (`tools/recomp.py`): ARM+VFP to C, starting from
+  `framework::init`, `GameApp::update` and the App touch methods. The ObjC
+  shell (`AppController`, `MyEAGLView`) is left out. OpenAL is stubbed, so it
+  is silent. Ka3D SjLj is a host `jmp_buf` around `__Unwind_SjLj_Register`.
+- **Runtime** (`rt/`): guest memory (`rt_core.c`), iOS calls (`rt_imports.c`),
+  GLES 1.1 with CPU clip (`fngl.c`). Landscape 480x320 fills the 240x432 panel
+  with Home on the right (panel x = game-y-down * 0.75, panel y = game-x * 0.9).
+- **Assets** (`tools/convert_assets.py`): wav/mp3 skipped; PVR/PNG with a side
+  over 256 are halved (so `INGAME.pvr` 992x935 RGBA4444 is not a 1.8 MB decode)
+  and matching sprite `.dat` coords are scaled. Lua 5.1 bytecode is copied as-is.
+- **Nano side** (`nano/`): the translated engine is Thumb + software float so
+  the loaded image is about 2.49 MiB (ARM+VFP was 3.2 MiB text and left no
+  guest block). Runtime, GL and `setjmp` stay ARM+VFP; newlib's Thumb `setjmp`
+  saves d0-d31 and fails the Thumb-FP gate. Guest block 2.3 to 3.0 MB.
+  Double-tap or Volume Up/Down zooms (picture and slingshot stay aligned); a
+  drag on the top or bottom 28 px of the panel pans (slingshot is the rest).
+  GLES 1.x has no shader files; `gr::createShaders` registers the built-in
+  `EGL_Shader_Default` templates.
+- **Host harness** (`host/`): headless software raster. After VFPv2 FMAC/FMSC
+  decode, identity MVP for Ka3D clip-space verts, Home-on-right winding, and
+  `glTexSubImage2D` (Ka3D `glTexImage2D(NULL)` then fills), the Clickgamer
+  splash draws. Guest heap peak 1,291,096 bytes, 1 texture (256x512 then
+  240x415), about 4 triangles a frame on the splash. Sprites come out sheared
+  (Image::draw clip-space corners are a parallelogram, not a rectangle).
+- **Writes:** `Angry Birds.hbapp` (code only, about 2.4 MB; no game assets)
+  and `/Apps/Data/AngryBirds` from the user's ipa. Untested on a real nano;
+  host harness and the test suite are the check so far. The 4.0 MB largest
+  heap hole is tight: the image plus a 2.3 MB guest block may only fit if a
+  second hole remains after load.
+
 ## Adding a game to nano7kit
 
 Follow how PvZ Portable is wired in (`rg "PvZ Portable" host`):

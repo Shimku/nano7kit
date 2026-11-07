@@ -69,8 +69,8 @@ class StagedExtrasTests(unittest.TestCase):
                   "Screenshot", "Lap", "JS Hello", "Tetris", "Snake"):
             self.assertIn(n, names)
         for n in ("Blocks", "Game Boy", "Probe", "Mario 64", "Mario Kart",
-                  "Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja"):
-            self.assertNotIn(n, names)      # Fruit Ninja is built from the user's ipa
+                  "Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "Angry Birds"):
+            self.assertNotIn(n, names)      # Fruit Ninja / Angry Birds are built from the user's ipa
         self.assertIn("hb_shared", manifest()["sdk"])
 
     def test_manifest_hashes_match_files(self):
@@ -117,7 +117,7 @@ class StagedExtrasTests(unittest.TestCase):
         rows = by_name()
         for n in ("Paint", "Books", "Lap", "JS Hello", "Tetris"):
             self.assertTrue(_sdk_built_extra(rows[n]), n)
-        for n in ("Blocks", "Game Boy", "Probe", "Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja"):
+        for n in ("Blocks", "Game Boy", "Probe", "Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "Angry Birds"):
             self.assertFalse(_sdk_built_extra(rows[n]), n)
 
 

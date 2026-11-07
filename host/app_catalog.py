@@ -161,6 +161,7 @@ CATEGORIES = {
         "Doodle Jump",
         "Fruit Ninja",
         "PvZ Portable",
+        "Angry Birds",
     ),
     "needs-rom": ("Mario Kart", "Mario 64"),
 }
@@ -189,6 +190,10 @@ AUTHORS = {
     "PvZ Portable": (
         "PvZ-Portable engine by wszqkzqk (LGPL-3.0-or-later, fetched at build time) with nano7kit's device "
         "layer; dlmalloc by Doug Lea (CC0); your own PopCap PvZ GOTY files, not in git"
+    ),
+    "Angry Birds": (
+        "nano7kit first-party static recompile (MIT; approach after "
+        "olievans123 nano-templerun); original Rovio Angry Birds 1.0 not in git"
     ),
     "Lap": "nano7kit first-party (MIT); NanoApps SDK (MIT)",
     "Free RAM": "nano7kit first-party LVGL memory probe (MIT); NanoApps SDK (MIT)",
@@ -245,6 +250,9 @@ ALIASES = {
     "fruitninja": "Fruit Ninja",
     "fruit-ninja": "Fruit Ninja",
     "ninja": "Fruit Ninja",
+    "angrybirds": "Angry Birds",
+    "angry-birds": "Angry Birds",
+    "angry": "Angry Birds",
     "pvzportable": "PvZ Portable",
     "pvz-portable": "PvZ Portable",
     "pvz_portable": "PvZ Portable",
@@ -352,6 +360,7 @@ _RISK_BY_NAME = {
     "Doodle Jump": 6,
     "Fruit Ninja": 6,
     "PvZ Portable": 6,
+    "Angry Birds": 6,
     "Lap": 1,
     "JS Hello": 1,
     "JS Hero": 5,
