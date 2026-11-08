@@ -11,7 +11,7 @@
 uint8_t be_fb[PH][PW][4];
 uint8_t be_last_tex[PH][PW];
 static float zb[PH][PW];
-typedef struct { int used, w, h, fmt_seen; uint8_t *rgba; uint32_t format, type; } tex;
+typedef struct { int used, w, h, fmt_seen, wrap_s, wrap_t; uint8_t *rgba; uint32_t format, type; } tex;
 #define MAXT 512
 static tex T[MAXT];
 int be_stat_pvrtc, be_stat_uncompressed, be_tex_peak_bytes, be_tex_bytes;
@@ -19,9 +19,21 @@ int be_stat_tex_fail, be_stat_live_tex;
 int be_check_tiny;           /* triangles under 2 square pixels (the nano driver rule) */
 int be_frame_tris, be_frame_tris_max, be_frame_big, be_frame_big_max;   /* big: what the nano draws */
 
-int be_tex_create(void) { for (int i = 1; i < MAXT; i++) if (!T[i].used) { memset(&T[i], 0, sizeof T[i]); T[i].used = 1; return i; } return 0; }
+int be_tex_create(void) {
+    for (int i = 1; i < MAXT; i++) if (!T[i].used) {
+        memset(&T[i], 0, sizeof T[i]); T[i].used = 1;
+        T[i].wrap_s = T[i].wrap_t = 0x812F; /* CLAMP_TO_EDGE: REPEAT seams a 1px horizon line */
+        return i;
+    }
+    return 0;
+}
 void be_tex_delete(int h) { if (h > 0 && h < MAXT) { if (T[h].rgba) { be_tex_bytes -= T[h].w * T[h].h * 2; free(T[h].rgba); } T[h].used = 0; T[h].rgba = 0; } }
-void be_tex_param(int h, uint32_t p, uint32_t v) { (void)h; (void)p; (void)v; }
+void be_tex_param(int h, uint32_t p, uint32_t v) {
+    if (h <= 0 || h >= MAXT || !T[h].used) return;
+    /* REPEAT wraps the ground/sky seam into a 1px horizon line across the panel. */
+    if (p == 0x2802) T[h].wrap_s = v == 0x2901 ? 0x812F : (int)v;
+    if (p == 0x2803) T[h].wrap_t = v == 0x2901 ? 0x812F : (int)v;
+}
 static void put_rgba(tex *t, int w, int h) {
     if (t->rgba) { be_tex_bytes -= t->w * t->h * 2; free(t->rgba); }
     t->w = w; t->h = h; t->rgba = calloc((size_t)w * h, 4);
@@ -188,8 +200,18 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
             for (int k = 0; k < 4; k++) col[k] = (w0 * a->c[k] + w1 * b->c[k] + w2 * c->c[k]) / 255.f;
             if (t) {
                 int tx = (int)floorf(u * (float)t->w), ty = (int)floorf(vv * (float)t->h);
-                tx %= t->w; if (tx < 0) tx += t->w;
-                ty %= t->h; if (ty < 0) ty += t->h;
+                if (t->wrap_s == 0x2901) { /* REPEAT */
+                    tx %= t->w; if (tx < 0) tx += t->w;
+                } else {
+                    if (tx < 0) tx = 0;
+                    if (tx >= t->w) tx = t->w - 1;
+                }
+                if (t->wrap_t == 0x2901) {
+                    ty %= t->h; if (ty < 0) ty += t->h;
+                } else {
+                    if (ty < 0) ty = 0;
+                    if (ty >= t->h) ty = t->h - 1;
+                }
                 const uint8_t *tp = t->rgba + 4 * (ty * t->w + tx);
                 for (int k = 0; k < 4; k++) col[k] *= tp[k] / 255.f;
             }

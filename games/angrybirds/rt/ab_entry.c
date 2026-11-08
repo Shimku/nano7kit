@@ -471,14 +471,16 @@ void ab_cam_fit_world(void) {
         }
         memcpy(&b, b + 104, 4);
     }
-    /* Keep the slingshot inset so a real pouch drag has room to pull back. */
-    minx -= 180.f; maxx += 60.f; miny -= 40.f; maxy += 40.f;
+    /* 480x320 world-fit: pad like the original opening view (birds and
+     * castle both on screen). Do not add a huge left pad: that zoomed L2/L3
+     * out to the 0.28 clamp and clipped the castle. */
+    minx -= 40.f; maxx += 60.f; miny -= 20.f; maxy += 30.f;
     w = maxx - minx; h = maxy - miny;
     if (w < 160.f) w = 160.f;
     if (h < 100.f) h = 100.f;
     sx = AB_VIEW_W / w; sy = AB_VIEW_H / h;
     ns = sx < sy ? sx : sy;
-    if (ns < 0.28f) ns = 0.28f;
+    if (ns < 0.18f) ns = 0.18f;
     if (ns > 0.85f) ns = 0.85f;
     cx = 0.5f * (minx + maxx);
     cy = 0.5f * (miny + maxy);
@@ -487,6 +489,13 @@ void ab_cam_fit_world(void) {
     hold_scale = ns; hold_left = left; hold_top = top;
     cam_hold = 1;
     apply_cam(ns, left, top);
+    {
+        char b[160];
+        snprintf(b, sizeof b, "AB_CAM fit n=%d bbox=%.0f,%.0f..%.0f,%.0f scale=%.3f left=%.0f top=%.0f",
+                 n, (double)minx, (double)miny, (double)maxx, (double)maxy,
+                 (double)ns, (double)left, (double)top);
+        plat_log_line(b);
+    }
 }
 
 void ab_cam_fit_play(void) {
@@ -527,7 +536,9 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
     }
     if (cam_hold && hold_scale > 1e-4f) apply_cam(hold_scale, hold_left, hold_top);
     else ab_cam_fit_play();
-    fe_reset_matrices();
+    /* Do not identity the stacks every frame: cam_hold holds a static view, so
+     * Ka3D skips LoadMatrixf when the matrix is unchanged and the world would
+     * draw with identity (empty panel). TEXTURE is reloaded by Primitive. */
     fe_stat_tris = 0; fe_stat_draws = 0;
     be_frame_begin();
     if (j_update) j_update(ab_jni_env(), ab_jni_renderer());
@@ -569,7 +580,6 @@ void ab_load_lua_level(const char *name) {
     ab_lua_set_bool("loadingPageDrawn", 1);
     ab_lua_set_bool("showBG", 1);
     ab_lua_set_bool("showTutorials", 0);
-    ab_lua_set_bool("birdTutorialPopups", 0);
     plat_log_line(name);
     fe_reset_matrices();
     ab_call_lua("updateLoading");

@@ -113,6 +113,8 @@ void be_tex_delete(int h) { GLuint t = (GLuint)h; if (t) { glDeleteTextures(1, &
 void be_tex_param(int h, uint32_t p, uint32_t v) {
     if (!h) return;
     if (p == GL_TEXTURE_MIN_FILTER && v != GL_NEAREST) v = GL_LINEAR;   /* no mip chains are uploaded */
+    if ((p == GL_TEXTURE_WRAP_S || p == GL_TEXTURE_WRAP_T) && v == GL_REPEAT)
+        v = GL_CLAMP_TO_EDGE;           /* REPEAT seams a 1px horizon line */
     glBindTexture(GL_TEXTURE_2D, (GLuint)h);
     glTexParameteri(GL_TEXTURE_2D, p, (GLint)v);
 }
@@ -129,6 +131,8 @@ void be_tex_image(int h, int level, int w, int ht, uint32_t format, uint32_t typ
     glBindTexture(GL_TEXTURE_2D, (GLuint)h);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, (GLint)format, w, ht, 0, format, type, px);
     if (glGetError()) {
         char b[80];
@@ -150,6 +154,8 @@ void be_tex_compressed(int h, int level, uint32_t fmt, int w, int ht, const void
     glBindTexture(GL_TEXTURE_2D, (GLuint)h);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glCompressedTexImage2D(GL_TEXTURE_2D, 0, fmt, w, ht, 0, (GLsizei)size, data);
     if (glGetError()) {
         char b[96];

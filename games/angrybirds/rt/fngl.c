@@ -10,7 +10,6 @@
 float fe_scale, fe_scale_y, fe_off_x, fe_off_y, fe_fb_h;
 int fe_view_h = 320;
 int fe_stat_tris, fe_stat_draws, fe_stat_tex_bytes;
-static unsigned fe_draw_seq;
 static uint32_t bound_fbo, fbo_tex, fbo_n;
 
 typedef struct { float m[16]; } mat;
@@ -28,6 +27,9 @@ static int tex_bytes[MAXTEX];
 int fe_tex_shift, fe_tex_min_side, fe_tex_big_side, fe_tex_big_shift, fe_stat_tex_peak, fe_stat_tex_count, fe_stat_tex_count_peak;
 int fe_pending_tex_shift;
 static uint8_t uv_div[MAXTEX];
+static int ts_n, ts_loaded;
+static char ts_names[80][40];
+static uint8_t ts_shifts[80];
 static int texh[MAXTEX];
 static uint32_t bound_tex, bound_tex1;
 static int tex_unit, client_unit;
@@ -55,11 +57,11 @@ static void init_once(void) {
 
 void ab_glMatrixMode(GLenum m) {
     init_once();
-    /* Ka3D Context::setMatrix passes 0..3 (world/view/tex0/tex1) as well as
-     * the GLES enums. Mapping 2 or 3 onto MODELVIEW loaded identity over the
-     * camera, which clipped MaskedImage ice/stone batches on L2+. */
-    if (m == 0x1701u || m == 1u) mode = 1;
-    else if (m == 0x1702u || m == 2u || m == 3u) mode = 2;
+    /* Ka3D glMatrixMode uses GLES enums (MODELVIEW 0x1700, PROJECTION 0x1701,
+     * TEXTURE 0x1702). Shader::setMatrix ParamType 2/3 are world/view and never
+     * reach here. Mapping 1/2/3 onto PROJECTION/TEXTURE smeared HUD glyphs. */
+    if (m == 0x1701u) mode = 1;
+    else if (m == 0x1702u) mode = 2;
     else mode = 0;
 }
 void ab_glLoadIdentity(void) { init_once(); ident(cur()); }
@@ -155,6 +157,51 @@ static uint8_t tex_has_image[MAXTEX], tex_empty_draw[MAXTEX], tex_bind_n[MAXTEX]
 static uint32_t tex_fmt[MAXTEX];
 static char tex_file[MAXTEX][40];
 static char tex_pending_name[40];
+
+/* texscale maps halved PNGs whose .dat still has original pixel rects.
+ * INGAME / INGAME_1 .dat is already halved, so those stems must never
+ * divide UVs: a leftover FONT pending used to halve MENU_BUTTON into a pig. */
+static void ts_load(void) {
+    void *buf = 0;
+    uint32_t sz = 0;
+    static int guard;
+    if (ts_loaded || guard) return;
+    ts_loaded = 1;
+    guard = 1;
+    if (plat_read_file("texscale", &buf, &sz) == 0 && buf) {
+        char *s = (char *)buf, *e = s + sz;
+        while (s < e && ts_n < 80) {
+            char *nl = s;
+            int sh = 0, k = 0;
+            while (nl < e && *nl != '\n' && *nl != '\r') nl++;
+            while (s < nl && *s != ' ' && k < 39) ts_names[ts_n][k++] = *s++;
+            ts_names[ts_n][k] = 0;
+            while (s < nl && *s == ' ') s++;
+            while (s < nl && *s >= '0' && *s <= '9') { sh = sh * 10 + (*s - '0'); s++; }
+            if (ts_names[ts_n][0] && sh > 0 && sh < 8) { ts_shifts[ts_n] = (uint8_t)sh; ts_n++; }
+            while (nl < e && (*nl == '\n' || *nl == '\r')) nl++;
+            s = nl;
+        }
+        free(buf);
+    }
+    guard = 0;
+}
+static int ts_shift_for(const char *stem) {
+    int i;
+    ts_load();
+    if (!stem || !stem[0]) return 0;
+    if (strcmp(stem, "INGAME") == 0 || strcmp(stem, "INGAME_1") == 0) return 0;
+    for (i = 0; i < ts_n; i++) if (strcmp(ts_names[i], stem) == 0) return (int)ts_shifts[i];
+    return 0;
+}
+static void commit_tex_identity(uint32_t n) {
+    if (n == 0 || n >= MAXTEX) return;
+    if (tex_pending_name[0])
+        memcpy(tex_file[n], tex_pending_name, sizeof tex_file[n]);
+    uv_div[n] = (uint8_t)ts_shift_for(tex_file[n]);
+    fe_pending_tex_shift = 0;
+}
+
 typedef struct { int page, cx, cy, w, h; } atl_slot;
 static atl_slot atl[MAXTEX];
 static void tex_clear_slot(uint32_t t) {
@@ -199,6 +246,10 @@ void ab_glBindTexture(GLenum target, GLuint texture) {
                        name ? tex_fmt[name] : 0, 0, 0, 0);
             u1log++;
         }
+        /* Do not change tex_unit here. begin() Bind(0) on TEXTURE1 while
+         * Ka3D still thinks TEXTURE1 is active; restoring unit 0 made the
+         * following Disable(TEXTURE_2D) clear en_tex and left HUD sampling
+         * the last INGAME sheet. */
         return;
     }
     bound_tex = name;
@@ -327,11 +378,7 @@ static void upload_tex(int w, int h, uint32_t fmt, uint32_t type, const void *px
                 tex_log_w[bound_tex] = (uint16_t)log_w; tex_log_h[bound_tex] = (uint16_t)log_h;
                 tex_gpu_w[bound_tex] = (uint16_t)log_w; tex_gpu_h[bound_tex] = (uint16_t)log_h;
                 tex_has_image[bound_tex] = 1; tex_fmt[bound_tex] = ofmt;
-                if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
-                    uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
-                    fe_pending_tex_shift = 0;
-                }
-                if (tex_pending_name[0]) memcpy(tex_file[bound_tex], tex_pending_name, sizeof tex_file[bound_tex]);
+                commit_tex_identity(bound_tex);
                 ab_tex_log("ATLAS", bound_tex, log_w, log_h, ofmt, otype, 0, log_w * log_h * 2);
                 return;
             }
@@ -373,11 +420,7 @@ static void upload_tex(int w, int h, uint32_t fmt, uint32_t type, const void *px
         tex_gpu_w[bound_tex] = (uint16_t)ow; tex_gpu_h[bound_tex] = (uint16_t)oh;
         tex_fmt[bound_tex] = ofmt;
         tex_has_image[bound_tex] = px ? 1 : 0;
-        if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
-            uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
-            fe_pending_tex_shift = 0;
-        }
-        if (tex_pending_name[0]) memcpy(tex_file[bound_tex], tex_pending_name, sizeof tex_file[bound_tex]);
+        commit_tex_identity(bound_tex);
         fe_stat_tex_bytes += ow * oh * 2 - tex_bytes[bound_tex]; tex_bytes[bound_tex] = ow * oh * 2;
         if (fe_stat_tex_bytes > fe_stat_tex_peak) fe_stat_tex_peak = fe_stat_tex_bytes;
         ab_tex_log(px ? "TEXIMAGE" : "TEXIMAGE_NULL", bound_tex, log_w, log_h, ofmt, otype, 0, ow * oh * 2);
@@ -420,11 +463,7 @@ void ab_glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat
     tex_gpu_w[bound_tex] = (uint16_t)width; tex_gpu_h[bound_tex] = (uint16_t)height;
     tex_fmt[bound_tex] = internalformat;
     tex_has_image[bound_tex] = 1;
-    if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
-        uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
-        fe_pending_tex_shift = 0;
-    }
-    if (tex_pending_name[0]) memcpy(tex_file[bound_tex], tex_pending_name, sizeof tex_file[bound_tex]);
+    commit_tex_identity(bound_tex);
     fe_stat_tex_bytes += (int)imageSize - tex_bytes[bound_tex]; tex_bytes[bound_tex] = (int)imageSize;
     if (fe_stat_tex_bytes > fe_stat_tex_peak) fe_stat_tex_peak = fe_stat_tex_bytes;
     ab_tex_log("COMPRESSED", bound_tex, width, height, internalformat, 0, 0, imageSize);
@@ -499,10 +538,22 @@ static int ensure_outv(void) {
 #endif
 }
 static void flush_out(void) { if (outn) { be_tris(&st, outv, outn); fe_stat_tris += outn / 3; outn = 0; } }
+/* 480x320 y-down ortho. HUD sprites are submitted in clip/NDC with identity
+ * MVP (Ka3D Primitive already transformed them). Do not remap pixel verts. */
+static void ortho_hud(mat *m) __attribute__((unused));
+static void ortho_hud(mat *m) {
+    memset(m, 0, sizeof *m);
+    m->m[0] = 2.f / 480.f;
+    m->m[5] = -2.f / 320.f;
+    m->m[10] = -1.f;
+    m->m[12] = -1.f;
+    m->m[13] = 1.f;
+    m->m[15] = 1.f;
+}
 static void emit_tri(const cv *a, const cv *b, const cv *c) {
     cv poly[2][12]; int n = 3, cur_ = 0;
     poly[0][0] = *a; poly[0][1] = *b; poly[0][2] = *c;
-    for (int pl = 0; pl < 7 && n >= 3; pl++) { /* 7 = xyzw clip; AB_CLIP_NOZ uses 5 */
+    for (int pl = 0; pl < 7 && n >= 3; pl++) {
         int m = 0;
         cv *in = poly[cur_], *out = poly[cur_ ^ 1];
         for (int i = 0; i < n; i++) {
@@ -551,26 +602,24 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, const 
     if (modep < 4 || modep > 6) return;
     init_once();
     fe_stat_draws++;
-    fe_draw_seq++;
-    /* TEXTURE_2D enable is per-unit. MaskedImage / EGL_Shader_Default::begin
-     * leaves TEXTURE1 as the active unit after a bind-0 cleanup; a later
-     * Disable then used to clear this flag and drop every textured draw.
-     * Skip only near-white untextured fills (Ka3D ice/stone fallback) so a
-     * Disable on unit 0 cannot wipe the frame, while rubber-band / HUD
-     * colours still draw. */
-    (void)en_tex1; (void)ta1_.on;
-    if (!en_tex && color[0] > 0.92f && color[1] > 0.92f && color[2] > 0.92f)
-        return;
-    if (en_tex && bound_tex && tex_named[bound_tex] && !atl[bound_tex].page && !tex_has_image[bound_tex]
-        && !tex_empty_draw[bound_tex]) {
-        tex_empty_draw[bound_tex] = 1;
-        ab_tex_log("DRAW_NO_IMAGE", bound_tex, tex_gpu_w[bound_tex], tex_gpu_h[bound_tex],
-                   tex_fmt[bound_tex], 0, 0, 0);
+    /* TEXTURE_2D enable and binds are per-unit. begin() binds the sprite on
+     * unit 0 then ActiveTexture(TEXTURE1)+Bind(0) and does not restore
+     * TEXTURE0. GLES FF still samples unit 0, so ice/stone stay on bound_tex.
+     * Sampling bound_tex1 here smeared HUD onto leftover unit-1 names. */
+    uint32_t sample = bound_tex;
+    int use_tex = en_tex;
+    (void)en_tex1;
+    if (use_tex && sample && tex_named[sample] && !atl[sample].page && !tex_has_image[sample]
+        && !tex_empty_draw[sample]) {
+        tex_empty_draw[sample] = 1;
+        ab_tex_log("DRAW_NO_IMAGE", sample, tex_gpu_w[sample], tex_gpu_h[sample],
+                   tex_fmt[sample], 0, 0, 0);
     }
     mat mvp; mul(&mvp, &stk[1][top[1]], &stk[0][top[0]]);
-    const atl_slot *as = en_tex && bound_tex && atl[bound_tex].page ? &atl[bound_tex] : NULL;
+    const atl_slot *as = use_tex && sample && atl[sample].page ? &atl[sample] : NULL;
     if (as) atlas_upload();
-    st.tex = as ? pages[as->page - 1].handle : en_tex && bound_tex ? texh[bound_tex] : 0;
+    st.tex = as ? pages[as->page - 1].handle
+        : use_tex && sample ? texh[sample] : 0;
     st.blend = en_blend; st.sfactor = sf; st.dfactor = df;
     st.depth_test = en_depth; st.depth_write = depthmask; st.depth_func = depthfunc;
     st.alpha_test = en_alpha; st.alpha_ref = 0;
@@ -586,21 +635,16 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, const 
         if (va_.size < 4) pos[3] = 1;
         if (va_.size < 3) pos[2] = 0;
         xform(&mvp, pos, v.p);
-        if (ta_.on) { float t[4]; fetch(&ta_, i, t, 0, 0); v.u = t[0]; v.v = t[1]; } else { v.u = v.v = 0; }
-        if (bound_tex) {
-            /* texscale undoes convert-time sheet shrink. Then map the logical
-             * (NPOT) image onto the POT-padded GPU texture so ice/theme-2
-             * sprites on the right of INGAME_1 do not sample the zero pad. */
-            if (uv_div[bound_tex]) {
-                float d = (float)(1 << uv_div[bound_tex]);
+        if (ta_.on) { float t[4]; fetch(&ta_, i, t, 0, 0); v.u = t[0]; v.v = t[1]; }
+        else if (ta1_.on) { float t[4]; fetch(&ta1_, i, t, 0, 0); v.u = t[0]; v.v = t[1]; }
+        else { v.u = v.v = 0; }
+        if (sample) {
+            /* texscale undoes convert-time sheet shrink. Engine UVs are already
+             * in the allocated (POT) texture; do not also scale by log/gpu. */
+            if (uv_div[sample]) {
+                float d = (float)(1 << uv_div[sample]);
                 v.u /= d; v.v /= d;
             }
-            if (tex_gpu_w[bound_tex] > 0 && tex_log_w[bound_tex] > 0 &&
-                tex_gpu_w[bound_tex] != tex_log_w[bound_tex])
-                v.u *= (float)tex_log_w[bound_tex] / (float)tex_gpu_w[bound_tex];
-            if (tex_gpu_h[bound_tex] > 0 && tex_log_h[bound_tex] > 0 &&
-                tex_gpu_h[bound_tex] != tex_log_h[bound_tex])
-                v.v *= (float)tex_log_h[bound_tex] / (float)tex_gpu_h[bound_tex];
         }
         if (as) {
             float u = v.u < 0.f ? 0.f : v.u > 1.f ? 1.f : v.u, vv = v.v < 0.f ? 0.f : v.v > 1.f ? 1.f : v.v;
@@ -621,6 +665,8 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, const 
         }
     }
     flush_out();
+    /* Leave tex_unit / client_unit as Ka3D left them. begin() always
+     * ActiveTexture(TEXTURE0) when its cache says the unit is not 0. */
 }
 void ab_glDrawArrays(GLenum modep, GLint first, GLsizei count) { draw(modep, first, count, 0, 0); }
 void ab_glDrawElements(GLenum modep, GLsizei count, GLenum type, const GLvoid *indices) { draw(modep, 0, count, type, indices); }
@@ -670,6 +716,8 @@ void ab_glGetIntegerv(GLenum pname, GLint *params) {
     case 0x84E8: params[0] = 1024; break; /* MAX_RENDERBUFFER_SIZE */
     case 0x8872: params[0] = 8; break;    /* MAX_TEXTURE_IMAGE_UNITS */
     case 0x0DE1: params[0] = (GLint)bound_tex; break;
+    /* ACTIVE_TEXTURE is not reported. Returning TEXTURE1 made Ka3D skip
+     * ActiveTexture(TEXTURE0) before HUD binds, so FONT landed on unit 1. */
     default: params[0] = 0; break;
     }
 }
@@ -686,7 +734,9 @@ const GLubyte *ab_glGetString(GLenum name) {
 void fe_reset_matrices(void) {
     init_once();
     for (int i = 0; i < 3; i++) { ident(&stk[i][0]); top[i] = 0; }
-    mode = 0;
+    /* Keep `mode` / tex_unit. Ka3D skips glMatrixMode when its cache already
+     * matches; wiping ours to MODELVIEW dumps the next projection load into
+     * the view stack. */
     color[0] = color[1] = color[2] = color[3] = 1.f;
     vx = 0; vy = 0; vw = 480; vh = 320;
 }
@@ -717,38 +767,13 @@ void fngl_reset(void) {
 }
 
 void fe_note_texfile(const char *path) {
-    static int loaded, n;
-    static char names[80][40];
-    static uint8_t shifts[80];
-    static int guard;
     const char *base, *dot;
     char stem[40];
-    int i, len;
-    if (!path || guard) return;
+    int len;
+    if (!path) return;
     tex_pending_name[0] = 0;
-    if (!loaded) {
-        void *buf = 0;
-        uint32_t sz = 0;
-        loaded = 1;
-        guard = 1;
-        if (plat_read_file("texscale", &buf, &sz) == 0 && buf) {
-            char *s = (char *)buf, *e = s + sz;
-            while (s < e && n < 80) {
-                char *nl = s;
-                int sh = 0, k = 0;
-                while (nl < e && *nl != '\n' && *nl != '\r') nl++;
-                while (s < nl && *s != ' ' && k < 39) names[n][k++] = *s++;
-                names[n][k] = 0;
-                while (s < nl && *s == ' ') s++;
-                while (s < nl && *s >= '0' && *s <= '9') { sh = sh * 10 + (*s - '0'); s++; }
-                if (names[n][0] && sh > 0 && sh < 8) { shifts[n] = (uint8_t)sh; n++; }
-                while (nl < e && (*nl == '\n' || *nl == '\r')) nl++;
-                s = nl;
-            }
-            free(buf);
-        }
-        guard = 0;
-    }
+    fe_pending_tex_shift = 0;
+    ts_load();
     base = strrchr(path, '/');
     base = base ? base + 1 : path;
     dot = strrchr(base, '.');
@@ -757,8 +782,5 @@ void fe_note_texfile(const char *path) {
     memcpy(stem, base, (size_t)len);
     stem[len] = 0;
     memcpy(tex_pending_name, stem, (size_t)len + 1);
-    for (i = 0; i < n; i++) if (strcmp(names[i], stem) == 0) {
-        fe_pending_tex_shift = shifts[i];
-        return;
-    }
+    fe_pending_tex_shift = ts_shift_for(stem);
 }

@@ -192,6 +192,20 @@ class SourceTests(unittest.TestCase):
         self.assertIn("bound_tex1", gl)
         self.assertIn("client_unit", gl)
         self.assertNotIn("void ab_glActiveTexture(GLenum t) { (void)t; }", gl)
+        self.assertIn("m == 0x1701u", gl)
+        self.assertIn("m == 0x1702u", gl)
+        self.assertNotIn("m == 2u || m == 3u", gl)
+        self.assertNotIn("color[0] > 0.92f", gl)
+        self.assertIn("tex_unit = client_unit = 0", gl)
+        self.assertIn("ortho_hud", gl)
+        self.assertIn("commit_tex_identity", gl)
+        self.assertIn("ts_shift_for", gl)
+        self.assertIn("leftover FONT", gl)
+        self.assertIn("Engine UVs are already", gl)
+        self.assertNotIn("v.u *= (float)tex_log_w", gl)
+        self.assertIn("icon_yel", (GAME / "host" / "main.c").read_text())
+        self.assertIn("castle_clip", (GAME / "host" / "main.c").read_text())
+        self.assertIn("pause_grn", (GAME / "host" / "main.c").read_text())
         host = (GAME / "host" / "main.c").read_text()
         play = host[host.index('getenv("AB_PLAY_TEST")'):host.index('getenv("AB_GESTURE_TEST")')]
         self.assertNotIn("ab_set_body_velocity", play)
@@ -200,12 +214,22 @@ class SourceTests(unittest.TestCase):
         self.assertIn("AB_TEXVAR", host)
         self.assertIn("near-white", host)
         self.assertIn("cy < 36", host)
+        self.assertIn("AB_HUD", host)
+        self.assertIn("AB_FRAME", host)
+        self.assertIn("pause_yel", host)
+        self.assertIn("dump_castle_crop", host)
+        self.assertIn("ab_cam_fit_world", host)
+        self.assertIn("minx -= 40.f", entry)
+        self.assertNotIn("minx -= 180.f", entry)
+        self.assertIn("AB_CAM fit", entry)
         self.assertIn("P6 432 240", host)
         self.assertIn("P6 240 432", host)
         self.assertIn("panel-l1", host)
         self.assertIn("pinch_out", host)
         self.assertIn("panel-pause", host)
         self.assertIn("Level1", host)
+        self.assertIn("CLAMP_TO_EDGE", (GAME / "nano" / "be_nano.c").read_text())
+        self.assertIn("wrap_s", (GAME / "host" / "be_soft.c").read_text())
         mk = (GAME / "nano" / "Makefile").read_text()
         self.assertIn("-mfloat-abi=softfp", mk)
         self.assertIn("-marm", mk)
@@ -246,12 +270,18 @@ ABSO = Path(os.environ.get(
 @unittest.skipUnless(ABHOST.is_file() and (ABDATA / "Level1.lua").is_file() and ABSO.is_file(),
                      "needs a built abhost, converted data/, and libangrybirds.so")
 class PhysicsHarnessTests(unittest.TestCase):
+    @staticmethod
+    def _harness_env(**extra):
+        env = os.environ.copy()
+        for k in ("AB_PLAY_TEST", "AB_GESTURE_TEST", "AB_LEVELS_TEST",
+                  "AB_LEVELS_MIN", "AB_LEVELS_MAX"):
+            env.pop(k, None)
+        env.update(extra)
+        return env
+
     def test_levels_1_3_draw_objects(self):
         import subprocess
-        env = os.environ.copy()
-        env["AB_LEVELS_TEST"] = "1"
-        env["AB_PHYS_WARM"] = "200"
-        env["AB_LEVELS_SETTLE"] = "90"
+        env = self._harness_env(AB_LEVELS_TEST="1", AB_PHYS_WARM="200", AB_LEVELS_SETTLE="90")
         out = ROOT / "build" / "angrybirds_rc" / "levels-test"
         out.mkdir(parents=True, exist_ok=True)
         r = subprocess.run(
@@ -264,11 +294,31 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("Level3", err)
         self.assertIn("tex_ok=", err)
         self.assertNotRegex(err, r"AB_LEVELS_TEST Level[123].*tex_ok=0")
+        self.assertIn("AB_HUD Level1", err)
+        self.assertIn("AB_FRAME Level1", err)
+        self.assertIn("AB_HUD Level2", err)
+        self.assertIn("AB_FRAME Level2", err)
+        self.assertIn("pause_yel=", err)
+        import re
+        for lvl in ("Level1", "Level2"):
+            m = re.search(rf"AB_HUD {lvl} pause_yel=(\d+) icon_yel=(\d+) pause_dark=\d+ pause_grn=(\d+) score_ink=(\d+)", err)
+            self.assertIsNotNone(m, err[-4000:])
+            self.assertGreaterEqual(int(m.group(1)), 60, f"{lvl} pause_yel")
+            self.assertGreaterEqual(int(m.group(2)), 40, f"{lvl} icon_yel")
+            self.assertLess(int(m.group(3)), 50, f"{lvl} pause_grn")
+            self.assertGreaterEqual(int(m.group(4)), 40, f"{lvl} score_ink")
+            f = re.search(rf"AB_FRAME {lvl} pouch=([0-9.]+),([0-9.]+) in=\d+ clip=\d+ castle=\d+ castle_clip=(\d+) scale=([0-9.]+)", err)
+            self.assertIsNotNone(f, err[-4000:])
+            self.assertGreaterEqual(float(f.group(1)), 8.0, f"{lvl} pouch x")
+            self.assertLessEqual(float(f.group(1)), 232.0)
+            self.assertGreaterEqual(float(f.group(2)), 4.0, f"{lvl} pouch y")
+            self.assertLessEqual(float(f.group(2)), 210.0)
+            self.assertEqual(int(f.group(3)), 0, f"{lvl} castle_clip")
+            self.assertGreaterEqual(float(f.group(4)), 0.22, f"{lvl} scale")
 
     def test_playthrough_level1_slingshot(self):
         import subprocess
-        env = os.environ.copy()
-        env["AB_PLAY_TEST"] = "1"
+        env = self._harness_env(AB_PLAY_TEST="1")
         out = ROOT / "build" / "angrybirds_rc" / "play-test"
         out.mkdir(parents=True, exist_ok=True)
         r = subprocess.run(
@@ -284,8 +334,7 @@ class PhysicsHarnessTests(unittest.TestCase):
 
     def test_gesture_frame_fixed_pinch_and_l1_l2_l3(self):
         import subprocess
-        env = os.environ.copy()
-        env["AB_GESTURE_TEST"] = "1"
+        env = self._harness_env(AB_GESTURE_TEST="1")
         out = ROOT / "build" / "angrybirds_rc" / "gesture-test"
         out.mkdir(parents=True, exist_ok=True)
         r = subprocess.run(

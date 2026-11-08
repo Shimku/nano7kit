@@ -193,6 +193,101 @@ static int bodies_textured(const char *tag, const ab_phys_info *a, int *ok_n, in
             tag, a->vis_n, seen, ok, flat);
     return ok >= 4 && flat * 3 <= ok;
 }
+/* Pause is the yellow circle at portrait top-right (11f65be ~205-232,6-43);
+ * Score is brown digits at the bottom (~57-159,372-431). A clipped MENU_BUTTON
+ * sliver is green, not yellow. */
+static int hud_ok(const char *tag) {
+    int x, y, yel = 0, dark = 0, ink = 0, n = 0, grn = 0, icon_yel = 0;
+    double sum = 0, sum2 = 0;
+    for (y = 0; y < 56; y++) for (x = 160; x < 240; x++) {
+        int r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (r > 170 && g > 130 && b < 140 && (int)r + (int)g > 2 * (int)b + 40) yel++;
+        if (r < 70 && g < 70 && b < 70) dark++;
+        if (g > 140 && r < 110 && b < 110 && g > r + 30) grn++;
+    }
+    for (y = 4; y < 48; y++) for (x = 196; x < 236; x++) {
+        int r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (r > 170 && g > 130 && b < 140 && (int)r + (int)g > 2 * (int)b + 40) icon_yel++;
+    }
+    for (y = 372; y < 432; y++) for (x = 8; x < 160; x++) {
+        int r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        int yv = (r * 3 + g * 6 + b) / 10;
+        sum += yv; sum2 += (double)yv * yv; n++;
+        if (r > 70 && g > 40 && b < 90 && r > b + 15) ink++;
+    }
+    {
+        int var = n ? (int)(sum2 / n - (sum / n) * (sum / n)) : 0;
+        fprintf(stderr, "AB_HUD %s pause_yel=%d icon_yel=%d pause_dark=%d pause_grn=%d score_ink=%d score_var=%d last_tex=%u,%u\n",
+                tag, yel, icon_yel, dark, grn, ink, var,
+                (unsigned)be_last_tex[20][210], (unsigned)be_last_tex[400][80]);
+        /* Pause II bars are light gold, not black; require the yellow disc
+         * and brown Score ink against 11f65be, and reject the green-blob miss. */
+        return yel >= 60 && icon_yel >= 40 && grn < 50 && ink >= 40 && var >= 80;
+    }
+}
+static int framing_ok(const char *tag, const ab_phys_info *a) {
+    float bx, by, px, py;
+    int i, n_in = 0, n_clip = 0, n_castle = 0, n_castle_clip = 0;
+    if (tag && strstr(tag, "pinch")) return 1;
+    if (!ab_pouch_world(&bx, &by) || !ab_world_to_panel(bx, by, &px, &py)) {
+        fprintf(stderr, "AB_FRAME %s no pouch\n", tag);
+        return 0;
+    }
+    /* Landscape left (slingshot) is portrait top. Birds may sit near y=8. */
+    if (px < 8.f || px > 232.f || py < 4.f || py > 210.f) {
+        fprintf(stderr, "AB_FRAME %s pouch panel %.1f,%.1f out of opening view\n",
+                tag, (double)px, (double)py);
+        return 0;
+    }
+    for (i = 0; i < a->vis_n; i++) {
+        int cx = (int)(a->vis_px[i] + 0.5f);
+        int cy = (int)(a->vis_py[i] + 0.5f);
+        if (a->vis_type[i] != 2) continue;
+        if (cy > 160) {
+            if (cy > 420 || cx < 4 || cx > 236) {
+                fprintf(stderr, "AB_FRAME %s castle_clip body t=%d panel=%d,%d world=%.2f,%.2f\n",
+                        tag, a->vis_type[i], cx, cy,
+                        (double)a->vis_x[i], (double)a->vis_y[i]);
+                n_castle_clip++; n_clip++; continue;
+            }
+            n_castle++;
+            n_in++;
+            continue;
+        }
+        if (cy > 412 || cx < 8 || cx > 232) { n_clip++; continue; }
+        n_in++;
+    }
+    fprintf(stderr, "AB_FRAME %s pouch=%.1f,%.1f in=%d clip=%d castle=%d castle_clip=%d scale=%.3f\n",
+            tag, (double)px, (double)py, n_in, n_clip, n_castle, n_castle_clip,
+            (double)a->world_scale);
+    return n_in >= 4 && n_castle_clip == 0 && n_castle >= 1 && a->world_scale >= 0.22f;
+}
+static void dump_castle_crop(const char *name, const ab_phys_info *a) {
+    char p[512]; FILE *f;
+    int i, cx = 0, cy = 0, n = 0, x, y, u, v, side = 52;
+    for (i = 0; i < a->vis_n; i++) {
+        if (a->vis_type[i] != 2 || a->vis_py[i] < 160.f) continue;
+        cx += (int)(a->vis_px[i] + 0.5f);
+        cy += (int)(a->vis_py[i] + 0.5f);
+        n++;
+    }
+    if (n < 1) return;
+    cx /= n; cy /= n;
+    snprintf(p, sizeof p, "%s/%s.ppm", out_dir, name);
+    f = fopen(p, "wb"); if (!f) return;
+    fprintf(f, "P6 %d %d 255\n", side * 4, side * 4);
+    for (y = cy - side; y < cy + side; y++) for (v = 0; v < 2; v++)
+        for (x = cx - side; x < cx + side; x++) for (u = 0; u < 2; u++) {
+            int px = x, py = y;
+            if (px < 0) px = 0;
+            if (px > 239) px = 239;
+            if (py < 0) py = 0;
+            if (py > 431) py = 431;
+            fwrite(be_fb[py][px], 1, 3, f);
+        }
+    fclose(f);
+    fprintf(stderr, "AB_DUMP %s castle 2x at %d,%d n=%d\n", name, cx, cy, n);
+}
 static int level_sane(const char *name, ab_phys_info *a) {
     int pix, blk, bad = 0, tok = 0, tflat = 0;
     ab_phys_snapshot(a);
@@ -200,11 +295,13 @@ static int level_sane(const char *name, ab_phys_info *a) {
     blk = panel_black();
     if (a->dynamic_n < 1) bad = 1;
     if (a->vis_dyn < 1 || a->vis_all < 2) bad = 1;
-    if (a->world_scale < 0.22f || a->world_scale > 1.05f) bad = 1;
+    if (a->world_scale < 0.18f || a->world_scale > 1.05f) bad = 1;
     if (pix < 800) bad = 1;
     if (blk > 240 * 432 / 12) bad = 1;
     if (be_stat_tex_fail) bad = 1;
     if (!bodies_textured(name, a, &tok, &tflat)) bad = 1;
+    if (!hud_ok(name)) bad = 1;
+    if (!framing_ok(name, a)) bad = 1;
     fprintf(stderr, "AB_GESTURE_TEST %s dyn=%d vis=%d/%d scale=%.3f pix=%d black=%d tex=%d fail=%d tex_ok=%d tex_flat=%d %s\n",
             name, a->dynamic_n, a->vis_dyn, a->vis_all, (double)a->world_scale,
             pix, blk, fe_stat_tex_count, be_stat_tex_fail, tok, tflat, bad ? "FAIL" : "ok");
@@ -305,7 +402,14 @@ int main(int argc, char **argv) {
         wait_frames(10);
         ab_load_lua_level("Level1");
         wait_frames(50);
+        ab_cam_fit_world();
+        wait_frames(2);
         if (every) { shot(6); dump_panel("panel-l1"); }
+        {
+            ab_phys_info open;
+            ab_phys_snapshot(&open);
+            if (!hud_ok("play-l1") || !framing_ok("play-l1", &open)) fail++;
+        }
         ab_phys_enable(1);
         wait_frames(40);
         if (every) shot(7);
@@ -402,7 +506,7 @@ int main(int argc, char **argv) {
             fprintf(stderr, "AB_PLAY_TEST pause pix=%d black=%d scale=%.3f\n",
                     pix, blk, (double)p.world_scale);
             if (pix < 800) fail++;
-            if (p.world_scale < 0.25f || p.world_scale > 1.05f) fail++;
+            if (p.world_scale < 0.18f || p.world_scale > 1.05f) fail++;
         }
         wait_frames(95);
         if (every) shot(5);
@@ -414,7 +518,7 @@ int main(int argc, char **argv) {
         if (ab_malloc_failures()) fail++;
         if (!flying) fail++;
         if (b.dynamic_n < 1) fail++;
-        if (a.world_scale < 0.25f || a.world_scale > 1.05f) fail++;
+        if (a.world_scale < 0.18f || a.world_scale > 1.05f) fail++;
         fprintf(stderr, "AB_PLAY_TEST %s\n", fail ? "FAIL" : "PASS");
         return fail ? 1 : 0;
     }
@@ -431,6 +535,8 @@ int main(int argc, char **argv) {
         wait_frames(20);
         ab_load_lua_level("Level1");
         wait_frames(90);
+        ab_cam_fit_world();
+        wait_frames(2);
         if (!level_sane("Level1", &a)) fail++;
         dump_panel("panel-l1");
         ox = fe_off_x; oy = fe_off_y; sx = fe_scale; sy = fe_scale_y;
@@ -452,6 +558,8 @@ int main(int argc, char **argv) {
         if (pr != qr || pg != qg || pb != qb) fail++;
         ab_load_lua_level("Level2");
         wait_frames(90);
+        ab_cam_fit_world();
+        wait_frames(2);
         if (!level_sane("Level2", &a)) fail++;
         dump_panel("panel-l2");
         scale0 = a.world_scale;
@@ -482,6 +590,8 @@ int main(int argc, char **argv) {
         }
         ab_load_lua_level("Level3");
         wait_frames(90);
+        ab_cam_fit_world();
+        wait_frames(2);
         if (!level_sane("Level3", &a)) fail++;
         dump_panel("panel-l3");
         fprintf(stderr, "AB_GESTURE_TEST %s\n", fail ? "FAIL" : "PASS");
@@ -510,28 +620,36 @@ int main(int argc, char **argv) {
             fclose(lf);
             ab_load_lua_level(name);
             wait_frames(settle);
+            /* Physics may slide a block during settle; re-fit so the opening
+             * dump still has the castle inside the 480x320 view. */
+            ab_cam_fit_world();
+            wait_frames(2);
             ab_phys_snapshot(&a);
             ab_phys_log(name);
             loaded++;
             pix = play_pixels(); blk = panel_black();
             if (a.dynamic_n < 1) bad = 1;
             if (a.vis_dyn < 1 || a.vis_all < 8) bad = 1;
-            if (a.world_scale < 0.22f || a.world_scale > 1.05f) bad = 1;
+            if (a.world_scale < 0.18f || a.world_scale > 1.05f) bad = 1;
             if (pix < 800) bad = 1;
             if (blk > 240 * 432 / 12) bad = 1;
             if (be_stat_tex_fail) bad = 1;
             {
                 int tok = 0, tflat = 0;
                 if (!bodies_textured(name, &a, &tok, &tflat)) bad = 1;
+                if (!hud_ok(name)) bad = 1;
+                if (!framing_ok(name, &a)) bad = 1;
                 fprintf(stderr, "AB_LEVELS_TEST %s dyn=%d vis=%d/%d scale=%.3f pix=%d black=%d tex_ok=%d tex_flat=%d %s\n",
                         name, a.dynamic_n, a.vis_all, a.bodies, (double)a.world_scale, pix, blk,
                         tok, tflat, bad ? "FAIL" : "ok");
             }
             if (bad) fail++;
             {
-                char pan[24];
+                char pan[24], crop[32];
                 snprintf(pan, sizeof pan, "panel-l%d", n);
                 dump_panel(pan);
+                snprintf(crop, sizeof crop, "panel-l%d-castle", n);
+                dump_castle_crop(crop, &a);
             }
             if (every) shot(2000 + n);
         }
