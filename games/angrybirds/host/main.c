@@ -61,6 +61,29 @@ static int play_pixels(void) {
     }
     return n;
 }
+static int panel_black(void) {
+    /* Device framebuffer captures are raw 240x432. Uncleared panel shows as
+     * black (test 4 shot2/3); the host software clear is often cyan, so this
+     * is the nano-visible void. */
+    int n = 0, y, x;
+    for (y = 0; y < 432; y++) {
+        for (x = 0; x < 240; x++) {
+            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            if (r < 12 && g < 12 && b < 12) n++;
+        }
+    }
+    return n;
+}
+static void shot_panel(int frame) {
+    /* Same orientation as a nano framebuffer grab (240x432 portrait, y down). */
+    char p[512]; snprintf(p, sizeof p, "%s/panel-%05d.ppm", out_dir, frame);
+    FILE *f = fopen(p, "wb"); if (!f) return;
+    fprintf(f, "P6 240 432 255\n");
+    for (int y = 0; y < 432; y++)
+        for (int x = 0; x < 240; x++)
+            fwrite(be_fb[y][x], 1, 3, f);
+    fclose(f);
+}
 static void shot(int frame) {
     /* Same home-on-right landscape dump as PvZ n7soft_shot: rotate the portrait
      * panel (240x432, y down) so Home is on the right. A raw 240x432 P6 looked
@@ -75,6 +98,7 @@ static void shot(int frame) {
             fwrite(be_fb[py][px], 1, 3, f);
         }
     fclose(f);
+    shot_panel(frame);
 }
 static void wait_frames(int n) {
     int f;
@@ -257,13 +281,29 @@ int main(int argc, char **argv) {
         if (rt_malloc_failures()) fail++;
         if (!flying) fail++;
         if (b.dynamic_n < 1) fail++;                  /* must not auto-win */
+        if (a.world_scale < 0.25f || a.world_scale > 1.05f) fail++;
+        /* Pause is screen-space (game ~24,24 -> panel ~215,24). RECIPE 7's
+         * extra lua drawGame composited the world over this overlay. */
+        tap_at(215.f, 24.f);
+        wait_frames(10);
+        if (every) shot(10);
+        {
+            int blk = panel_black();
+            ab_phys_info p;
+            ab_phys_snapshot(&p);
+            ab_phys_log("play-pause");
+            fprintf(stderr, "AB_PLAY_TEST pause black=%d scale=%.3f\n",
+                    blk, (double)p.world_scale);
+            if (blk > 240 * 432 / 8) fail++;
+            if (p.world_scale < 0.25f || p.world_scale > 1.05f) fail++;
+        }
         fprintf(stderr, "AB_PLAY_TEST %s\n", fail ? "FAIL" : "PASS");
         return fail ? 1 : 0;
     }
     if (getenv("AB_LEVELS_TEST")) {
         int fail = 0, n, loaded = 0, vis_fail = 0;
         int warm = atoi(getenv("AB_PHYS_WARM") ? getenv("AB_PHYS_WARM") : "200");
-        int settle = atoi(getenv("AB_LEVELS_SETTLE") ? getenv("AB_LEVELS_SETTLE") : "12");
+        int settle = atoi(getenv("AB_LEVELS_SETTLE") ? getenv("AB_LEVELS_SETTLE") : "90");
         int min_n = atoi(getenv("AB_LEVELS_MIN") ? getenv("AB_LEVELS_MIN") : "1");
         int max_n = atoi(getenv("AB_LEVELS_MAX") ? getenv("AB_LEVELS_MAX") : "96");
         wait_frames(warm);
@@ -288,17 +328,23 @@ int main(int argc, char **argv) {
             loaded++;
             if (a.dynamic_n < 1) bad = 1;
             if (a.vis_dyn < 1 || a.vis_all < 2) { bad = 1; vis_fail++; }
-            if (a.world_scale < 0.19f || a.world_scale > 0.90f) bad = 1;
+            /* RECIPE 7 AABB-fit used 0.20 and passed 0.19..0.90; that is the
+             * device test 4 zoom (camfit scale=0.200 top=-1420). Native iPhone
+             * tables are about 0.22..0.70 (tall stages like L28 sit ~0.25);
+             * iPad leftovers are >1. */
+            if (a.world_scale < 0.22f || a.world_scale > 1.05f) bad = 1;
             if (fe_stat_draws < 1) bad = 1;
             {
                 int pix = play_pixels();
+                int blk = panel_black();
                 if (pix < 800) bad = 1;
+                if (blk > 240 * 432 / 12) bad = 1;
                 if (a.vis_dyn < 1) bad = 1;
                 if (be_stat_tex_fail) bad = 1;
                 if (rt_malloc_failures()) bad = 1;
-                fprintf(stderr, "AB_LEVELS_TEST %s dyn=%d vis=%d/%d scale=%.3f draws=%d pix=%d %s\n",
+                fprintf(stderr, "AB_LEVELS_TEST %s dyn=%d vis=%d/%d scale=%.3f draws=%d pix=%d black=%d %s\n",
                         name, a.dynamic_n, a.vis_dyn, a.vis_all, (double)a.world_scale,
-                        fe_stat_draws, pix, bad ? "FAIL" : "ok");
+                        fe_stat_draws, pix, blk, bad ? "FAIL" : "ok");
             }
             if (bad) fail++;
             if (every) shot(2000 + n);

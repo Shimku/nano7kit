@@ -201,11 +201,18 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   `plat_os_alloc` (nano: guest address `host_ptr - g_mem` so `AT` stays
   `M+a`; host: `0xB0000000` slabs). `AB_PHYS_TEST=1` loads Level1 then
   lua `loadNextLevel` for 2-4, steps 300 frames, and checks contacts plus
-  dynamic Y still near the ground. `AB_PLAY_TEST=1` taps PLAY, level 1,
-  TUTORIAL_OK, and a slingshot. VCMP writes FPSCR only (APSR via FMSTAT),
-  matching ARM; the old immediate `n_=` collapsed Box2D AABBs to a point.
-  PLAY, TUTORIAL_OK, and a slingshot drag work through LBUTTON plus
-  `mouseMove`.
+  dynamic Y still near the ground.   `AB_PLAY_TEST=1` taps PLAY, level 1,
+  TUTORIAL_OK, and a slingshot. Host also writes a raw 240x432 `panel-*.ppm`
+  matching a nano framebuffer grab. Lua `cameraFunction` owns the play view;
+  only leftover iPad tables (sx>1, 1024-tall) are rescaled to 480x320. RECIPE 7
+  fitted an AABB around every body (`camfit x=-432..2006 scale=0.20 top=-1420`)
+  which is the slingshot-to-castle span, not exploding physics (`rest=1`);
+  lua then logged `Camera target object outside level limits`. That zoom left
+  black/white voids on device and a second `drawGame` painted the world over
+  the pause page. VCMP
+  writes FPSCR only (APSR via FMSTAT), matching ARM; the old immediate `n_=`
+  collapsed Box2D AABBs to a point. PLAY, TUTORIAL_OK, and a slingshot drag
+  work through LBUTTON plus `mouseMove`.
 - **Writes:** `Angry Birds.hbapp` (code only, about 2.3 MB; no game assets)
   and `/Apps/Data/AngryBirds` from the user's ipa. `nabase add` copies with
   `replace=True`; `nabase remove` is not needed to overwrite.

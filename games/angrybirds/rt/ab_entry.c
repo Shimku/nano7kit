@@ -272,9 +272,11 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
     if (dt < 0.001f) dt = 0.001f;
     fe_stat_tris = 0;
     fe_stat_draws = 0;
-    /* C++ + lua camera before update so screenToWorldTransform (slingshot)
-     * matches the 480x320 play view. cameraFunction runs at the end of
-     * updateGame, so patch again before lua drawGame / drawGameNative. */
+    /* Identity GL stacks + the iOS 480x320 ortho, then one GameApp::update.
+     * update already runs lua cameraFunction and drawGame. A second lua
+     * drawGame here painted the world on top of the pause overlay (device
+     * test 4, PAUSED 1-2 clipped). Do not AABB-fit the camera before draw:
+     * that chased every body, zoomed to 0.20 and left black/white voids. */
     ab_cam_fit_play();
     fe_reset_matrices();
     if (ctx && view_rect) {
@@ -283,14 +285,10 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
     }
     be_frame_begin();
     if (app && AB_Update) rt_call("update", AB_Update, app, F2U(dt), ctx, 0, 0, 0);
+    ab_cam_fit_play();
     {
         ab_phys_info info;
         ab_phys_snapshot(&info);
-        if (info.dynamic_n > 0) {
-            ab_cam_fit_play();
-            if (info.lua)
-                rt_call("luaCall", AB_LuaCall, info.lua, intern_str("drawGame"), 0, 0, 0, 0);
-        }
         if (info.dynamic_n > 0 && !info.phys_on && info.world && guest_ok(info.world, 4u)) {
             uint32_t st[2] = {0, 0};
             ab_phys_enable(1);
@@ -366,14 +364,14 @@ static uint32_t game_lua(void) {
 }
 
 static uint32_t intern_str(const char *s) {
-    static const char *keys[48];
-    static uint32_t ptrs[48];
+    static const char *keys[64];
+    static uint32_t ptrs[64];
     static int n;
     int i;
     if (!s) return 0;
     for (i = 0; i < n; i++)
         if (keys[i] == s || (keys[i] && strcmp(keys[i], s) == 0)) return ptrs[i];
-    if (n >= 48) return g_strdup(s);
+    if (n >= 64) return g_strdup(s);
     keys[n] = s;
     ptrs[n] = g_strdup(s);
     return ptrs[n++];
@@ -437,12 +435,8 @@ void ab_ready_slingshot(void) {
 
 /* lua updateLoading calls loadLevelInternal(levelName), which createBox/createCircle.
  * C++ GameLua::loadLevel only fills the objects table. */
-static int cam_last_bodies;
-static float cam_s_scale, cam_s_left, cam_s_top;
-
 static void cam_reset(void) {
-    cam_last_bodies = 0;
-    cam_s_scale = cam_s_left = cam_s_top = 0.f;
+    ab_lua_iphone_screen();
 }
 
 /* loadLevelInternal rescales castle/bird cameras by lua screenHeight /
@@ -460,20 +454,36 @@ void ab_load_lua_level(const char *name) {
     ab_lua_set_string("levelName", name);
     ab_lua_set_bool("loadingPageDrawn", 1);
     ab_lua_set_bool("showBG", 1);
-    ab_lua_set_number("levelLeftEdge", 100000.f);
-    ab_lua_set_number("levelRightEdge", -100000.f);
     rt_log("ab_load_lua_level %s", name);
     fe_reset_matrices();
     ab_call_lua("updateLoading");
+    /* levelStartCamera keeps the castle shot while castleCameraTimer <= 2.
+     * RECIPE 7's AABB camera (device test 4) made that look like a floating
+     * plank in a void. Timer 0 restarts the hold; 3 skips it so the first
+     * playable frame is already heading at the bird/slingshot camera. */
+    ab_lua_set_number("castleCameraTimer", 3.f);
+    ab_lua_set_number("cameraResetTimer", 0.f);
+    ab_lua_set_number("cameraAnimationSlider", 1.f);
+    ab_lua_set_number("cameraAnimationSliderTarget", 1.f);
+    ab_lua_set_bool("allowResetToBirdCamera", 1);
+    ab_call_lua("defaultCamera");
     ab_phys_enable(1);
     {
-        uint32_t glu = game_lua(), pause, ov;
-        pause = lua_subtable(glu, "pausePage");
-        ov = lua_subtable(pause, "backgroundOverlay");
-        lua_table_set_num(ov, "shade", 0.f);
-        pause = lua_subtable(glu, "loadingPage");
-        ov = lua_subtable(pause, "backgroundOverlay");
-        lua_table_set_num(ov, "shade", 0.f);
+        uint32_t glu = game_lua(), objs, theme;
+        static uint32_t theme_slot;
+        /* lua setTheme no-ops if objects.theme is unchanged (L14 then L15
+         * are both theme1) and the previous sky tiles stay behind. */
+        if (!theme_slot) {
+            theme_slot = g_malloc(16);
+            if (theme_slot) memset(G8(theme_slot), 0, 16);
+        }
+        theme = theme_slot;
+        objs = lua_subtable(glu, "objects");
+        if (theme) memset(G8(theme), 0, 16);
+        if (objs && theme && AB_LuaGetString)
+            rt_call("getString", AB_LuaGetString, theme, objs, intern_str("theme"), 0, 0, 0);
+        if (glu && theme && AB_SetTheme && gr32(theme))
+            rt_call("setTheme", AB_SetTheme, glu, theme, 0, 0, 0, 0);
     }
     ab_cam_fit_play();
     ab_phys_log(name);
@@ -679,171 +689,51 @@ void ab_phys_log(const char *tag) {
     }
 }
 
-/* Keep the 480x320 play camera on the slingshot-to-structure box. Lua starts
- * on the castle close-up (and Level 1's tables are iPad 1680x1024); both hide
- * pigs/blocks on the 240-wide panel. Volume still zooms the panel mapping.
- *
- * Compact levels (L1): about 0.32, slingshot and tower together. Wide levels
- * zoom out as far as 0.20 so every in-play body stays on screen. Theme sky
- * sprites sit near world x=0; include that so ice stages are not a white void. */
+/* Lua cameraFunction owns the play view (castle intro, then the bird camera,
+ * pan). Device test 4 of RECIPE 7 fitted an AABB around every body, logged
+ * `camfit ... x=-432..2006 scale=0.200 left=-413 top=-1420`, and lua printed
+ * "Camera target object outside level limits". Those x bounds are the
+ * slingshot-to-castle span (plus the 2000-unit ground), not bodies flying
+ * off: the same log has rest=1, dynY=-15..-7, contacts=16. The 2400x1600
+ * window left black/white voids (sky tiles only cover the real ~800-wide
+ * shot), HUD and the pause page sat in the wrong place, and structures
+ * looked like they were floating. iPhone tables are already sx~0.3..0.7
+ * at 480x320; only iPad tables (sx>1, screenHeight 1024) need a rescale. */
 void ab_cam_fit_play(void) {
-    uint32_t glu = game_lua(), world, b, screen;
-    int nwalk, nmax, ndyn, snap;
-    float xmin, xmax, ymin, ymax, w, h, scale, left, top, pad, natural;
-    float view_w, view_h, px, py;
+    uint32_t glu = game_lua(), objs, cam;
+    float scale, left, top, cx, cy, ns, factor;
     if (!glu) return;
-    world = gr32(glu + AB_WORLD_OFF);
-    if (!guest_ok(world, B2_GRAV_Y + 4u)) return;
-    nmax = (int)gr32(world + B2_BODY_COUNT);
-    xmin = ymin = 1e9f; xmax = ymax = -1e9f;
-    ndyn = 0;
-    {
-        float xs[64], ys[64], hs[64];
-        int i, keep;
-        b = gr32(world + B2_BODY_LIST);
-        for (nwalk = 0; b && nwalk < 256 && nwalk < (nmax > 0 ? nmax + 2 : 256); nwalk++) {
-            int type, play;
-            float x, y, hx;
-            uint32_t fx, sh;
-            if (!guest_ok(b, 116u)) break;
-            type = (int)gr32(b);
-            x = U2F(gr32(b + 12u));
-            y = U2F(gr32(b + 16u));
-            hx = 0.f;
-            fx = gr32(b + 108u);
-            sh = fx && guest_ok(fx, 56u) ? gr32(fx + 28u) : 0;
-            if (sh && guest_ok(sh, 32u)) hx = U2F(gr32(sh + 28u));
-            if (!(hx == hx) || hx < 0.f || hx > 40.f) hx = 0.f;
-            play = 0;
-            /* Dynamics are birds/blocks/pigs. Statics are terrain and the
-             * ground plane (hx=1000). L14's castle is static Theme blocks;
-             * a dynamics-only box framed the birds at x~-10 and hid it. */
-            if (type == 2 && y > -45.f && y < 15.f) play = 1;
-            if (type == 0 && y > -45.f && y < 3.f && x > -40.f && x < 150.f && hx < 80.f && hx > 0.1f)
-                play = 1;
-            if (play && x == x && y == y && ndyn < 64) {
-                xs[ndyn] = x; ys[ndyn] = y; hs[ndyn] = hx; ndyn++;
-            }
-            b = gr32(b + 104u);
-        }
-        if (ndyn < 1) { cam_last_bodies = 0; return; }
-        for (i = 1; i < ndyn; i++) {
-            float tx = xs[i], ty = ys[i], th = hs[i];
-            int k = i;
-            while (k > 0 && xs[k - 1] > tx) {
-                xs[k] = xs[k - 1]; ys[k] = ys[k - 1]; hs[k] = hs[k - 1]; k--;
-            }
-            xs[k] = tx; ys[k] = ty; hs[k] = th;
-        }
-        /* L3 has a leftover dynamic around x=-43; slingshot birds sit around -16..0. */
-        while (ndyn >= 2 && xs[0] < -25.f && xs[1] - xs[0] > 20.f) {
-            for (i = 0; i < ndyn - 1; i++) {
-                xs[i] = xs[i + 1]; ys[i] = ys[i + 1]; hs[i] = hs[i + 1];
-            }
-            ndyn--;
-        }
-        keep = 0;
-        for (i = 0; i < ndyn; i++) {
-            float wx = xs[i] * AB_PHYS_TO_WORLD;
-            float wy = ys[i] * AB_PHYS_TO_WORLD;
-            float hw = hs[i] * AB_PHYS_TO_WORLD;
-            if (wx - hw < xmin) xmin = wx - hw;
-            if (wx + hw > xmax) xmax = wx + hw;
-            if (wy - hw < ymin) ymin = wy - hw;
-            if (wy + hw > ymax) ymax = wy + hw;
-            keep++;
-        }
-        if (keep < 1) { cam_last_bodies = 0; return; }
-        ndyn = keep;
-    }
-    if (xmax <= xmin || ymax <= ymin) return;
-    /* Theme sky sprites sit around world x=0. A compact castle AABB (L3)
-     * otherwise looks onto white ice with no sky. */
-    if (xmin > 0.f) xmin = 0.f;
-    pad = 70.f;
-    xmin -= pad; xmax += pad; ymin -= pad; ymax += pad;
-    w = xmax - xmin; h = ymax - ymin;
-    if (w < 280.f) { float m = 0.5f * (280.f - w); xmin -= m; xmax += m; w = 280.f; }
-    if (h < 160.f) { float m = 0.5f * (160.f - h); ymin -= m; ymax += m; h = 160.f; }
-    natural = AB_VIEW_W / w;
-    if (AB_VIEW_H / h < natural) natural = AB_VIEW_H / h;
-    natural *= 0.92f;
-    /* 0.32 is L1's full slingshot-to-tower shot. Do not go above that (sky
-     * clips). Wide stages zoom out so every in-play body stays on screen. */
-    scale = natural;
-    if (scale < 0.20f) scale = 0.20f;
-    if (scale > 0.32f) scale = 0.32f;
-    view_w = AB_VIEW_W / scale;
-    view_h = AB_VIEW_H / scale;
-    left = 0.5f * (xmin + xmax) - 0.5f * view_w;
-    if (natural >= 0.30f) {
-        /* L1 slingshot-to-tower shot: 70% of the view above world y=0. */
-        top = -0.70f * view_h;
-    } else {
-        /* Dirt tiles end around world y=180. Pin the bottom there so wide
-         * stages do not look onto the white underground void. */
-        top = 180.f - view_h;
-    }
-    snap = (cam_last_bodies != nmax || cam_s_scale < 1e-4f);
-    if (snap) {
-        cam_s_scale = scale; cam_s_left = left; cam_s_top = top;
-        rt_log("camfit bodies=%d dyn=%d x=%.0f..%.0f scale=%.3f left=%.0f top=%.0f",
-               nmax, ndyn, (double)xmin, (double)xmax, (double)scale, (double)left,
-               (double)top);
-    } else {
-        cam_s_scale += (scale - cam_s_scale) * 0.3f;
-        cam_s_left += (left - cam_s_left) * 0.3f;
-        cam_s_top += (top - cam_s_top) * 0.3f;
-    }
-    cam_last_bodies = nmax;
-    rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(cam_s_scale), 0, 0, 0, 0);
-    rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(cam_s_left), F2U(cam_s_top), 0, 0, 0);
-    ab_lua_set_number("worldScale", cam_s_scale);
+    ab_lua_iphone_screen();
     ab_lua_set_bool("showBG", 1);
-    view_w = AB_VIEW_W / cam_s_scale;
-    view_h = AB_VIEW_H / cam_s_scale;
-    px = cam_s_left + 0.5f * view_w;
-    py = cam_s_top + 0.5f * view_h;
-    /* screenToWorldTransform reads lua screen + worldScale at the start of
-     * updateGame. Keep them on the nano play camera every frame. */
-    screen = lua_subtable(glu, "screen");
-    lua_table_set_num(screen, "x", px);
-    lua_table_set_num(screen, "y", py);
-    lua_table_set_num(screen, "left", cam_s_left);
-    lua_table_set_num(screen, "top", cam_s_top);
-    lua_table_set_num(screen, "right", cam_s_left + view_w);
-    lua_table_set_num(screen, "bottom", cam_s_top + view_h);
-    /* Nested castle/bird tables only on a new body set. */
-    if (snap) {
-        uint32_t objs, cam, theme;
-        ab_lua_set_number("animationWorldScale", cam_s_scale);
-        ab_lua_set_number("currentZoomedScale", cam_s_scale);
-        ab_lua_set_number("minWorldScale", cam_s_scale * 0.85f);
-        objs = lua_subtable(glu, "objects");
-        cam = lua_subtable(objs, "castleCameraData");
-        lua_table_set_num(cam, "sx", cam_s_scale);
-        lua_table_set_num(cam, "sy", cam_s_scale);
-        lua_table_set_num(cam, "px", px);
-        lua_table_set_num(cam, "py", py);
-        cam = lua_subtable(objs, "birdCameraData");
-        lua_table_set_num(cam, "sx", cam_s_scale);
-        lua_table_set_num(cam, "sy", cam_s_scale);
-        lua_table_set_num(cam, "px", px);
-        lua_table_set_num(cam, "py", py);
-        /* Rebuild sky tiles when the body set changes. lua setTheme no-ops
-         * if objects.theme is unchanged (L14→L15 are both theme1). */
-        {
-            static uint32_t theme_slot;
-            if (!theme_slot) {
-                theme_slot = g_malloc(16);
-                if (theme_slot) memset(G8(theme_slot), 0, 16);
-            }
-            theme = theme_slot;
-        }
-        if (theme) memset(G8(theme), 0, 16);
-        if (objs && theme && AB_LuaGetString)
-            rt_call("getString", AB_LuaGetString, theme, objs, intern_str("theme"), 0, 0, 0);
-        if (glu && theme && AB_SetTheme && gr32(theme))
-            rt_call("setTheme", AB_SetTheme, glu, theme, 0, 0, 0, 0);
-    }
+    scale = U2F(gr32(glu + AB_CAM_SCALE));
+    if (!(scale > 1.05f)) return;
+    left = U2F(gr32(glu + AB_CAM_LEFT));
+    top = U2F(gr32(glu + AB_CAM_TOP));
+    /* Level 1 birdCameraData is 1680x1024, sx~2.25. loadLevelInternal
+     * multiplies sx by lua screenHeight / camera.screenHeight; if that
+     * did not run, shrink around the same look-at. */
+    factor = AB_VIEW_H / 1024.f;
+    ns = scale * factor;
+    if (ns < 0.35f) ns = 0.35f;
+    if (ns > 0.90f) ns = 0.90f;
+    cx = left + 0.5f * AB_VIEW_W / scale;
+    cy = top + 0.5f * AB_VIEW_H / scale;
+    left = cx - 0.5f * AB_VIEW_W / ns;
+    top = cy - 0.5f * AB_VIEW_H / ns;
+    rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(ns), 0, 0, 0, 0);
+    rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(left), F2U(top), 0, 0, 0);
+    ab_lua_set_number("worldScale", ns);
+    objs = lua_subtable(glu, "objects");
+    cam = lua_subtable(objs, "castleCameraData");
+    lua_table_set_num(cam, "sx", ns);
+    lua_table_set_num(cam, "sy", ns);
+    lua_table_set_num(cam, "screenWidth", AB_VIEW_W);
+    lua_table_set_num(cam, "screenHeight", AB_VIEW_H);
+    cam = lua_subtable(objs, "birdCameraData");
+    lua_table_set_num(cam, "sx", ns);
+    lua_table_set_num(cam, "sy", ns);
+    lua_table_set_num(cam, "screenWidth", AB_VIEW_W);
+    lua_table_set_num(cam, "screenHeight", AB_VIEW_H);
+    rt_log("cam iphone-rescale from %.3f to %.3f left=%.0f top=%.0f",
+           (double)scale, (double)ns, (double)left, (double)top);
 }
