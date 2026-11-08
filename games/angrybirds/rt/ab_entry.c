@@ -33,6 +33,9 @@ typedef void *(*app_get_fn)(void);
 typedef void (*sheet_ctor_fn)(void *, void *, const void *);
 typedef void (*spr_ctor_fn)(void *, void *, int, int, int, int, int, int);
 typedef const char *(*cstr_fn)(const void *);
+typedef void (*tab_dtor_fn)(void *);
+typedef void (*str_dtor_fn)(void *);
+typedef void (*get_str_fn)(void *, void *, const char *);
 
 static jni_init_fn j_init;
 static jni_void_fn j_update, j_deinit;
@@ -48,9 +51,12 @@ static set_vel_fn set_vel;
 static set_num_fn lua_set_num;
 static get_num_fn lua_get_num;
 static get_bool_fn lua_get_bool;
-static is_name_fn lua_is_num, lua_is_bool, lua_is_nil;
+static is_name_fn lua_is_num, lua_is_bool, lua_is_nil, lua_is_str;
 typedef void (*get_tab_fn)(void *, void *, const char *);
 static get_tab_fn lua_get_tab;
+static get_str_fn lua_get_str;
+static tab_dtor_fn lua_tab_dtor;
+static str_dtor_fn str_dtor;
 static set_str_fn lua_set_str;
 static set_bname_fn lua_set_bool;
 static get_body_fn get_body;
@@ -178,7 +184,11 @@ int ab_start(void) {
     lua_is_num = (is_name_fn)so_sym(&g_so, "_ZNK3lua8LuaTable8isNumberEPKc");
     lua_is_bool = (is_name_fn)so_sym(&g_so, "_ZNK3lua8LuaTable9isBooleanEPKc");
     lua_is_nil = (is_name_fn)so_sym(&g_so, "_ZNK3lua8LuaTable5isNilEPKc");
+    lua_is_str = (is_name_fn)so_sym(&g_so, "_ZNK3lua8LuaTable8isStringEPKc");
     lua_get_tab = (get_tab_fn)so_sym(&g_so, "_ZNK3lua8LuaTable8getTableEPKc");
+    lua_get_str = (get_str_fn)so_sym(&g_so, "_ZNK3lua8LuaTable9getStringEPKc");
+    lua_tab_dtor = (tab_dtor_fn)so_sym(&g_so, "_ZN3lua8LuaTableD1Ev");
+    str_dtor = (str_dtor_fn)so_sym(&g_so, "_ZN4lang6StringD1Ev");
     lua_set_str = (set_str_fn)so_sym(&g_so, "_ZN3lua8LuaTable9setStringEPKcS2_");
     lua_set_bool = (set_bname_fn)so_sym(&g_so, "_ZN3lua8LuaTable10setBooleanEPKcb");
     get_body = (get_body_fn)so_sym(&g_so, "_ZN7GameLua7getBodyERKN4lang6StringE");
@@ -383,6 +393,10 @@ static void write_cam_fields(void *lua, float scale, float left, float top) {
 static void orig_set_scale(void *lua, float s);
 static void orig_set_topleft(void *lua, float left, float top);
 
+static void tab_done(void *tab) {
+    if (tab && lua_tab_dtor) lua_tab_dtor(tab);
+}
+
 static void sync_lua_screen(void *lua, float scale, float left, float top) {
     char tab[32];
     if (!lua || !lua_get_tab || !lua_set_num) return;
@@ -390,6 +404,7 @@ static void sync_lua_screen(void *lua, float scale, float left, float top) {
     lua_get_tab(tab, lua, "screen");
     lua_set_num(tab, "left", left);
     lua_set_num(tab, "top", top);
+    tab_done(tab);
 }
 
 static void apply_cam(float scale, float left, float top) {
@@ -816,7 +831,74 @@ int ab_lua_xy(const char *table, float *x, float *y) {
     memset(tab, 0, sizeof tab);
     lua_get_tab(tab, lua, table);
     table_xy(tab, x, y);
+    tab_done(tab);
     return 1;
+}
+
+static int copy_lua_str(void *tab, const char *key, char *out, int n) {
+    char str[16];
+    const char *s;
+    if (!out || n < 1) return 0;
+    out[0] = 0;
+    if (!tab || !key || !lua_get_str) return 0;
+    if (lua_is_str && !lua_is_str(tab, key)) return 0;
+    memset(str, 0, sizeof str);
+    lua_get_str(str, tab, key);
+    s = str_cstr ? str_cstr(str) : 0;
+    if (s) {
+        strncpy(out, s, (size_t)n - 1);
+        out[n - 1] = 0;
+    }
+    if (str_dtor) str_dtor(str);
+    return out[0] != 0;
+}
+
+int ab_lua_obj_name(const char *obj, char *out, int n) {
+    void *lua = game_lua();
+    char tab[32];
+    if (!out || n < 1) return 0;
+    out[0] = 0;
+    if (!lua || !obj) return 0;
+    if (lua_is_nil && lua_is_nil(lua, obj)) return 0;
+    if (lua_is_str && lua_is_str(lua, obj))
+        return copy_lua_str(lua, obj, out, n);
+    if (!lua_get_tab) return 0;
+    memset(tab, 0, sizeof tab);
+    lua_get_tab(tab, lua, obj);
+    copy_lua_str(tab, "name", out, n);
+    tab_done(tab);
+    return out[0] != 0;
+}
+
+int ab_body_exists(const char *name) {
+    return body_named(name) != 0;
+}
+
+void ab_lua_dump_birds(const char *tag) {
+    char cur[48], sel[48], fly[48], hop[48], b[400];
+    cur[0] = sel[0] = fly[0] = hop[0] = 0;
+    ab_lua_obj_name("currentBirdName", cur, (int)sizeof cur);
+    ab_lua_obj_name("selectedBird", sel, (int)sizeof sel);
+    ab_lua_obj_name("flyingBird", fly, (int)sizeof fly);
+    ab_lua_obj_name("birdToSlingshotBirdName", hop, (int)sizeof hop);
+    snprintf(b, sizeof b,
+             "AB_BIRD %s cur=%s/%d sel=%s/%d fly=%s/%d hop=%s/%d ready=%d fired=%d fill=%d "
+             "idx=%.0f shot=%.0f hasFly=%d hasSel=%d moving=%d done=%d fail=%d nextT=%.1f startT=%.1f",
+             tag ? tag : "-",
+             cur[0] ? cur : "-", cur[0] ? ab_body_exists(cur) : 0,
+             sel[0] ? sel : "-", sel[0] ? ab_body_exists(sel) : 0,
+             fly[0] ? fly : "-", fly[0] ? ab_body_exists(fly) : 0,
+             hop[0] ? hop : "-", hop[0] ? ab_body_exists(hop) : 0,
+             ab_lua_get_bool("birdReady"), ab_lua_get_bool("birdFired"),
+             ab_lua_get_bool("fillInNextBird"),
+             (double)ab_lua_get_number("currentBirdIndex"),
+             (double)ab_lua_get_number("birdsShot"),
+             ab_lua_has("flyingBird"), ab_lua_has("selectedBird"),
+             ab_lua_get_bool("hasMovingObjects"),
+             ab_lua_get_bool("levelCompleted"), ab_lua_get_bool("levelFailed"),
+             (double)ab_lua_get_number("nextBirdTimer"),
+             (double)ab_lua_get_number("levelStartTimer"));
+    plat_log_line(b);
 }
 
 void ab_lua_dump_shot(const char *tag) {
@@ -848,13 +930,16 @@ void ab_lua_dump_shot(const char *tag) {
         memset(tab, 0, sizeof tab);
         lua_get_tab(tab, lua, "cursorPhysics");
         table_xy(tab, &cpx, &cpy);
+        tab_done(tab);
         memset(tab, 0, sizeof tab);
         lua_get_tab(tab, lua, "rubberBandPos");
         table_xy(tab, &rbx, &rby);
+        tab_done(tab);
         memset(tab, 0, sizeof tab);
         lua_get_tab(tab, lua, "keyHold");
         if (lua_get_bool && (!lua_is_bool || lua_is_bool(tab, "LBUTTON")))
             lbtn = lua_get_bool(tab, "LBUTTON") ? 1 : 0;
+        tab_done(tab);
     }
     snprintf(b, sizeof b,
              "AB_SHOT %s ready=%d fill=%d sel=%d lbtn=%d/%d rlen=%.3f smax=%.3f srange=%.3f "
@@ -923,16 +1008,19 @@ void ab_set_body_velocity(const char *name, float vx, float vy) {
 void ab_ready_slingshot(void) {
     /* birdTutorialPopups is a table; #birdTutorialPopups throws if we
      * overwrite it with a boolean, which blanked every later frame.
-     * Do not skip the hop (timer=100): a forced birdReady with the bird
-     * still on the grass never sets selectedBird, so the band stays 0. */
+     * updateGame seats the first bird only when levelStartTimer == 0:
+     * it sets currentBirdIndex=0 and fillInNextBird so getNextBird(1)
+     * is the unfired bird. ab_load_lua_level parks the timer at 100 so
+     * an idle hold does not walk birds; this function releases that
+     * once. Zeroing it again after shot 1 re-inits index to 0, hop
+     * complete then setPosition's the bird that was just launched, and
+     * GameLua::setPosition does ldr [body,#0x40] on a destroyed body. */
     ab_lua_set_bool("showTutorials", 0);
+    if (ab_lua_get_number("birdsShot") > 0.5f)
+        return;
+    if (ab_lua_get_bool("birdReady") || ab_lua_get_bool("fillInNextBird"))
+        return;
     ab_lua_set_number("levelStartTimer", 0.f);
-    ab_lua_set_number("birdToSlingshotAnimationTimer", 0.f);
-    ab_lua_set_number("nextBirdTimer", 0.f);
-    ab_lua_set_number("lastBirdCollisionTimer", 0.f);
-    ab_lua_set_number("cameraResetTimer", 0.f);
-    ab_lua_set_bool("fillInNextBird", 1);
-    ab_lua_set_bool("birdFired", 0);
 }
 
 void ab_clear_shot_flags(void) {

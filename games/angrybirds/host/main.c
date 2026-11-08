@@ -13,6 +13,7 @@
 #include "../rt/fngl.h"
 #include "../rt/rt_plat.h"
 #include "../rt/shims.h"
+#include "../rt/so_load.h"
 
 extern uint8_t be_fb[432][240][4];
 extern uint8_t be_last_tex[432][240];
@@ -624,26 +625,33 @@ static void log_flyer(const char *tag, const ab_phys_info *open) {
             (double)best, (double)n.score,
             ab_lua_get_bool("birdFired"), ab_lua_has("flyingBird"));
 }
+static int level_over(void);
 static int wait_bird_on_sling(int max_frames) {
     int i, j, k;
     float bx, by;
+    char name[48];
     for (i = 0; i < max_frames; i++) {
         ab_phys_info n;
+        int near = 0;
         wait_frames(1);
+        if (level_over()) return 0;
         if (!ab_lua_xy("rubberBandPos", &bx, &by)) continue;
         ab_phys_snapshot(&n);
         for (j = 0; j < n.sample_n; j++) if (n.sample_type[j] == 2) {
             float dx = n.sample_x[j] - bx, dy = n.sample_y[j] - by;
-            if (dx * dx + dy * dy < 2.2f * 2.2f) {
-                fprintf(stderr, "AB_PLAY_TEST on-sling frames=%d bird=%.2f,%.2f rbp=%.2f,%.2f ready=%d\n",
-                        i, (double)n.sample_x[j], (double)n.sample_y[j],
-                        (double)bx, (double)by, ab_lua_get_bool("birdReady"));
-                return 1;
-            }
+            if (dx * dx + dy * dy < 2.2f * 2.2f) near = 1;
+        }
+        name[0] = 0;
+        ab_lua_obj_name("currentBirdName", name, (int)sizeof name);
+        if (near && ab_lua_get_bool("birdReady") && name[0] && ab_body_exists(name)) {
+            fprintf(stderr, "AB_PLAY_TEST on-sling frames=%d bird=%s rbp=%.2f,%.2f ready=%d\n",
+                    i, name, (double)bx, (double)by, ab_lua_get_bool("birdReady"));
+            return 1;
         }
         if (i == 0 || i == max_frames - 1 || i % 25 == 24) {
-            fprintf(stderr, "AB_PLAY_TEST waiting-sling i=%d ready=%d rbp=%.2f,%.2f left=",
-                    i, ab_lua_get_bool("birdReady"), (double)bx, (double)by);
+            fprintf(stderr, "AB_PLAY_TEST waiting-sling i=%d ready=%d name=%s rbp=%.2f,%.2f left=",
+                    i, ab_lua_get_bool("birdReady"), name[0] ? name : "-",
+                    (double)bx, (double)by);
             k = 0;
             for (j = 0; j < n.sample_n && k < 6; j++) if (n.sample_type[j] == 2 && n.sample_x[j] < 8.f) {
                 fprintf(stderr, " %.2f,%.2f", (double)n.sample_x[j], (double)n.sample_y[j]);
@@ -670,11 +678,120 @@ static float body_travel2(const ab_phys_info *a, const ab_phys_info *b) {
     return maxd;
 }
 
+static int level_over(void) {
+    return ab_lua_get_bool("levelCompleted") || ab_lua_get_bool("levelFailed");
+}
+static int end_menu_up(void) {
+    int y, x, yel = 0, dark = 0;
+    if (!level_over()) return 0;
+    for (y = 70; y < 390; y++) for (x = 30; x < 210; x++) {
+        int r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (r > 170 && g > 130 && b < 140 && (int)r + (int)g > 2 * (int)b + 40) yel++;
+        if (r < 20 && g < 20 && b < 20) dark++;
+    }
+    return yel >= 120 && dark >= 4000;
+}
+static void tap_game(float gx, float gy) {
+    float px = fe_off_x + (fe_fb_h - gy) * fe_scale;
+    float py = fe_off_y + gx * fe_scale_y;
+    tap_at(clampf(px, 8.f, 232.f), clampf(py, 8.f, 424.f));
+}
+/* levelComplete items: MENU at (sw/2-100, sh/2+106), RESTART at
+ * (sw/2, sh/2+106), NEXT at (sw/2+100, sh/2+106). Lua hit-tests
+ * nativeInput game coords, so tap those, not the pause-menu
+ * BUTTON_RESTART which lives at a different page. */
+static void tap_restart_level(void) {
+    static const float pts[][2] = {
+        {240.f, 266.f}, {240.f, 260.f}, {248.f, 270.f}, {232.f, 266.f}, {240.f, 250.f}
+    };
+    int i;
+    for (i = 0; i < 5 && level_over(); i++) {
+        tap_game(pts[i][0], pts[i][1]);
+        wait_frames(10);
+    }
+}
+static void tap_next_level(void) {
+    static const float pts[][2] = {
+        {340.f, 266.f}, {340.f, 260.f}, {348.f, 270.f}, {332.f, 266.f}, {350.f, 250.f}
+    };
+    int i;
+    for (i = 0; i < 5 && level_over(); i++) {
+        tap_game(pts[i][0], pts[i][1]);
+        wait_frames(10);
+    }
+}
+static int wait_level_end(int max_frames) {
+    int i;
+    for (i = 0; i < max_frames; i++) {
+        wait_frames(2);
+        if (end_menu_up()) return 1;
+        if (level_over() && i > 40) return 1;
+    }
+    return end_menu_up() || level_over();
+}
+static int bird_named_ready(void) {
+    char name[48];
+    name[0] = 0;
+    if (!ab_lua_get_bool("birdReady")) return 0;
+    if (!ab_lua_obj_name("currentBirdName", name, (int)sizeof name) || !name[0])
+        return 0;
+    return ab_body_exists(name);
+}
+static int seat_next_bird(int max_frames) {
+    if (level_over()) return 0;
+    /* Do not poke levelStartTimer / fillInNextBird: that re-inits
+     * currentBirdIndex to 0. Lua's nextBirdTimer hop is enough. */
+    wait_frames(2);
+    ab_lua_dump_birds("seat");
+    if (level_over()) return 0;
+    return wait_bird_on_sling(max_frames);
+}
+static void wait_shot_settle(int max_frames) {
+    int i;
+    for (i = 0; i < max_frames && !level_over(); i++) {
+        wait_frames(2);
+        if (bird_named_ready()) return;
+    }
+}
+static int fire_drag(const char *tag, float back, float down) {
+    float bx = 0.f, by = 0.f, q0x = 0.f, q0y = 0.f, tx, ty, rlen;
+    if (level_over()) return 0;
+    if (!bird_named_ready()) {
+        fprintf(stderr, "AB_PLAY_TEST %s not seated ready=%d\n",
+                tag, ab_lua_get_bool("birdReady"));
+        return 0;
+    }
+    if (!ab_lua_xy("rubberBandPos", &bx, &by) || !grab_rubber(&q0x, &q0y)) {
+        fprintf(stderr, "AB_PLAY_TEST %s grab failed rbp=%.2f,%.2f\n",
+                tag, (double)bx, (double)by);
+        if (q0x != 0.f || q0y != 0.f) ab_touch(0, 0, q0x, q0y);
+        return 0;
+    }
+    ensure_selected(q0x, q0y);
+    ab_lua_xy("rubberBandPos", &bx, &by);
+    tx = bx - back;
+    ty = by + down;
+    pull_toward(&q0x, &q0y, tx, ty);
+    rlen = ab_lua_get_number("rubberBandLength");
+    fprintf(stderr, "AB_PLAY_TEST %s rlen=%.3f sel=%d\n",
+            tag, (double)rlen, ab_lua_has("selectedBird"));
+    ab_lua_dump_shot(tag);
+    ab_lua_dump_birds(tag);
+    if (rlen <= 0.8f) {
+        ab_touch(0, 0, q0x, q0y);
+        wait_frames(1);
+        return 0;
+    }
+    drag_up(q0x, q0y);
+    return 1;
+}
+
 static void on_crash(int sig, siginfo_t *si, void *ctx) {
     ucontext_t *uc = (ucontext_t *)ctx;
     unsigned long pc = (unsigned long)uc->uc_mcontext.arm_pc;
     unsigned long lr = (unsigned long)uc->uc_mcontext.arm_lr;
     unsigned long sp = (unsigned long)uc->uc_mcontext.arm_sp;
+    unsigned long base = (unsigned long)(uintptr_t)g_so.base;
     unsigned long *s;
     int i;
     fprintf(stderr, "CRASH sig=%d addr=%p pc=%08lx lr=%08lx sp=%08lx r0=%08lx r1=%08lx r2=%08lx r3=%08lx r4=%08lx r5=%08lx r6=%08lx r7=%08lx\n",
@@ -683,6 +800,9 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
             (unsigned long)uc->uc_mcontext.arm_r2, (unsigned long)uc->uc_mcontext.arm_r3,
             (unsigned long)uc->uc_mcontext.arm_r4, (unsigned long)uc->uc_mcontext.arm_r5,
             (unsigned long)uc->uc_mcontext.arm_r6, (unsigned long)uc->uc_mcontext.arm_r7);
+    if (base)
+        fprintf(stderr, "CRASH so=%08lx pc_off=%08lx lr_off=%08lx\n",
+                base, pc >= base ? pc - base : pc, lr >= base ? lr - base : lr);
     s = (unsigned long *)sp;
     for (i = 0; i < 24; i++) fprintf(stderr, "  sp[%d]=%08lx\n", i, s[i]);
     _exit(139);
@@ -739,12 +859,12 @@ int main(int argc, char **argv) {
         wait_frames(20);
         if (every) shot(7);
         ab_ready_slingshot();
-        for (i = 0; i < 90; i++) {
+        for (i = 0; i < 120; i++) {
             wait_frames(1);
-            if (ab_lua_get_bool("birdReady")) break;
+            if (bird_named_ready()) break;
         }
         fprintf(stderr, "AB_PLAY_TEST seated frames=%d ready=%d\n", i, ab_lua_get_bool("birdReady"));
-        if (!ab_lua_get_bool("birdReady")) {
+        if (!bird_named_ready()) {
             /* Lua never seated a bird; last resort so the drag still runs. */
             ab_ready_slingshot();
         }
@@ -832,50 +952,180 @@ int main(int argc, char **argv) {
         if (b.score > 0.5f) hit = 1;
         fprintf(stderr, "AB_PLAY_TEST hit score=%.0f travel_ok=%d stretched=%d\n",
                 (double)b.score, flying, stretched);
-        /* Second pull: old trajectory dots must clear for the new aim.
-         * Put the sling on-panel first, then hop, then grab on that tick
-         * so checkLevelComplete cannot eat the remaining birds. */
+        /* Wait for Lua's nextBirdTimer hop (nextBirdTimer=1 on launch).
+         * Do not call ab_ready_slingshot: that zeros levelStartTimer and
+         * updateGame re-inits currentBirdIndex to 0, so getNextBird(1)
+         * is the live flying bird and setPosition drefs a destroyed body. */
         ab_cam_set(open.world_scale, open.cam_left, open.cam_top);
         wait_frames(1);
         ab_cam_fit_aim();
         wait_frames(1);
-        ab_ready_slingshot();
-        if (!wait_bird_on_sling(160))
-            fprintf(stderr, "AB_PLAY_TEST shot2 no bird on sling ready=%d\n",
-                    ab_lua_get_bool("birdReady"));
-        ab_call_lua("startNewTrajectory");
-        fprintf(stderr,
-                "AB_PLAY_TEST shot2 idx=%.0f shot=%.0f fired=%d bsel=%d fly=%d nextT=%.1f slider=%.2f n900=%d\n",
-                (double)ab_lua_get_number("currentBirdIndex"),
-                (double)ab_lua_get_number("birdsShot"),
-                ab_lua_get_bool("birdFired"), ab_lua_get_bool("birdSelected"),
-                ab_lua_has("flyingBird"), (double)ab_lua_get_number("nextBirdTimer"),
-                (double)ab_lua_get_number("cameraAnimationSlider"),
-                ab_lua_get_bool("n900"));
+        ab_lua_dump_birds("pre-shot2");
+        if (!level_over()) {
+            if (!bird_named_ready() && !seat_next_bird(180))
+                fprintf(stderr, "AB_PLAY_TEST shot2 no bird on sling ready=%d\n",
+                        ab_lua_get_bool("birdReady"));
+            if (bird_named_ready())
+                ab_call_lua("startNewTrajectory");
+            wait_frames(2);
+            dump_panel("panel-trail");
+            fprintf(stderr,
+                    "AB_PLAY_TEST shot2 idx=%.0f shot=%.0f fired=%d bsel=%d fly=%d nextT=%.1f slider=%.2f n900=%d\n",
+                    (double)ab_lua_get_number("currentBirdIndex"),
+                    (double)ab_lua_get_number("birdsShot"),
+                    ab_lua_get_bool("birdFired"), ab_lua_get_bool("birdSelected"),
+                    ab_lua_has("flyingBird"), (double)ab_lua_get_number("nextBirdTimer"),
+                    (double)ab_lua_get_number("cameraAnimationSlider"),
+                    ab_lua_get_bool("n900"));
+            ab_lua_dump_birds("shot2-ready");
+            {
+                float bx, by, q0x = 0.f, q0y = 0.f;
+                ab_phys_info lefts, pre2, mid2;
+                int bi, shot2 = 0;
+                float maxd;
+                ab_phys_snapshot(&lefts);
+                fprintf(stderr, "AB_PLAY_TEST shot2 sample_n=%d dyn=%d\n", lefts.sample_n, lefts.dynamic_n);
+                for (bi = 0; bi < lefts.sample_n && bi < 24; bi++)
+                    fprintf(stderr, "AB_PLAY_TEST shot2 body t=%d %.2f,%.2f\n",
+                            lefts.sample_type[bi], (double)lefts.sample_x[bi],
+                            (double)lefts.sample_y[bi]);
+                ab_phys_snapshot(&pre2);
+                if (bird_named_ready() && ab_lua_xy("rubberBandPos", &bx, &by) &&
+                    grab_rubber(&q0x, &q0y)) {
+                    ensure_selected(q0x, q0y);
+                    ab_lua_xy("rubberBandPos", &bx, &by);
+                    pull_toward(&q0x, &q0y, bx - 3.6f, by + 2.0f);
+                    dump_panel("panel-aim2");
+                    ab_lua_dump_shot("aim2");
+                    ab_lua_dump_birds("aim2");
+                    rlen = ab_lua_get_number("rubberBandLength");
+                    if (rlen > 0.8f) cleared = 1;
+                    drag_up(q0x, q0y);
+                    shot2 = 1;
+                } else {
+                    dump_panel("panel-aim2");
+                    ab_lua_dump_shot("aim2");
+                    if (q0x != 0.f || q0y != 0.f) ab_touch(0, 0, q0x, q0y);
+                }
+                if (shot2) {
+                    wait_frames(4);
+                    ab_cam_fit_world();
+                    wait_frames(2);
+                    log_flyer("shot2-fly-1", &pre2);
+                    dump_panel("panel-fly-shot2");
+                    wait_frames(10);
+                    ab_cam_fit_world();
+                    wait_frames(2);
+                    log_flyer("shot2-fly-2", &pre2);
+                    ab_phys_snapshot(&mid2);
+                    maxd = body_travel2(&pre2, &mid2);
+                    fprintf(stderr, "AB_PLAY_TEST shot2 travel2=%.3f\n", (double)maxd);
+                    if (maxd <= 16.f) fail++;
+                    wait_shot_settle(80);
+                } else fail++;
+            }
+        } else {
+            dump_panel("panel-aim2");
+            dump_panel("panel-trail");
+            dump_panel("panel-fly-shot2");
+            fprintf(stderr, "AB_PLAY_TEST shot2 skipped, level already over\n");
+            fail++;
+        }
+        /* Remaining L1 birds until the win/loss screen. */
+        while (!level_over()) {
+            char tag[16];
+            int nshot = (int)ab_lua_get_number("birdsShot");
+            if (nshot >= 8) break;
+            ab_cam_fit_aim();
+            wait_frames(1);
+            if (!bird_named_ready() && !seat_next_bird(180)) break;
+            snprintf(tag, sizeof tag, "l1s%d", nshot + 1);
+            if (!fire_drag(tag, 4.0f, 2.2f)) break;
+            wait_shot_settle(80);
+            ab_cam_fit_world();
+            wait_frames(2);
+        }
+        wait_level_end(200);
+        dump_panel("panel-end");
+        ab_lua_dump_birds("end");
+        fprintf(stderr, "AB_PLAY_TEST end done=%d fail=%d menu=%d score=%.0f shot=%.0f\n",
+                ab_lua_get_bool("levelCompleted"), ab_lua_get_bool("levelFailed"),
+                end_menu_up(), (double)ab_lua_get_number("score"),
+                (double)ab_lua_get_number("birdsShot"));
+        if (!level_over()) fail++;
         {
-            float bx, by, q0x = 0.f, q0y = 0.f;
-            ab_phys_info lefts;
-            int bi;
-            ab_phys_snapshot(&lefts);
-            fprintf(stderr, "AB_PLAY_TEST shot2 sample_n=%d dyn=%d\n", lefts.sample_n, lefts.dynamic_n);
-            for (bi = 0; bi < lefts.sample_n && bi < 24; bi++)
-                fprintf(stderr, "AB_PLAY_TEST shot2 body t=%d %.2f,%.2f\n",
-                        lefts.sample_type[bi], (double)lefts.sample_x[bi],
-                        (double)lefts.sample_y[bi]);
-            if (ab_lua_xy("rubberBandPos", &bx, &by) && grab_rubber(&q0x, &q0y)) {
-                ensure_selected(q0x, q0y);
-                ab_lua_xy("rubberBandPos", &bx, &by);
-                pull_toward(&q0x, &q0y, bx - 3.6f, by + 2.0f);
-                dump_panel("panel-aim2");
-                ab_lua_dump_shot("aim2");
-                rlen = ab_lua_get_number("rubberBandLength");
-                if (rlen > 0.8f) cleared = 1;
-                /* Do not ACTION_UP: GameLua still holds flyingBird from shot 1
-                 * and the second release null-derefs in the shot path. */
-            } else {
-                dump_panel("panel-aim2");
-                ab_lua_dump_shot("aim2");
-                if (q0x != 0.f || q0y != 0.f) ab_touch(0, 0, q0x, q0y);
+            int ended = level_over();
+            char lvl[48];
+            tap_restart_level();
+            wait_frames(40);
+            ab_cam_fit_world();
+            wait_frames(2);
+            dump_panel("panel-restart");
+            lvl[0] = 0;
+            ab_lua_obj_name("levelName", lvl, (int)sizeof lvl);
+            fprintf(stderr, "AB_PLAY_TEST restart name=%s score=%.0f done=%d\n",
+                    lvl[0] ? lvl : "-", (double)ab_lua_get_number("score"),
+                    ab_lua_get_bool("levelCompleted"));
+            if (!ended) fail++;
+            if (ab_lua_get_bool("levelCompleted") && ab_lua_get_bool("levelFailed")) fail++;
+            if (ab_lua_get_number("score") > 0.5f && level_over()) fail++;
+            if (ab_lua_get_number("score") < 0.5f && !level_over()) {
+                /* Restarted into a live L1. Play to the end screen again. */
+                ab_ready_slingshot();
+                wait_bird_on_sling(180);
+                ab_cam_fit_aim();
+                wait_frames(2);
+                fire_drag("restart-s1", 4.3f, 2.5f);
+                wait_shot_settle(80);
+                while (!level_over()) {
+                    if (!bird_named_ready() && !seat_next_bird(180)) break;
+                    if (!fire_drag("restart-sn", 4.0f, 2.2f)) break;
+                    wait_shot_settle(80);
+                }
+                wait_level_end(160);
+            }
+            tap_next_level();
+            wait_frames(50);
+            ab_cam_fit_world();
+            wait_frames(2);
+            dump_panel("panel-next");
+            lvl[0] = 0;
+            ab_lua_obj_name("levelName", lvl, (int)sizeof lvl);
+            fprintf(stderr, "AB_PLAY_TEST next name=%s score=%.0f done=%d\n",
+                    lvl[0] ? lvl : "-", (double)ab_lua_get_number("score"),
+                    ab_lua_get_bool("levelCompleted"));
+            /* loadNextLevel follows levelOrder (L1 then Level57), not L1->L2. */
+            if (!lvl[0] || ab_lua_get_bool("levelCompleted")) fail++;
+            if (lvl[0] && strstr(lvl, "Level1")) fail++;
+        }
+        /* L2 and L3: at least three real drags each. */
+        {
+            const char *lvls[2] = { "Level2", "Level3" };
+            int li, si, nfire;
+            for (li = 0; li < 2; li++) {
+                ab_load_lua_level(lvls[li]);
+                wait_frames(40);
+                ab_cam_fit_world();
+                wait_frames(2);
+                nfire = 0;
+                ab_ready_slingshot();
+                wait_bird_on_sling(180);
+                for (si = 0; si < 3 && !level_over(); si++) {
+                    char tag[20];
+                    ab_cam_fit_aim();
+                    wait_frames(1);
+                    if (si > 0 && !bird_named_ready() && !seat_next_bird(180)) break;
+                    snprintf(tag, sizeof tag, "%s-s%d", lvls[li], si + 1);
+                    if (!fire_drag(tag, 4.0f, 2.2f)) break;
+                    nfire++;
+                    wait_shot_settle(80);
+                    ab_cam_fit_world();
+                    wait_frames(2);
+                    log_flyer(tag, &open);
+                }
+                fprintf(stderr, "AB_PLAY_TEST %s shots=%d score=%.0f\n",
+                        lvls[li], nfire, (double)ab_lua_get_number("score"));
+                if (nfire < 3) fail++;
             }
         }
         wait_frames(4);
