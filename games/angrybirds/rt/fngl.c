@@ -10,6 +10,8 @@
 float fe_scale, fe_scale_y, fe_off_x, fe_off_y, fe_fb_h;
 int fe_view_h = 320;
 int fe_stat_tris, fe_stat_draws, fe_stat_tex_bytes;
+static unsigned fe_draw_seq;
+static uint32_t bound_fbo, fbo_tex, fbo_n;
 
 typedef struct { float m[16]; } mat;
 static mat stk[3][16];
@@ -17,7 +19,7 @@ static int top[3], mode;
 static float color[4] = {1, 1, 1, 1};
 static int vx, vy, vw = 480, vh = 320;
 typedef struct { int on, size; uint32_t type; int stride; const void *ptr; uint32_t buf; } arr;
-static arr va_, ta_, ca_;
+static arr va_, ta_, ta1_, ca_;
 static uint32_t bound_buf;
 #define MAXBUF 256
 static struct { void *data; uint32_t size; } bufs[MAXBUF];
@@ -27,8 +29,10 @@ int fe_tex_shift, fe_tex_min_side, fe_tex_big_side, fe_tex_big_shift, fe_stat_te
 int fe_pending_tex_shift;
 static uint8_t uv_div[MAXTEX];
 static int texh[MAXTEX];
-static uint32_t bound_tex;
-static int en_blend, en_tex, en_depth, en_cull, en_alpha;
+static uint32_t bound_tex, bound_tex1;
+static int tex_unit, client_unit;
+static int en_blend, en_tex, en_tex1, en_depth, en_cull, en_alpha, en_scissor;
+static int sc_x, sc_y, sc_w = 480, sc_h = 320;
 static uint32_t sf, df, cullmode, depthfunc, frontface = 0x0901u;
 static int depthmask;
 static float clear_rgba[4], clear_depth = 1.f;
@@ -49,7 +53,15 @@ static void init_once(void) {
     for (int i = 0; i < 3; i++) ident(&stk[i][0]);
 }
 
-void ab_glMatrixMode(GLenum m) { init_once(); mode = m == 0x1701 ? 1 : m == 0x1702 ? 2 : 0; }
+void ab_glMatrixMode(GLenum m) {
+    init_once();
+    /* Ka3D Context::setMatrix passes 0..3 (world/view/tex0/tex1) as well as
+     * the GLES enums. Mapping 2 or 3 onto MODELVIEW loaded identity over the
+     * camera, which clipped MaskedImage ice/stone batches on L2+. */
+    if (m == 0x1701u || m == 1u) mode = 1;
+    else if (m == 0x1702u || m == 2u || m == 3u) mode = 2;
+    else mode = 0;
+}
 void ab_glLoadIdentity(void) { init_once(); ident(cur()); }
 void ab_glLoadMatrixf(const GLfloat *m) { init_once(); if (m) memcpy(cur()->m, m, 64); }
 void ab_glMultMatrixf(const GLfloat *m) {
@@ -65,7 +77,9 @@ void ab_glViewport(GLint x, GLint y, GLsizei w, GLsizei h) { vx = x; vy = y; vw 
 void ab_glClearColor(GLclampf r, GLclampf g, GLclampf b, GLclampf a) {
     clear_rgba[0] = r; clear_rgba[1] = g; clear_rgba[2] = b; clear_rgba[3] = a;
 }
-void ab_glClear(GLbitfield mask) { be_clear((mask & 0x4000) != 0, (mask & 0x100) != 0, clear_rgba, clear_depth); }
+void ab_glClear(GLbitfield mask) {
+    be_clear((mask & 0x4000) != 0, (mask & 0x100) != 0, clear_rgba, clear_depth);
+}
 void ab_glColor4f(GLfloat r, GLfloat g, GLfloat b, GLfloat a) {
     color[0] = r; color[1] = g; color[2] = b; color[3] = a;
 }
@@ -75,10 +89,17 @@ void ab_glColorMask(GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
 static void cap(uint32_t c, int on) {
     switch (c) {
     case 0x0BE2: en_blend = on; break;
-    case 0x0DE1: en_tex = on; break;
+    case 0x0DE1:
+        /* TEXTURE_2D is per-unit. MaskedImage enables unit 0 then disables
+         * unit 1; a shared en_tex flag turned every later ice/stone draw into
+         * an untextured white fill. */
+        if (tex_unit != 0) en_tex1 = on;
+        else en_tex = on;
+        break;
     case 0x0B71: en_depth = on; break;
     case 0x0B44: en_cull = on; break;
     case 0x0BC0: en_alpha = on; break;
+    case 0x0C11: en_scissor = on; break;
     default: break;
     }
 }
@@ -87,14 +108,21 @@ void ab_glDisable(GLenum c) { cap(c, 0); }
 void ab_glBlendFunc(GLenum s, GLenum d) { sf = s; df = d; }
 void ab_glDepthMask(GLboolean flag) { depthmask = flag != 0; }
 void ab_glDepthFunc(GLenum func) { depthfunc = func; }
-static arr *which(uint32_t a) { return a == 0x8074 ? &va_ : a == 0x8078 ? &ta_ : a == 0x8076 ? &ca_ : NULL; }
+static arr *which(uint32_t a) {
+    if (a == 0x8074) return &va_;
+    if (a == 0x8078) return client_unit != 0 ? &ta1_ : &ta_;
+    if (a == 0x8076) return &ca_;
+    return NULL;
+}
 void ab_glEnableClientState(GLenum a) { arr *p = which(a); if (p) p->on = 1; }
 void ab_glDisableClientState(GLenum a) { arr *p = which(a); if (p) p->on = 0; }
 static void setp(arr *a, int size, uint32_t type, int stride, const void *ptr) {
     a->size = size; a->type = type; a->stride = stride; a->ptr = ptr; a->buf = bound_buf;
 }
 void ab_glVertexPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr) { setp(&va_, size, type, stride, ptr); }
-void ab_glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr) { setp(&ta_, size, type, stride, ptr); }
+void ab_glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr) {
+    setp(client_unit != 0 ? &ta1_ : &ta_, size, type, stride, ptr);
+}
 void ab_glColorPointer(GLint size, GLenum type, GLsizei stride, const GLvoid *ptr) { setp(&ca_, size, type, stride, ptr); }
 void ab_glNormalPointer(GLenum type, GLsizei stride, const GLvoid *ptr) { (void)type; (void)stride; (void)ptr; }
 
@@ -122,31 +150,83 @@ void ab_glDeleteBuffers(GLsizei n, const GLuint *buffers) {
 }
 
 static uint8_t tex_named[MAXTEX];
+static uint16_t tex_log_w[MAXTEX], tex_log_h[MAXTEX], tex_gpu_w[MAXTEX], tex_gpu_h[MAXTEX];
+static uint8_t tex_has_image[MAXTEX], tex_empty_draw[MAXTEX], tex_bind_n[MAXTEX];
+static uint32_t tex_fmt[MAXTEX];
+static char tex_file[MAXTEX][40];
+static char tex_pending_name[40];
 typedef struct { int page, cx, cy, w, h; } atl_slot;
 static atl_slot atl[MAXTEX];
+static void tex_clear_slot(uint32_t t) {
+    texh[t] = 0; atl[t].page = 0; uv_div[t] = 0;
+    tex_log_w[t] = tex_log_h[t] = tex_gpu_w[t] = tex_gpu_h[t] = 0;
+    tex_has_image[t] = 0; tex_empty_draw[t] = 0; tex_bind_n[t] = 0; tex_fmt[t] = 0;
+    tex_file[t][0] = 0;
+}
+static void ab_tex_log(const char *op, unsigned name, int w, int h, unsigned fmt, unsigned type,
+                       int level, int nbytes) {
+    char b[280];
+    unsigned n = name < MAXTEX ? name : 0;
+    snprintf(b, sizeof b,
+             "AB_TEX %s name=%u level=%d %dx%d fmt=0x%x type=0x%x bytes=%d log=%ux%u gpu=%ux%u "
+             "img=%u uvdiv=%u file=%s",
+             op, name, level, w, h, fmt, type, nbytes,
+             (unsigned)tex_log_w[n], (unsigned)tex_log_h[n],
+             (unsigned)tex_gpu_w[n], (unsigned)tex_gpu_h[n],
+             (unsigned)tex_has_image[n], (unsigned)uv_div[n],
+             tex_file[n][0] ? tex_file[n] : (tex_pending_name[0] ? tex_pending_name : "-"));
+    plat_log_line(b);
+}
 void ab_glGenTextures(GLsizei n, GLuint *textures) {
     for (int i = 0; i < n; i++) {
         uint32_t k = 0;
         for (uint32_t t = 1; t < MAXTEX; t++) if (!tex_named[t]) {
-            k = t; tex_named[t] = 1; texh[t] = 0; atl[t].page = 0; uv_div[t] = 0; break;
+            k = t; tex_named[t] = 1; tex_clear_slot(t); break;
         }
         textures[i] = k;
+        ab_tex_log("GEN", k, 0, 0, 0, 0, 0, 0);
     }
 }
-void ab_glBindTexture(GLenum target, GLuint texture) { (void)target; bound_tex = texture < MAXTEX ? texture : 0; }
+void ab_glBindTexture(GLenum target, GLuint texture) {
+    uint32_t name = texture < MAXTEX ? texture : 0;
+    (void)target;
+    if (tex_unit != 0) {
+        static int u1log;
+        bound_tex1 = name;
+        if (u1log < 12) {
+            ab_tex_log(name ? "BIND1" : "BIND1_0", name,
+                       name ? tex_gpu_w[name] : 0, name ? tex_gpu_h[name] : 0,
+                       name ? tex_fmt[name] : 0, 0, 0, 0);
+            u1log++;
+        }
+        return;
+    }
+    bound_tex = name;
+    if (bound_tex && tex_pending_name[0] && !tex_file[bound_tex][0])
+        memcpy(tex_file[bound_tex], tex_pending_name, sizeof tex_file[bound_tex]);
+    if (bound_tex) {
+        if (tex_bind_n[bound_tex] < 3 || !tex_has_image[bound_tex])
+            ab_tex_log("BIND", bound_tex, tex_gpu_w[bound_tex], tex_gpu_h[bound_tex],
+                       tex_fmt[bound_tex], 0, 0, 0);
+        if (tex_bind_n[bound_tex] < 255) tex_bind_n[bound_tex]++;
+    }
+}
 static void atlas_free(uint32_t n);
 void ab_glDeleteTextures(GLsizei n, const GLuint *textures) {
     for (int i = 0; i < n; i++) {
         uint32_t t = textures[i];
         if (!t || t >= MAXTEX || !tex_named[t]) continue;
+        ab_tex_log("DELETE", t, tex_gpu_w[t], tex_gpu_h[t], tex_fmt[t], 0, 0, tex_bytes[t]);
         if (atl[t].page) atlas_free(t);
         if (texh[t]) { be_tex_delete(texh[t]); texh[t] = 0; fe_stat_tex_count--; }
-        fe_stat_tex_bytes -= tex_bytes[t]; tex_bytes[t] = 0; tex_named[t] = 0; uv_div[t] = 0;
+        fe_stat_tex_bytes -= tex_bytes[t]; tex_bytes[t] = 0; tex_named[t] = 0;
+        tex_clear_slot(t);
     }
 }
 void ab_glTexParameteri(GLenum target, GLenum pname, GLint param) {
+    uint32_t name = tex_unit != 0 ? bound_tex1 : bound_tex;
     (void)target;
-    if (bound_tex && texh[bound_tex] && !atl[bound_tex].page) be_tex_param(texh[bound_tex], pname, (uint32_t)param);
+    if (name && texh[name] && !atl[name].page) be_tex_param(texh[name], pname, (uint32_t)param);
 }
 
 static int pot2(int n) {
@@ -233,66 +313,102 @@ static void upload_tex(int w, int h, uint32_t fmt, uint32_t type, const void *px
         }
     }
     {
-        int pw = pot2(ow), ph = pot2(oh);
-        if (pw != ow || ph != oh) {
-            uint16_t *pad = (uint16_t *)calloc((size_t)pw * (size_t)ph, 2u);
-            if (out && pad) {
-                for (int y = 0; y < oh; y++)
-                    memcpy(pad + (size_t)y * (size_t)pw, out + (size_t)y * (size_t)ow, (size_t)ow * 2u);
+        int log_w = ow, log_h = oh;
+        if (atl[bound_tex].page) atlas_free(bound_tex);
+        if (out && ow <= fe_atlas_max_side && oh <= fe_atlas_max_side) {
+            uint16_t *q = out;
+            if (opaque) for (int i = 0; i < ow * oh; i++) {
+                uint16_t v = q[i]; q[i] = (uint16_t)((v >> 12) << 12 | ((v >> 7) & 15) << 8 | ((v >> 1) & 15) << 4 | 15);
             }
-            free(out);
-            out = pad;
-            ow = pw;
-            oh = ph;
-            if (px && !out) { plat_log_line("texture POT pad: no memory"); return; }
+            if (atlas_put(bound_tex, ow, oh, q)) {
+                if (texh[bound_tex]) { be_tex_delete(texh[bound_tex]); texh[bound_tex] = 0; fe_stat_tex_count--; }
+                free(out);
+                fe_stat_tex_bytes -= tex_bytes[bound_tex]; tex_bytes[bound_tex] = 0;
+                tex_log_w[bound_tex] = (uint16_t)log_w; tex_log_h[bound_tex] = (uint16_t)log_h;
+                tex_gpu_w[bound_tex] = (uint16_t)log_w; tex_gpu_h[bound_tex] = (uint16_t)log_h;
+                tex_has_image[bound_tex] = 1; tex_fmt[bound_tex] = ofmt;
+                if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
+                    uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
+                    fe_pending_tex_shift = 0;
+                }
+                if (tex_pending_name[0]) memcpy(tex_file[bound_tex], tex_pending_name, sizeof tex_file[bound_tex]);
+                ab_tex_log("ATLAS", bound_tex, log_w, log_h, ofmt, otype, 0, log_w * log_h * 2);
+                return;
+            }
+            if (opaque) for (int i = 0; i < ow * oh; i++) {
+                uint16_t v = q[i]; q[i] = (uint16_t)(((v >> 12) * 31 / 15) << 11 | (((v >> 8) & 15) * 63 / 15) << 5 | ((v >> 4) & 15) * 31 / 15);
+            }
         }
-    }
-    if (atl[bound_tex].page) atlas_free(bound_tex);
-    if (out && ow <= fe_atlas_max_side && oh <= fe_atlas_max_side) {
-        uint16_t *q = out;
-        if (opaque) for (int i = 0; i < ow * oh; i++) {
-            uint16_t v = q[i]; q[i] = (uint16_t)((v >> 12) << 12 | ((v >> 7) & 15) << 8 | ((v >> 1) & 15) << 4 | 15);
+        {
+            int pw = pot2(ow), ph = pot2(oh);
+            if (pw != ow || ph != oh) {
+                uint16_t *pad = (uint16_t *)calloc((size_t)pw * (size_t)ph, 2u);
+                if (out && pad) {
+                    for (int y = 0; y < oh; y++)
+                        memcpy(pad + (size_t)y * (size_t)pw, out + (size_t)y * (size_t)ow, (size_t)ow * 2u);
+                }
+                free(out);
+                out = pad;
+                if (px && !out) { plat_log_line("texture POT pad: no memory"); return; }
+                {
+                    char b[160];
+                    snprintf(b, sizeof b, "AB_TEX POT_PAD name=%u log=%dx%d gpu=%dx%d file=%s",
+                             bound_tex, log_w, log_h, pw, ph,
+                             tex_pending_name[0] ? tex_pending_name :
+                             (tex_file[bound_tex][0] ? tex_file[bound_tex] : "-"));
+                    plat_log_line(b);
+                }
+                ow = pw;
+                oh = ph;
+            }
         }
-        if (atlas_put(bound_tex, ow, oh, q)) {
-            if (texh[bound_tex]) { be_tex_delete(texh[bound_tex]); texh[bound_tex] = 0; fe_stat_tex_count--; }
-            free(out);
-            fe_stat_tex_bytes -= tex_bytes[bound_tex]; tex_bytes[bound_tex] = 0;
-            return;
+        if (!texh[bound_tex]) {
+            texh[bound_tex] = be_tex_create();
+            if (!texh[bound_tex]) { free(out); return; }
+            if (++fe_stat_tex_count > fe_stat_tex_count_peak) fe_stat_tex_count_peak = fe_stat_tex_count;
         }
-        if (opaque) for (int i = 0; i < ow * oh; i++) {
-            uint16_t v = q[i]; q[i] = (uint16_t)(((v >> 12) * 31 / 15) << 11 | (((v >> 8) & 15) * 63 / 15) << 5 | ((v >> 4) & 15) * 31 / 15);
+        be_tex_image(texh[bound_tex], 0, ow, oh, ofmt, otype, out);
+        free(out);
+        tex_log_w[bound_tex] = (uint16_t)log_w; tex_log_h[bound_tex] = (uint16_t)log_h;
+        tex_gpu_w[bound_tex] = (uint16_t)ow; tex_gpu_h[bound_tex] = (uint16_t)oh;
+        tex_fmt[bound_tex] = ofmt;
+        tex_has_image[bound_tex] = px ? 1 : 0;
+        if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
+            uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
+            fe_pending_tex_shift = 0;
         }
+        if (tex_pending_name[0]) memcpy(tex_file[bound_tex], tex_pending_name, sizeof tex_file[bound_tex]);
+        fe_stat_tex_bytes += ow * oh * 2 - tex_bytes[bound_tex]; tex_bytes[bound_tex] = ow * oh * 2;
+        if (fe_stat_tex_bytes > fe_stat_tex_peak) fe_stat_tex_peak = fe_stat_tex_bytes;
+        ab_tex_log(px ? "TEXIMAGE" : "TEXIMAGE_NULL", bound_tex, log_w, log_h, ofmt, otype, 0, ow * oh * 2);
     }
-    if (!texh[bound_tex]) {
-        texh[bound_tex] = be_tex_create();
-        if (!texh[bound_tex]) { free(out); return; }
-        if (++fe_stat_tex_count > fe_stat_tex_count_peak) fe_stat_tex_count_peak = fe_stat_tex_count;
-    }
-    be_tex_image(texh[bound_tex], 0, ow, oh, ofmt, otype, out);
-    free(out);
-    if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
-        uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
-        fe_pending_tex_shift = 0;
-    }
-    fe_stat_tex_bytes += ow * oh * 2 - tex_bytes[bound_tex]; tex_bytes[bound_tex] = ow * oh * 2;
-    if (fe_stat_tex_bytes > fe_stat_tex_peak) fe_stat_tex_peak = fe_stat_tex_bytes;
 }
 void ab_glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height,
                      GLint border, GLenum format, GLenum type, const GLvoid *pixels) {
     (void)target; (void)internalformat; (void)border;
-    if (level > 0) return;
+    if (level > 0) {
+        ab_tex_log("TEXIMAGE_MIP", bound_tex, width, height, (unsigned)format, type, level, 0);
+        return;
+    }
     upload_tex(width, height, format, type, pixels);
 }
 void ab_glTexSubImage2D(GLenum target, GLint level, GLint xoff, GLint yoff, GLsizei width, GLsizei height,
                         GLenum format, GLenum type, const GLvoid *pixels) {
     (void)target;
-    if (!bound_tex || !tex_named[bound_tex] || level != 0 || !pixels) return;
+    if (!bound_tex || !tex_named[bound_tex] || level != 0 || !pixels) {
+        ab_tex_log("TEXSUB_SKIP", bound_tex, width, height, format, type, level, 0);
+        return;
+    }
+    ab_tex_log("TEXSUB", bound_tex, width, height, format, type, level, width * height * 2);
     if (xoff == 0 && yoff == 0) upload_tex(width, height, format, type, pixels);
 }
 void ab_glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height,
                                GLint border, GLsizei imageSize, const GLvoid *data) {
     (void)target; (void)border;
-    if (!bound_tex || !tex_named[bound_tex] || !data || level != 0) return;
+    if (!bound_tex || !tex_named[bound_tex] || !data || level != 0) {
+        ab_tex_log("COMPRESSED_SKIP", bound_tex, width, height, internalformat, 0, level, imageSize);
+        return;
+    }
     if (atl[bound_tex].page) atlas_free(bound_tex);
     if (!texh[bound_tex]) {
         texh[bound_tex] = be_tex_create();
@@ -300,12 +416,18 @@ void ab_glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat
         if (++fe_stat_tex_count > fe_stat_tex_count_peak) fe_stat_tex_count_peak = fe_stat_tex_count;
     }
     be_tex_compressed(texh[bound_tex], 0, internalformat, width, height, data, (uint32_t)imageSize);
+    tex_log_w[bound_tex] = (uint16_t)width; tex_log_h[bound_tex] = (uint16_t)height;
+    tex_gpu_w[bound_tex] = (uint16_t)width; tex_gpu_h[bound_tex] = (uint16_t)height;
+    tex_fmt[bound_tex] = internalformat;
+    tex_has_image[bound_tex] = 1;
     if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
         uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
         fe_pending_tex_shift = 0;
     }
+    if (tex_pending_name[0]) memcpy(tex_file[bound_tex], tex_pending_name, sizeof tex_file[bound_tex]);
     fe_stat_tex_bytes += (int)imageSize - tex_bytes[bound_tex]; tex_bytes[bound_tex] = (int)imageSize;
     if (fe_stat_tex_bytes > fe_stat_tex_peak) fe_stat_tex_peak = fe_stat_tex_bytes;
+    ab_tex_log("COMPRESSED", bound_tex, width, height, internalformat, 0, 0, imageSize);
 }
 
 typedef struct { float p[4]; float u, v; float c[4]; } cv;
@@ -380,7 +502,7 @@ static void flush_out(void) { if (outn) { be_tris(&st, outv, outn); fe_stat_tris
 static void emit_tri(const cv *a, const cv *b, const cv *c) {
     cv poly[2][12]; int n = 3, cur_ = 0;
     poly[0][0] = *a; poly[0][1] = *b; poly[0][2] = *c;
-    for (int pl = 0; pl < 7 && n >= 3; pl++) {
+    for (int pl = 0; pl < 7 && n >= 3; pl++) { /* 7 = xyzw clip; AB_CLIP_NOZ uses 5 */
         int m = 0;
         cv *in = poly[cur_], *out = poly[cur_ ^ 1];
         for (int i = 0; i < n; i++) {
@@ -415,7 +537,8 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         float area = (sv[1].x - sv[0].x) * (sv[2].y - sv[0].y) - (sv[2].x - sv[0].x) * (sv[1].y - sv[0].y);
         int ccw = area < 0;
         int front = frontface == 0x0900u ? !ccw : ccw;
-        if ((cullmode == 0x405 && !front) || (cullmode == 0x404 && front)) return;
+        if ((cullmode == 0x405 && !front) || (cullmode == 0x404 && front))
+            return;
     }
     if (!ensure_outv()) return;
     for (int i = 1; i + 1 < n; i++) {
@@ -428,6 +551,22 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, const 
     if (modep < 4 || modep > 6) return;
     init_once();
     fe_stat_draws++;
+    fe_draw_seq++;
+    /* TEXTURE_2D enable is per-unit. MaskedImage / EGL_Shader_Default::begin
+     * leaves TEXTURE1 as the active unit after a bind-0 cleanup; a later
+     * Disable then used to clear this flag and drop every textured draw.
+     * Skip only near-white untextured fills (Ka3D ice/stone fallback) so a
+     * Disable on unit 0 cannot wipe the frame, while rubber-band / HUD
+     * colours still draw. */
+    (void)en_tex1; (void)ta1_.on;
+    if (!en_tex && color[0] > 0.92f && color[1] > 0.92f && color[2] > 0.92f)
+        return;
+    if (en_tex && bound_tex && tex_named[bound_tex] && !atl[bound_tex].page && !tex_has_image[bound_tex]
+        && !tex_empty_draw[bound_tex]) {
+        tex_empty_draw[bound_tex] = 1;
+        ab_tex_log("DRAW_NO_IMAGE", bound_tex, tex_gpu_w[bound_tex], tex_gpu_h[bound_tex],
+                   tex_fmt[bound_tex], 0, 0, 0);
+    }
     mat mvp; mul(&mvp, &stk[1][top[1]], &stk[0][top[0]]);
     const atl_slot *as = en_tex && bound_tex && atl[bound_tex].page ? &atl[bound_tex] : NULL;
     if (as) atlas_upload();
@@ -448,9 +587,20 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, const 
         if (va_.size < 3) pos[2] = 0;
         xform(&mvp, pos, v.p);
         if (ta_.on) { float t[4]; fetch(&ta_, i, t, 0, 0); v.u = t[0]; v.v = t[1]; } else { v.u = v.v = 0; }
-        if (bound_tex && uv_div[bound_tex]) {
-            float d = (float)(1 << uv_div[bound_tex]);
-            v.u /= d; v.v /= d;
+        if (bound_tex) {
+            /* texscale undoes convert-time sheet shrink. Then map the logical
+             * (NPOT) image onto the POT-padded GPU texture so ice/theme-2
+             * sprites on the right of INGAME_1 do not sample the zero pad. */
+            if (uv_div[bound_tex]) {
+                float d = (float)(1 << uv_div[bound_tex]);
+                v.u /= d; v.v /= d;
+            }
+            if (tex_gpu_w[bound_tex] > 0 && tex_log_w[bound_tex] > 0 &&
+                tex_gpu_w[bound_tex] != tex_log_w[bound_tex])
+                v.u *= (float)tex_log_w[bound_tex] / (float)tex_gpu_w[bound_tex];
+            if (tex_gpu_h[bound_tex] > 0 && tex_log_h[bound_tex] > 0 &&
+                tex_gpu_h[bound_tex] != tex_log_h[bound_tex])
+                v.v *= (float)tex_log_h[bound_tex] / (float)tex_gpu_h[bound_tex];
         }
         if (as) {
             float u = v.u < 0.f ? 0.f : v.u > 1.f ? 1.f : v.u, vv = v.v < 0.f ? 0.f : v.v > 1.f ? 1.f : v.v;
@@ -474,22 +624,37 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, const 
 }
 void ab_glDrawArrays(GLenum modep, GLint first, GLsizei count) { draw(modep, first, count, 0, 0); }
 void ab_glDrawElements(GLenum modep, GLsizei count, GLenum type, const GLvoid *indices) { draw(modep, 0, count, type, indices); }
-void ab_glGenFramebuffersOES(GLsizei n, GLuint *f) { for (int i = 0; i < n; i++) f[i] = 1; }
+void ab_glGenFramebuffersOES(GLsizei n, GLuint *f) {
+    for (int i = 0; i < n; i++) f[i] = ++fbo_n ? fbo_n : ++fbo_n;
+    ab_tex_log("GEN_FBO", f[0], n, 0, 0, 0, 0, 0);
+}
 void ab_glGenRenderbuffersOES(GLsizei n, GLuint *r) { for (int i = 0; i < n; i++) r[i] = 1; }
-void ab_glBindFramebufferOES(GLenum t, GLuint f) { (void)t; (void)f; }
+void ab_glBindFramebufferOES(GLenum t, GLuint f) {
+    (void)t;
+    bound_fbo = f;
+}
 void ab_glBindRenderbufferOES(GLenum t, GLuint r) { (void)t; (void)r; }
 GLenum ab_glCheckFramebufferStatusOES(GLenum t) { (void)t; return 0x8CD5; }
 void ab_glDeleteFramebuffersOES(GLsizei n, const GLuint *f) { (void)n; (void)f; }
 void ab_glDeleteRenderbuffersOES(GLsizei n, const GLuint *r) { (void)n; (void)r; }
 void ab_glFramebufferRenderbufferOES(GLenum t, GLenum att, GLenum rt, GLuint r) { (void)t; (void)att; (void)rt; (void)r; }
 void ab_glFramebufferTexture2DOES(GLenum t, GLenum att, GLenum tt, GLuint tex, GLint level) {
-    (void)t; (void)att; (void)tt; (void)tex; (void)level;
+    (void)t; (void)att; (void)tt; (void)level;
+    fbo_tex = tex;
 }
 void ab_glRenderbufferStorageOES(GLenum t, GLenum fmt, GLsizei w, GLsizei h) { (void)t; (void)fmt; (void)w; (void)h; }
-void ab_glActiveTexture(GLenum t) { (void)t; }
-void ab_glClientActiveTexture(GLenum t) { (void)t; }
+void ab_glActiveTexture(GLenum t) {
+    int u = (int)(t - 0x84C0u);
+    if (u >= 0 && u < 2) tex_unit = u;
+}
+void ab_glClientActiveTexture(GLenum t) {
+    int u = (int)(t - 0x84C0u);
+    if (u >= 0 && u < 2) client_unit = u;
+}
 void ab_glPixelStorei(GLenum pname, GLint param) { (void)pname; (void)param; }
-void ab_glScissor(GLint x, GLint y, GLsizei w, GLsizei h) { (void)x; (void)y; (void)w; (void)h; }
+void ab_glScissor(GLint x, GLint y, GLsizei w, GLsizei h) {
+    sc_x = x; sc_y = y; sc_w = w; sc_h = h;
+}
 void ab_glLineWidth(GLfloat w) { (void)w; }
 void ab_glFrontFace(GLenum m) { frontface = m; }
 void ab_glLightfv(GLenum light, GLenum pname, const GLfloat *p) { (void)light; (void)pname; (void)p; }
@@ -527,12 +692,27 @@ void fe_reset_matrices(void) {
 }
 
 void fngl_reset(void) {
+    uint32_t t;
     sf = 1; df = 0; cullmode = 0x405; depthfunc = 0x201; depthmask = 1;
     frontface = 0x0901u;
     fe_scale = 0.75f; fe_scale_y = 0.9f; fe_off_x = 0.f; fe_off_y = 0.f; fe_fb_h = 320.f; fe_view_h = 320;
     fe_tex_shift = 0; fe_tex_min_side = 64; fe_tex_big_side = 256; fe_tex_big_shift = 0; fe_atlas_max_side = 32;
     fe_pending_tex_shift = 0;
+    tex_pending_name[0] = 0;
+    bound_tex = bound_tex1 = 0;
+    tex_unit = client_unit = 0;
+    en_tex = en_tex1 = 0;
+    memset(&ta1_, 0, sizeof ta1_);
     memset(uv_div, 0, sizeof uv_div);
+    for (t = 1; t < MAXTEX; t++) {
+        if (tex_named[t]) {
+            if (atl[t].page) atlas_free(t);
+            if (texh[t]) { be_tex_delete(texh[t]); texh[t] = 0; fe_stat_tex_count--; }
+            fe_stat_tex_bytes -= tex_bytes[t]; tex_bytes[t] = 0;
+        }
+        tex_named[t] = 0;
+        tex_clear_slot(t);
+    }
     fe_reset_matrices();
 }
 
@@ -545,6 +725,7 @@ void fe_note_texfile(const char *path) {
     char stem[40];
     int i, len;
     if (!path || guard) return;
+    tex_pending_name[0] = 0;
     if (!loaded) {
         void *buf = 0;
         uint32_t sz = 0;
@@ -575,6 +756,7 @@ void fe_note_texfile(const char *path) {
     if (len <= 0 || len >= 40) return;
     memcpy(stem, base, (size_t)len);
     stem[len] = 0;
+    memcpy(tex_pending_name, stem, (size_t)len + 1);
     for (i = 0; i < n; i++) if (strcmp(names[i], stem) == 0) {
         fe_pending_tex_shift = shifts[i];
         return;

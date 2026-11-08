@@ -139,6 +139,13 @@ void be_tex_image(int h, int level, int w, int ht, uint32_t format, uint32_t typ
 }
 void be_tex_compressed(int h, int level, uint32_t fmt, int w, int ht, const void *data, uint32_t size) {
     if (!h || level) return;
+    if (w > 512 || ht > 512) {
+        char b[80];
+        be_stat_tex_fail++;
+        snprintf(b, sizeof b, "tex fail %dx%d >512", w, ht);
+        plat_log_line(b);
+        return;
+    }
     while (glGetError()) {}
     glBindTexture(GL_TEXTURE_2D, (GLuint)h);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);

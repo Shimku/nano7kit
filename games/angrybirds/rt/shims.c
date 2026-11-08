@@ -22,6 +22,14 @@ float ceilf(float x) { int i = (int)x; if (x > 0.f && (float)i != x) i++; return
 float fminf(float a, float b) { return a < b ? a : b; }
 float fmaxf(float a, float b) { return a > b ? a : b; }
 
+#ifdef FN_NANO
+/* newlib __libc_fini_array (from -nostdlib + libc.a) wants crt0's _fini.
+ * __libc_fini is a weak newlib hook; mkrelocapp rejects leftover undefs. */
+void _init(void) {}
+void _fini(void) {}
+void __libc_fini(void) {}
+#endif
+
 /* Host (armel) and device libm are already softfp/GPR, matching the SO. */
 
 /* Bionic exports these as pointers (GOT is the address of the pointer). */

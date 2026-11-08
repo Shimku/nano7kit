@@ -14,6 +14,7 @@ void ab_call_lua(const char *name);
 void ab_load_lua_level(const char *name);
 
 #define AB_PHYS_SAMPLE 32
+#define AB_VIS_MAX 64
 typedef struct {
     uint32_t lua, world;
     int phys_on, bodies, static_n, dynamic_n, fixtures, contacts, contacts_hint;
@@ -25,6 +26,10 @@ typedef struct {
     int sample_n;
     int sample_type[AB_PHYS_SAMPLE];
     float sample_x[AB_PHYS_SAMPLE], sample_y[AB_PHYS_SAMPLE];
+    int vis_n;
+    int vis_type[AB_VIS_MAX];
+    float vis_x[AB_VIS_MAX], vis_y[AB_VIS_MAX];
+    float vis_px[AB_VIS_MAX], vis_py[AB_VIS_MAX];
 } ab_phys_info;
 void ab_phys_snapshot(ab_phys_info *o);
 void ab_phys_log(const char *tag);
@@ -35,6 +40,8 @@ void ab_cam_fit_world(void);
 void ab_cam_fit_birds(void);
 void ab_ready_slingshot(void);
 void ab_set_body_velocity(const char *name, float vx, float vy);
+int ab_world_to_panel(float bx, float by, float *px, float *py);
+int ab_pouch_world(float *bx, float *by);
 const char *ab_so_path(void);
 void ab_set_so_path(const char *p);
 #endif

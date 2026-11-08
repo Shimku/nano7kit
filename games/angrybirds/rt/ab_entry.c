@@ -24,6 +24,7 @@ typedef void (*set_vel_fn)(void *, void *, float, float);
 typedef void (*set_num_fn)(void *, const char *, float);
 typedef void (*set_str_fn)(void *, const char *, const char *);
 typedef void (*set_bname_fn)(void *, const char *, int);
+typedef void *(*get_body_fn)(void *, const void *);
 typedef void *(*app_get_fn)(void);
 
 static jni_init_fn j_init;
@@ -40,10 +41,13 @@ static set_vel_fn set_vel;
 static set_num_fn lua_set_num;
 static set_str_fn lua_set_str;
 static set_bname_fn lua_set_bool;
+static get_body_fn get_body;
 static app_get_fn app_get;
 static int started;
 static int cam_hold;
 static float hold_scale, hold_left, hold_top;
+static uint32_t scale_saved[2], topleft_saved[2];
+static int cam_hooks_on;
 static const char *so_path = "libangrybirds.so";
 static struct { int down, id; float x, y, gx, gy; } fed[AB_FINGERS];
 static int pinch_on;
@@ -104,6 +108,7 @@ static void *must_sym(const char *n) {
 static void patch_arm_jump(void *fn, void *hook);
 static void hook_set_scale(void *lua, float s);
 static void hook_set_topleft(void *lua, float left, float top);
+static void mk_string(void *slot, const char *s);
 
 static void reset_view(void) {
     int i;
@@ -145,9 +150,19 @@ int ab_start(void) {
     lua_set_num = (set_num_fn)so_sym(&g_so, "_ZN3lua8LuaTable9setNumberEPKcf");
     lua_set_str = (set_str_fn)so_sym(&g_so, "_ZN3lua8LuaTable9setStringEPKcS2_");
     lua_set_bool = (set_bname_fn)so_sym(&g_so, "_ZN3lua8LuaTable10setBooleanEPKcb");
+    get_body = (get_body_fn)so_sym(&g_so, "_ZN7GameLua7getBodyERKN4lang6StringE");
     app_get = (app_get_fn)so_sym(&g_so, "_ZN9framework3App3getEv");
-    if (set_scale) patch_arm_jump((void *)set_scale, (void *)hook_set_scale);
-    if (set_topleft) patch_arm_jump((void *)set_topleft, (void *)hook_set_topleft);
+    if (set_scale) {
+        uint32_t *p = (uint32_t *)set_scale;
+        scale_saved[0] = p[0]; scale_saved[1] = p[1];
+        patch_arm_jump((void *)set_scale, (void *)hook_set_scale);
+    }
+    if (set_topleft) {
+        uint32_t *p = (uint32_t *)set_topleft;
+        topleft_saved[0] = p[0]; topleft_saved[1] = p[1];
+        patch_arm_jump((void *)set_topleft, (void *)hook_set_topleft);
+    }
+    cam_hooks_on = 1;
     env = ab_jni_env();
     files = ab_jni_new_utf(plat_files_dir());
     plat_log_line("ab_start: nativeInit 480x320");
@@ -165,6 +180,96 @@ static void panel_to_game(float px, float py, float *gx, float *gy) {
     if (sy < 1e-6f) sy = 1e-6f;
     *gx = (py - fe_off_y) / sy;
     *gy = fe_fb_h - (px - fe_off_x) / sx;
+}
+
+static void game_to_panel(float gx, float gy, float *px, float *py) {
+    float sx = fe_scale, sy = fe_scale_y;
+    if (sx < 1e-6f) sx = 1e-6f;
+    if (sy < 1e-6f) sy = 1e-6f;
+    *py = fe_off_y + gx * sy;
+    *px = fe_off_x + (fe_fb_h - gy) * sx;
+}
+
+int ab_world_to_panel(float bx, float by, float *px, float *py) {
+    uint8_t *lua = (uint8_t *)game_lua();
+    float scale, left, top, gx, gy;
+    if (!lua || !px || !py) return 0;
+    scale = rf32(lua + AB_CAM_SCALE);
+    left = rf32(lua + AB_CAM_LEFT);
+    top = rf32(lua + AB_CAM_TOP);
+    if (!(scale > 1e-4f)) return 0;
+    gx = (bx * AB_PHYS_TO_WORLD - left) * scale;
+    gy = (by * AB_PHYS_TO_WORLD - top) * scale;
+    game_to_panel(gx, gy, px, py);
+    return 1;
+}
+
+static void *body_named(const char *name) {
+    void *lua = game_lua();
+    char slot[16];
+    if (!lua || !get_body || !name || !str_ctor) return 0;
+    mk_string(slot, name);
+    return get_body(lua, slot);
+}
+
+int ab_pouch_world(float *bx, float *by) {
+    uint8_t *lua, *world, *b, *plat;
+    int nwalk, nmax, found = 0;
+    float minx = 1e9f, x0 = 0.f, y0 = 0.f, bestx = -1e9f;
+    lua = (uint8_t *)game_lua();
+    if (!lua || !bx || !by) return 0;
+    memcpy(&world, lua + AB_WORLD_OFF, 4);
+    if (!world) return 0;
+    nmax = (int)ru32(world + B2_BODY_COUNT);
+    plat = (uint8_t *)body_named("ShootingPlatform01");
+    memcpy(&b, world + B2_BODY_LIST, 4);
+    for (nwalk = 0; b && nwalk < 256 && nwalk < (nmax > 0 ? nmax + 2 : 256); nwalk++) {
+        int type = (int)ru32(b);
+        float x = rf32(b + 12);
+        if (type == 2 && x < minx) minx = x;
+        memcpy(&b, b + 104, 4);
+    }
+    if (!(minx < 1e8f)) return 0;
+    /* Waiting birds sit left of the slingshot. The loaded bird is the
+     * rightmost of that left cluster. If the shooting platform exists,
+     * prefer the bird nearest a point just above/right of it (the pouch). */
+    memcpy(&b, world + B2_BODY_LIST, 4);
+    for (nwalk = 0; b && nwalk < 256 && nwalk < (nmax > 0 ? nmax + 2 : 256); nwalk++) {
+        int type = (int)ru32(b);
+        float x = rf32(b + 12), y = rf32(b + 16);
+        if (type == 2 && x <= minx + 6.5f && x >= bestx) {
+            bestx = x; x0 = x; y0 = y; found = 1;
+        }
+        memcpy(&b, b + 104, 4);
+    }
+    if (plat) {
+        float px = rf32(plat + 12) + 1.2f, py = rf32(plat + 16) - 1.6f, bestd = 1e9f;
+        memcpy(&b, world + B2_BODY_LIST, 4);
+        for (nwalk = 0; b && nwalk < 256 && nwalk < (nmax > 0 ? nmax + 2 : 256); nwalk++) {
+            int type = (int)ru32(b);
+            float x = rf32(b + 12), y = rf32(b + 16), dx, dy, d2;
+            if (type == 2 && x <= minx + 6.5f) {
+                dx = x - px; dy = y - py; d2 = dx * dx + dy * dy;
+                if (d2 < bestd) { bestd = d2; x0 = x; y0 = y; found = 1; }
+            }
+            memcpy(&b, b + 104, 4);
+        }
+    }
+    if (!found) {
+        static const char *birds[] = {
+            "RedBird", "YellowBird", "BlueBird", "BlackBird", "WhiteBird", 0
+        };
+        int i;
+        for (i = 0; birds[i]; i++) {
+            uint8_t *body = (uint8_t *)body_named(birds[i]);
+            if (body && (int)ru32(body) == 2) {
+                x0 = rf32(body + 12); y0 = rf32(body + 16); found = 1; break;
+            }
+        }
+    }
+    if (!found) return 0;
+    *bx = x0; *by = y0;
+    return 1;
 }
 
 static int finger_down_count(void) {
@@ -214,28 +319,33 @@ static void write_cam_fields(void *lua, float scale, float left, float top) {
     }
 }
 
+static void orig_set_scale(void *lua, float s);
+static void orig_set_topleft(void *lua, float left, float top);
+
 static void apply_cam(float scale, float left, float top) {
     void *lua = game_lua();
     if (!lua || !(scale > 1e-4f)) return;
     write_cam_fields(lua, scale, left, top);
+    orig_set_scale(lua, scale);
+    orig_set_topleft(lua, left, top);
     ab_lua_set_number("worldScale", scale);
     ab_lua_set_number("currentZoomedScale", scale);
     ab_lua_set_number("zoomLevel", scale);
     ab_lua_set_number("oldZoomLevel", scale);
 }
 
-/* Lua defaultCamera writes these every tick. While cam_hold is set, ignore
- * those writes so pigs stay in the 480x320 view. */
+/* defaultCamera writes these every tick. While cam_hold is set, keep the
+ * world-fit camera by forwarding the hold values into the original C++
+ * setters (the previous no-op left the renderer on the bird camera). */
 static void hook_set_scale(void *lua, float s) {
-    if (cam_hold || !lua) return;
-    write_cam_fields(lua, s, rf32((uint8_t *)lua + AB_CAM_LEFT),
-                     rf32((uint8_t *)lua + AB_CAM_TOP));
+    if (!lua) return;
+    if (cam_hold) s = hold_scale;
+    orig_set_scale(lua, s);
 }
 static void hook_set_topleft(void *lua, float left, float top) {
-    float scale;
-    if (cam_hold || !lua) return;
-    scale = rf32((uint8_t *)lua + AB_CAM_SCALE);
-    write_cam_fields(lua, scale, left, top);
+    if (!lua) return;
+    if (cam_hold) { left = hold_left; top = hold_top; }
+    orig_set_topleft(lua, left, top);
 }
 
 static void patch_arm_jump(void *fn, void *hook) {
@@ -244,6 +354,41 @@ static void patch_arm_jump(void *fn, void *hook) {
     p[0] = 0xe51ff004u; /* ldr pc, [pc, #-4] */
     p[1] = (uint32_t)(uintptr_t)hook;
     __builtin___clear_cache((char *)p, (char *)(p + 2));
+}
+
+static void cam_unpatch(void) {
+    uint32_t *p;
+    if (!cam_hooks_on) return;
+    if (set_scale) {
+        p = (uint32_t *)set_scale;
+        p[0] = scale_saved[0]; p[1] = scale_saved[1];
+        __builtin___clear_cache((char *)p, (char *)(p + 2));
+    }
+    if (set_topleft) {
+        p = (uint32_t *)set_topleft;
+        p[0] = topleft_saved[0]; p[1] = topleft_saved[1];
+        __builtin___clear_cache((char *)p, (char *)(p + 2));
+    }
+}
+
+static void cam_repatch(void) {
+    if (!cam_hooks_on) return;
+    if (set_scale) patch_arm_jump((void *)set_scale, (void *)hook_set_scale);
+    if (set_topleft) patch_arm_jump((void *)set_topleft, (void *)hook_set_topleft);
+}
+
+static void orig_set_scale(void *lua, float s) {
+    if (!set_scale) return;
+    cam_unpatch();
+    set_scale(lua, s);
+    cam_repatch();
+}
+
+static void orig_set_topleft(void *lua, float left, float top) {
+    if (!set_topleft) return;
+    cam_unpatch();
+    set_topleft(lua, left, top);
+    cam_repatch();
 }
 
 static void ab_apply_pinch(void) {
@@ -326,7 +471,8 @@ void ab_cam_fit_world(void) {
         }
         memcpy(&b, b + 104, 4);
     }
-    minx -= 40.f; maxx += 60.f; miny -= 20.f; maxy += 30.f;
+    /* Keep the slingshot inset so a real pouch drag has room to pull back. */
+    minx -= 180.f; maxx += 60.f; miny -= 40.f; maxy += 40.f;
     w = maxx - minx; h = maxy - miny;
     if (w < 160.f) w = 160.f;
     if (h < 100.f) h = 100.f;
@@ -497,8 +643,9 @@ void ab_set_body_velocity(const char *name, float vx, float vy) {
 }
 
 void ab_ready_slingshot(void) {
+    /* birdTutorialPopups is a table; #birdTutorialPopups throws if we
+     * overwrite it with a boolean, which blanked every later frame. */
     ab_lua_set_bool("showTutorials", 0);
-    ab_lua_set_bool("birdTutorialPopups", 0);
     ab_lua_set_bool("birdReady", 1);
     ab_lua_set_bool("fillInNextBird", 1);
     ab_lua_set_number("levelStartTimer", 10.f);
@@ -548,6 +695,14 @@ void ab_phys_snapshot(ab_phys_info *o) {
             if (sx >= -40.f && sx <= AB_VIEW_W + 40.f && sy >= -40.f && sy <= AB_VIEW_H + 40.f) {
                 o->vis_all++;
                 if (type == 2) o->vis_dyn++;
+                if (o->vis_n < AB_VIS_MAX) {
+                    int k = o->vis_n++;
+                    float px, py;
+                    o->vis_type[k] = type;
+                    o->vis_x[k] = x; o->vis_y[k] = y;
+                    game_to_panel(sx, sy, &px, &py);
+                    o->vis_px[k] = px; o->vis_py[k] = py;
+                }
             }
         }
         if (type == 0) {

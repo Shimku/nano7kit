@@ -137,6 +137,12 @@ class SourceTests(unittest.TestCase):
         conv = (GAME / "tools" / "so_to_obj.py").read_text()
         self.assertIn("ab_gl", conv)
         self.assertIn('"malloc": "ab_malloc"', conv)
+        self.assertIn("Do not re-export the .so's defined globals", conv)
+        self.assertIn("void _fini(void)", shims)
+        self.assertIn("void __libc_fini(void)", shims)
+        self.assertIn("#ifdef FN_NANO", shims)
+        app_mk = (GAME / "nano" / "app" / "Makefile").read_text()
+        self.assertIn("allow-multiple-definition", app_mk)
         jni = (GAME / "rt" / "jni.c").read_text()
         self.assertIn("jni_fn[176]", jni)
         self.assertIn("jni_fn[200]", jni)
@@ -162,6 +168,10 @@ class SourceTests(unittest.TestCase):
         self.assertIn("ab_cam_fit_world", entry)
         self.assertIn("ab_cam_fit_birds", entry)
         self.assertIn("ab_set_body_velocity", entry)
+        self.assertIn("ab_pouch_world", entry)
+        self.assertIn("ab_world_to_panel", entry)
+        self.assertIn("ShootingPlatform01", entry)
+        self.assertIn("getBody", entry)
         self.assertIn("hook_set_scale", entry)
         self.assertIn("cam_hold", entry)
         nano = (GAME / "nano" / "fn_nano.c").read_text()
@@ -174,7 +184,22 @@ class SourceTests(unittest.TestCase):
         self.assertIn("sv[i].x = fe_off_x + fy * fe_scale", gl)
         self.assertIn("fe_reset_matrices", gl)
         self.assertIn("fe_note_texfile", gl)
+        self.assertIn("tex_log_w", gl)
+        self.assertIn("POT_PAD", gl)
+        self.assertIn("DRAW_NO_IMAGE", gl)
+        self.assertIn("AB_TEX", gl)
+        self.assertIn("tex_unit", gl)
+        self.assertIn("bound_tex1", gl)
+        self.assertIn("client_unit", gl)
+        self.assertNotIn("void ab_glActiveTexture(GLenum t) { (void)t; }", gl)
         host = (GAME / "host" / "main.c").read_text()
+        play = host[host.index('getenv("AB_PLAY_TEST")'):host.index('getenv("AB_GESTURE_TEST")')]
+        self.assertNotIn("ab_set_body_velocity", play)
+        self.assertIn("ab_pouch_world", play)
+        self.assertIn("tex_ok", host)
+        self.assertIn("AB_TEXVAR", host)
+        self.assertIn("near-white", host)
+        self.assertIn("cy < 36", host)
         self.assertIn("P6 432 240", host)
         self.assertIn("P6 240 432", host)
         self.assertIn("panel-l1", host)
@@ -197,6 +222,8 @@ class SourceTests(unittest.TestCase):
         self.assertIn("UI_KEEP = 512", src)
         self.assertIn("keep_for", src)
         self.assertIn("texscale", src)
+        self.assertIn("scale_sheet_dat", src)
+        self.assertIn('block_dat = {"INGAME", "INGAME_1"}', src)
 
 
 @unittest.skipUnless(APK, "set NANO7KIT_ANGRY_APK to the Angry Birds 1.0.0 apk/zip to run")
@@ -235,6 +262,8 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, err[-4000:])
         self.assertIn("Level1", err)
         self.assertIn("Level3", err)
+        self.assertIn("tex_ok=", err)
+        self.assertNotRegex(err, r"AB_LEVELS_TEST Level[123].*tex_ok=0")
 
     def test_playthrough_level1_slingshot(self):
         import subprocess
@@ -249,6 +278,9 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("AB_PLAY_TEST PASS", err, err[-8000:])
         self.assertEqual(r.returncode, 0, err[-4000:])
         self.assertIn("flying=1", err)
+        self.assertIn("AB_PLAY_TEST pouch", err)
+        self.assertNotIn("setVelocity", err)
+        self.assertNotIn("drag missed pouch", err)
 
     def test_gesture_frame_fixed_pinch_and_l1_l2_l3(self):
         import subprocess
@@ -265,6 +297,7 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("AB_GESTURE_TEST Level1", err)
         self.assertIn("AB_GESTURE_TEST Level2", err)
         self.assertIn("AB_GESTURE_TEST Level3", err)
+        self.assertIn("tex_ok=", err)
         self.assertIn("pinch-out", err)
         self.assertIn("pinch-in", err)
         self.assertTrue((out / "panel-l1.ppm").is_file(), err[-2000:])

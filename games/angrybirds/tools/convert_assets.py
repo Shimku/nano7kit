@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Downscale Angry Birds 1.0 textures for the nano heap. Never commits game files.
 
-Copies data/ from the user's .app: Lua as-is, named sprite .dat left at original
-pixel sizes (UV wrap is undone from texscale). wav/mp3 skipped.
+Copies data/ from the user's .app: Lua as-is. INGAME and INGAME_1 .dat pixel
+rects are halved with their PVRs so ice/stone sprites stay inside the loaded
+image. Other sheets keep original .dat (backgrounds stay 480x320; UV wrap is
+undone from texscale). wav/mp3 skipped.
 
 INGAME sheets fill a zoomed camera on a 240-wide panel. The Android .so image is
 smaller than the iOS recompile, so INGAME can keep 512 (half of 1024). Menu,
@@ -417,12 +419,33 @@ def convert_tree(app: Path, dest: Path) -> dict:
             else:
                 n_copy += 1
         elif suf == ".dat":
-            # Keep original sprite pixel sizes so Image::draw dest quads stay
-            # 480x320. UV wrap from the smaller PNG is undone in fngl using texscale.
-            out.write_bytes(src.read_bytes())
-            n_copy += 1
+            # Filled in the second pass once every sheet's shift is known.
+            continue
         else:
             out.write_bytes(src.read_bytes())
+            n_copy += 1
+    # Block/bird sheets: .dat pixel rects must match the downscaled PVR.
+    # Leaving them at 1024 coords made BLOCK_LIGHT/STONE (x>=598) sit past
+    # the 433-wide INGAME_1 image, so Ka3D skipped the sprite and drew the
+    # untextured white body fill. Background sheets keep original rects so
+    # 480x320 layers still cover the view; fngl uv_div undoes those UVs.
+    block_dat = {"INGAME", "INGAME_1"}
+    for src in sorted(data.rglob("*.dat")):
+        if not src.is_file() or src.name.startswith("._"):
+            continue
+        rel = src.relative_to(data)
+        out = dest / rel
+        out.parent.mkdir(parents=True, exist_ok=True)
+        raw = src.read_bytes()
+        sh = scaled.get(src.stem, 0)
+        if src.stem in block_dat and sh > 0:
+            scaled_dat = scale_sheet_dat(raw, sh)
+            out.write_bytes(scaled_dat)
+            if scaled_dat != raw:
+                scaled.pop(src.stem, None)
+            n_scale += 1
+        else:
+            out.write_bytes(raw)
             n_copy += 1
     lines = ["%s %d\n" % (stem, sh) for stem, sh in sorted(scaled.items()) if sh]
     (dest / "texscale").write_text("".join(lines) if lines else "")

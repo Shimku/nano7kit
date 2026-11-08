@@ -30,7 +30,7 @@ APK_SHA256 = "c80ed55b5a7e594653402217b61569049300358d2c2f6c4515c867608104c477"
 CMD = "./start nabase add 'Angry Birds' --payload /path/to/angrybirds-android-1.0.0.apk"
 FAT_EXE = "/Apps/Executables/Angry Birds.hbapp"
 FAT_DATA = "/Apps/Data/AngryBirds"
-RECIPE = 1
+RECIPE = 2
 
 # Memory model. IMAGE_BYTES is the loaded .hbapp span (runtime + linked .so).
 # The v7a .so image is about 1.32 MB; runtime/GL/JNI stay ARM+VFP softfp.
@@ -51,6 +51,21 @@ ZLIB_SHA256 = "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"
 
 def build_dir() -> Path:
     return root() / "build" / "angrybirds_rc"
+
+
+def _recipe_python() -> Path:
+    """Interpreter for so_to_obj, convert_assets, and mkrelocapp (pyelftools)."""
+    import subprocess
+
+    py = Path(sys.executable)
+    probe = subprocess.run([str(py), "-c", "import elftools"], capture_output=True)
+    if probe.returncode == 0:
+        return py
+    subprocess.check_call(
+        [str(py), "-m", "pip", "install", "--user", "--quiet", "--disable-pip-version-check",
+         "pyelftools==0.32"]
+    )
+    return py
 
 
 def stamp_path() -> Path:
@@ -194,7 +209,6 @@ def build(payload: Path, *, force: bool = False) -> dict:
     import time as time_mod
 
     from .ports import _run_make, _stage_hbapp, extra_data_dir
-    from .templerun import ensure_venv
 
     t0 = time_mod.time()
     print("nano7kit Angry Birds build (host only, no NAND, nothing written to the nano)")
@@ -207,7 +221,7 @@ def build(payload: Path, *, force: bool = False) -> dict:
     if not force and _staged() and stamp_path().is_file() and stamp_path().read_text() == stamp:
         print("    build     already staged for this apk (stamp match), skipping rebuild")
         return {"name": NAME, "built": False, "data": str(extra_data_dir(NAME))}
-    py = ensure_venv()
+    py = _recipe_python()
     out = build_dir()
     data = out / "data"
     soobj = out / "angrybirds_so.o"

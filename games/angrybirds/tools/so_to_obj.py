@@ -174,12 +174,10 @@ def emit_rel(so: dict) -> bytes:
         mapped = remap(name)
         import_idx[name] = len(syms)
         syms.append(struct.pack("<IIIBBH", add_str(mapped), 0, 0, (STB_GLOBAL << 4) | STT_FUNC, 0, SHN_UNDEF))
-    for name, val, sz, bind, st, sh in so["syms"]:
-        if not name or sh == 0 or bind != STB_GLOBAL:
-            continue
-        if name in ("__bss_start__", "_end", "_edata"):
-            continue
-        syms.append(struct.pack("<IIIBBH", add_str(name), val, sz, (STB_GLOBAL << 4) | st, 0, 1))
+    # Do not re-export the .so's defined globals (floorf, JNI natives, ...).
+    # Internal R_ARM_RELATIVE relocs already become ABS32 against __ab_so_base,
+    # and so_sym() walks the embedded dynsym. Re-exporting them collides with
+    # shims.c / newlib (the blob's own floorf/ceilf vs ours).
     # extras
     for n, v, t in (
         ("ab_so_exidx_off", 0, STT_OBJECT),

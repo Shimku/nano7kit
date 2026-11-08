@@ -9,6 +9,7 @@
 #define PW 240
 #define PH 432
 uint8_t be_fb[PH][PW][4];
+uint8_t be_last_tex[PH][PW];
 static float zb[PH][PW];
 typedef struct { int used, w, h, fmt_seen; uint8_t *rgba; uint32_t format, type; } tex;
 #define MAXT 512
@@ -130,7 +131,10 @@ void be_tex_compressed(int h, int level, uint32_t fmt, int w, int ht, const void
 }
 void be_clear(int color, int depth, const float c[4], float d) {
     for (int y = 0; y < PH; y++) for (int x = 0; x < PW; x++) {
-        if (color) for (int k = 0; k < 4; k++) be_fb[y][x][k] = (uint8_t)(c[k] * 255.f);
+        if (color) {
+            for (int k = 0; k < 4; k++) be_fb[y][x][k] = (uint8_t)(c[k] * 255.f);
+            be_last_tex[y][x] = 255;
+        }
         if (depth) zb[y][x] = d;
     }
 }
@@ -191,6 +195,7 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
             }
             if (s->alpha_test && col[3] <= 0.f) continue;
             uint8_t *d = be_fb[y][x];
+            be_last_tex[y][x] = (uint8_t)s->tex;
             if (s->blend) {
                 float dc[4] = {d[0] / 255.f, d[1] / 255.f, d[2] / 255.f, d[3] / 255.f};
                 for (int k = 0; k < 4; k++) {
