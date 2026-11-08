@@ -24,6 +24,8 @@ typedef void (*set_ff_fn)(void *, float, float);
 typedef void (*set_vel_fn)(void *, void *, float, float);
 typedef void (*set_num_fn)(void *, const char *, float);
 typedef float (*get_num_fn)(void *, const char *);
+typedef int (*get_bool_fn)(void *, const char *);
+typedef int (*is_name_fn)(void *, const char *);
 typedef void (*set_str_fn)(void *, const char *, const char *);
 typedef void (*set_bname_fn)(void *, const char *, int);
 typedef void *(*get_body_fn)(void *, const void *);
@@ -45,6 +47,10 @@ static set_ff_fn set_topleft;
 static set_vel_fn set_vel;
 static set_num_fn lua_set_num;
 static get_num_fn lua_get_num;
+static get_bool_fn lua_get_bool;
+static is_name_fn lua_is_num, lua_is_bool, lua_is_nil;
+typedef void (*get_tab_fn)(void *, void *, const char *);
+static get_tab_fn lua_get_tab;
 static set_str_fn lua_set_str;
 static set_bname_fn lua_set_bool;
 static get_body_fn get_body;
@@ -55,6 +61,8 @@ static cstr_fn str_cstr;
 static int started;
 static int cam_hold;
 static float hold_scale, hold_left, hold_top;
+static float world_minx, world_maxx, world_miny, world_maxy;
+static int world_bounds_ok;
 static uint32_t scale_saved[2], topleft_saved[2];
 static uint32_t sheet_ctor_saved[2], spr_ctor_saved[2];
 static int cam_hooks_on;
@@ -166,6 +174,11 @@ int ab_start(void) {
     set_vel = (set_vel_fn)so_sym(&g_so, "_ZN7GameLua11setVelocityEN4lang6StringEff");
     lua_set_num = (set_num_fn)so_sym(&g_so, "_ZN3lua8LuaTable9setNumberEPKcf");
     lua_get_num = (get_num_fn)so_sym(&g_so, "_ZNK3lua8LuaTable9getNumberEPKc");
+    lua_get_bool = (get_bool_fn)so_sym(&g_so, "_ZNK3lua8LuaTable10getBooleanEPKc");
+    lua_is_num = (is_name_fn)so_sym(&g_so, "_ZNK3lua8LuaTable8isNumberEPKc");
+    lua_is_bool = (is_name_fn)so_sym(&g_so, "_ZNK3lua8LuaTable9isBooleanEPKc");
+    lua_is_nil = (is_name_fn)so_sym(&g_so, "_ZNK3lua8LuaTable5isNilEPKc");
+    lua_get_tab = (get_tab_fn)so_sym(&g_so, "_ZNK3lua8LuaTable8getTableEPKc");
     lua_set_str = (set_str_fn)so_sym(&g_so, "_ZN3lua8LuaTable9setStringEPKcS2_");
     lua_set_bool = (set_bname_fn)so_sym(&g_so, "_ZN3lua8LuaTable10setBooleanEPKcb");
     get_body = (get_body_fn)so_sym(&g_so, "_ZN7GameLua7getBodyERKN4lang6StringE");
@@ -295,6 +308,19 @@ int ab_pouch_world(float *bx, float *by) {
     return 1;
 }
 
+int ab_sling_world(float *bx, float *by) {
+    uint8_t *plat;
+    if (!bx || !by) return 0;
+    plat = (uint8_t *)body_named("ShootingPlatform01");
+    if (plat) {
+        /* Pouch sits a little above/right of the platform body. */
+        *bx = rf32(plat + 12) + 1.2f;
+        *by = rf32(plat + 16) - 1.6f;
+        return 1;
+    }
+    return ab_pouch_world(bx, by);
+}
+
 static int finger_down_count(void) {
     int n = 0, i;
     for (i = 0; i < AB_FINGERS; i++) if (fed[i].down) n++;
@@ -304,6 +330,7 @@ static int finger_down_count(void) {
 void ab_touch(int id, int down, float px, float py) {
     float gx, gy;
     int began, moved, ended, type;
+    static int in_log;
     if (id < 0 || id >= AB_FINGERS) id = 0;
     panel_to_game(px, py, &gx, &gy);
     began = down && !fed[id].down;
@@ -312,7 +339,18 @@ void ab_touch(int id, int down, float px, float py) {
     if (!began && !moved && !ended) return;
     fed[id].id = id; fed[id].x = px; fed[id].y = py; fed[id].gx = gx; fed[id].gy = gy;
     fed[id].down = down != 0;
-    type = began ? 0 : ended ? 2 : 1;
+    /* Android MotionEvent: ACTION_DOWN=0 ACTION_UP=1 ACTION_MOVE=2.
+     * GameApp vtable +36 began, +44 ended, +40 moved. MOVE (2) keeps
+     * LBUTTON down and updates cursor; type 1 is the release. Sending
+     * iOS 0/1/2 (began/moved/ended) made every drag tick ACTION_UP. */
+    type = began ? 0 : ended ? 1 : 2;
+    if (in_log < 40) {
+        char b[160];
+        snprintf(b, sizeof b, "AB_INPUT id=%d type=%d panel=%.1f,%.1f game=%.1f,%.1f",
+                 id, type, (double)px, (double)py, (double)gx, (double)gy);
+        plat_log_line(b);
+        in_log++;
+    }
     if (j_input) j_input(ab_jni_env(), ab_jni_renderer(), type, gx, gy, id);
 }
 
@@ -345,6 +383,15 @@ static void write_cam_fields(void *lua, float scale, float left, float top) {
 static void orig_set_scale(void *lua, float s);
 static void orig_set_topleft(void *lua, float left, float top);
 
+static void sync_lua_screen(void *lua, float scale, float left, float top) {
+    char tab[32];
+    if (!lua || !lua_get_tab || !lua_set_num) return;
+    memset(tab, 0, sizeof tab);
+    lua_get_tab(tab, lua, "screen");
+    lua_set_num(tab, "left", left);
+    lua_set_num(tab, "top", top);
+}
+
 static void apply_cam(float scale, float left, float top) {
     void *lua = game_lua();
     if (!lua || !(scale > 1e-4f)) return;
@@ -355,6 +402,7 @@ static void apply_cam(float scale, float left, float top) {
     ab_lua_set_number("currentZoomedScale", scale);
     ab_lua_set_number("zoomLevel", scale);
     ab_lua_set_number("oldZoomLevel", scale);
+    sync_lua_screen(lua, scale, left, top);
 }
 
 /* defaultCamera writes these every tick. While cam_hold is set, keep the
@@ -503,13 +551,29 @@ static void ab_apply_pinch(void) {
         return;
     }
     ns = pinch_s0 * (pinch_d0 / d);
-    minz = 0.22f; maxz = pinch_s0 * 1.6f;
-    if (maxz < pinch_s0) maxz = pinch_s0;
-    if (maxz > 1.05f) maxz = 1.05f;
+    /* Fixed min/max so in and out always move. Tying max to pinch_s0
+     * * 1.6 left a zoomed-out view unable to pinch back in. */
+    minz = 0.22f; maxz = 1.05f;
     if (ns < minz) ns = minz;
     if (ns > maxz) ns = maxz;
     left = pinch_cx - 0.5f * AB_VIEW_W / ns;
     top = pinch_cy - 0.5f * AB_VIEW_H / ns;
+    if (world_bounds_ok) {
+        float vw = AB_VIEW_W / ns, vh = AB_VIEW_H / ns;
+        float bw = world_maxx - world_minx, bh = world_maxy - world_miny;
+        if (vw < bw) {
+            if (left < world_minx) left = world_minx;
+            if (left + vw > world_maxx) left = world_maxx - vw;
+        } else {
+            left = 0.5f * (world_minx + world_maxx) - 0.5f * vw;
+        }
+        if (vh < bh) {
+            if (top < world_miny) top = world_miny;
+            if (top + vh > world_maxy) top = world_maxy - vh;
+        } else {
+            top = 0.5f * (world_miny + world_maxy) - 0.5f * vh;
+        }
+    }
     hold_scale = ns; hold_left = left; hold_top = top;
     cam_hold = 1;
     apply_cam(ns, left, top);
@@ -572,6 +636,8 @@ void ab_cam_fit_world(void) {
     cy = 0.5f * (miny + maxy);
     left = cx - 0.5f * AB_VIEW_W / ns;
     top = cy - 0.5f * AB_VIEW_H / ns;
+    world_minx = minx; world_maxx = maxx; world_miny = miny; world_maxy = maxy;
+    world_bounds_ok = 1;
     hold_scale = ns; hold_left = left; hold_top = top;
     cam_hold = 1;
     apply_cam(ns, left, top);
@@ -582,6 +648,32 @@ void ab_cam_fit_world(void) {
                  (double)ns, (double)left, (double)top);
         plat_log_line(b);
     }
+}
+
+void ab_cam_set(float scale, float left, float top) {
+    if (!(scale > 1e-4f)) return;
+    hold_scale = scale;
+    hold_left = left;
+    hold_top = top;
+    cam_hold = 1;
+    apply_cam(scale, left, top);
+}
+
+void ab_cam_fit_aim(void) {
+    float ns, cx, cy, left, top;
+    if (!(hold_scale > 1e-4f)) ab_cam_fit_world();
+    if (!(hold_scale > 1e-4f)) return;
+    /* Zoom out so the slingshot is not on the panel edge and a pull-back
+     * (landscape left, portrait up) stays on screen. */
+    ns = hold_scale * 0.78f;
+    if (ns < 0.22f) ns = 0.22f;
+    cx = hold_left + 0.5f * AB_VIEW_W / hold_scale;
+    cy = hold_top + 0.5f * AB_VIEW_H / hold_scale;
+    left = cx - 0.5f * AB_VIEW_W / ns;
+    top = cy - 0.5f * AB_VIEW_H / ns;
+    hold_scale = ns; hold_left = left; hold_top = top;
+    cam_hold = 1;
+    apply_cam(ns, left, top);
 }
 
 void ab_cam_fit_play(void) {
@@ -702,6 +794,77 @@ float ab_lua_get_number(const char *name) {
     return lua_get_num(lua, name);
 }
 
+int ab_lua_get_bool(const char *name) {
+    void *lua = game_lua();
+    if (!lua || !lua_get_bool || !name) return 0;
+    if (lua_is_bool && !lua_is_bool(lua, name)) return 0;
+    if (lua_is_nil && lua_is_nil(lua, name)) return 0;
+    return lua_get_bool(lua, name) ? 1 : 0;
+}
+
+static void table_xy(void *tab, float *x, float *y) {
+    *x = *y = 0.f;
+    if (!tab || !lua_get_num) return;
+    if (!lua_is_num || lua_is_num(tab, "x")) *x = lua_get_num(tab, "x");
+    if (!lua_is_num || lua_is_num(tab, "y")) *y = lua_get_num(tab, "y");
+}
+
+int ab_lua_xy(const char *table, float *x, float *y) {
+    void *lua = game_lua();
+    char tab[32];
+    if (!lua || !lua_get_tab || !table || !x || !y) return 0;
+    memset(tab, 0, sizeof tab);
+    lua_get_tab(tab, lua, table);
+    table_xy(tab, x, y);
+    return 1;
+}
+
+void ab_lua_dump_shot(const char *tag) {
+    void *lua = game_lua();
+    float rlen = 0.f, smax = 0.f, srange = 0.f, score = 0.f, ang = 0.f;
+    float cx = 0.f, cy = 0.f, cpx = 0.f, cpy = 0.f, rbx = 0.f, rby = 0.f;
+    int ready = 0, fill = 0, lbtn = 0, lbtn_m = 0, sel = 0;
+    char b[280], tab[32];
+    if (!lua) { plat_log_line("AB_SHOT no lua"); return; }
+    if (lua_is_num && lua_is_num(lua, "rubberBandLength"))
+        rlen = lua_get_num(lua, "rubberBandLength");
+    if (lua_is_num && lua_is_num(lua, "shootMaxLength"))
+        smax = lua_get_num(lua, "shootMaxLength");
+    if (lua_is_num && lua_is_num(lua, "shootRange"))
+        srange = lua_get_num(lua, "shootRange");
+    if (lua_is_num && lua_is_num(lua, "rubberBandAngle"))
+        ang = lua_get_num(lua, "rubberBandAngle");
+    if (score_readable) score = ab_lua_get_number("score");
+    ready = ab_lua_get_bool("birdReady");
+    fill = ab_lua_get_bool("fillInNextBird");
+    sel = !(lua_is_nil && lua_is_nil(lua, "selectedBird"));
+    table_xy((char *)lua + 96, &cx, &cy);
+    if (lua_get_bool) {
+        void *kh = (char *)lua + 80;
+        if (!lua_is_bool || lua_is_bool(kh, "LBUTTON"))
+            lbtn_m = lua_get_bool(kh, "LBUTTON") ? 1 : 0;
+    }
+    if (lua_get_tab) {
+        memset(tab, 0, sizeof tab);
+        lua_get_tab(tab, lua, "cursorPhysics");
+        table_xy(tab, &cpx, &cpy);
+        memset(tab, 0, sizeof tab);
+        lua_get_tab(tab, lua, "rubberBandPos");
+        table_xy(tab, &rbx, &rby);
+        memset(tab, 0, sizeof tab);
+        lua_get_tab(tab, lua, "keyHold");
+        if (lua_get_bool && (!lua_is_bool || lua_is_bool(tab, "LBUTTON")))
+            lbtn = lua_get_bool(tab, "LBUTTON") ? 1 : 0;
+    }
+    snprintf(b, sizeof b,
+             "AB_SHOT %s ready=%d fill=%d sel=%d lbtn=%d/%d rlen=%.3f smax=%.3f srange=%.3f "
+             "ang=%.3f cur=%.1f,%.1f phys=%.2f,%.2f rbp=%.2f,%.2f score=%.0f",
+             tag ? tag : "-", ready, fill, sel, lbtn, lbtn_m, (double)rlen, (double)smax,
+             (double)srange, (double)ang, (double)cx, (double)cy, (double)cpx, (double)cpy,
+             (double)rbx, (double)rby, (double)score);
+    plat_log_line(b);
+}
+
 void ab_cam_fit_birds(void) {
     uint8_t *lua, *world, *b;
     int nwalk, nmax, n = 0, i;
@@ -759,13 +922,30 @@ void ab_set_body_velocity(const char *name, float vx, float vy) {
 
 void ab_ready_slingshot(void) {
     /* birdTutorialPopups is a table; #birdTutorialPopups throws if we
-     * overwrite it with a boolean, which blanked every later frame. */
+     * overwrite it with a boolean, which blanked every later frame.
+     * Do not skip the hop (timer=100): a forced birdReady with the bird
+     * still on the grass never sets selectedBird, so the band stays 0. */
     ab_lua_set_bool("showTutorials", 0);
-    ab_lua_set_bool("birdReady", 1);
+    ab_lua_set_number("levelStartTimer", 0.f);
+    ab_lua_set_number("birdToSlingshotAnimationTimer", 0.f);
+    ab_lua_set_number("nextBirdTimer", 0.f);
+    ab_lua_set_number("lastBirdCollisionTimer", 0.f);
+    ab_lua_set_number("cameraResetTimer", 0.f);
     ab_lua_set_bool("fillInNextBird", 1);
-    ab_lua_set_number("levelStartTimer", 10.f);
-    ab_lua_set_number("birdToSlingshotAnimationTimer", 10.f);
-    /* Keep the whole-level camera so the slingshot stays on screen. */
+    ab_lua_set_bool("birdFired", 0);
+}
+
+void ab_clear_shot_flags(void) {
+    ab_lua_set_bool("dragStarted", 0);
+    ab_lua_set_bool("birdFired", 0);
+    ab_lua_set_bool("birdSelected", 0);
+}
+
+int ab_lua_has(const char *name) {
+    void *lua = game_lua();
+    if (!lua || !name) return 0;
+    if (lua_is_nil && lua_is_nil(lua, name)) return 0;
+    return 1;
 }
 
 void ab_phys_enable(int on) {

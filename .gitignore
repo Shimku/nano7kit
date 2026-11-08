@@ -58,6 +58,7 @@ untether/artifacts/extra/Icons/Temple Run.bin
 untether/artifacts/extra/Icons/Flappy Bird.bin
 untether/artifacts/extra/Icons/Doodle Jump.bin
 untether/artifacts/extra/Icons/PvZ Portable.bin
+untether/artifacts/extra/Icons/Angry Birds.bin
 # Fruit Ninja recompile: app shell staged at build time
 nanoapps/apps/fruitninja_rc/
 nanoapps/apps/pvz_portable/

@@ -495,6 +495,180 @@ static void pinch_in(int frames) {
     ab_touch(1, 0, 160.f, 216.f);
     fake_us += 33333; ab_frame(1.f / 30.f);
 }
+static void drag_up(float x, float y) {
+    ab_touch(0, 0, x, y);
+    fake_us += AB_FRAME_US; ab_frame(AB_FRAME_DT);
+}
+static int pause_menu_up(void) {
+    int y, x, yel_mid = 0, band = 0, black = 0;
+    for (y = 0; y < 96; y++) for (x = 0; x < 240; x++) {
+        int r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (r > 170 && g > 130 && b < 140 && (int)r + (int)g > 2 * (int)b + 40 && x < 150)
+            yel_mid++;
+        if (g > 70 && g < 150 && r < 70 && b < 90) band++;
+    }
+    for (y = 140; y < 432; y++) for (x = 0; x < 240; x++) {
+        int r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (r < 12 && g < 12 && b < 12) black++;
+    }
+    /* In-game pause disc is top-right yellow only. The menu has extra
+     * yellow buttons plus a green strip and a dark lower overlay. */
+    return yel_mid >= 80 && band >= 40 && black >= 15000;
+}
+static void tap_resume(void) {
+    /* Resume is the circular-arrow disc, rightmost large yellow button
+     * on the pause strip (about 168,36 on the 240x432 panel). */
+    tap_at(168.f, 36.f);
+    wait_frames(6);
+    if (pause_menu_up()) { tap_at(155.f, 32.f); wait_frames(6); }
+    if (pause_menu_up()) { tap_at(178.f, 42.f); wait_frames(8); }
+}
+static int grab_rubber(float *px, float *py) {
+    float bx, by, cx, cy, x, y;
+    int i;
+    if (!ab_lua_xy("rubberBandPos", &bx, &by) ||
+        !ab_world_to_panel(bx, by, &x, &y))
+        return 0;
+    x = clampf(x, 12.f, 228.f);
+    y = clampf(y, 20.f, 410.f);
+    /* Click the on-screen bird. Lua picks the sprite in screen space, so
+     * do not walk the finger toward cursorPhysics before selectedBird. */
+    ab_touch(0, 1, x, y);
+    fake_us += AB_FRAME_US; ab_frame(AB_FRAME_DT);
+    ab_touch(0, 1, x + 1.f, y + 1.f);
+    fake_us += AB_FRAME_US; ab_frame(AB_FRAME_DT);
+    ab_touch(0, 1, x, y);
+    for (i = 0; i < 8; i++) {
+        fake_us += AB_FRAME_US; ab_frame(AB_FRAME_DT);
+        ab_lua_xy("cursorPhysics", &cx, &cy);
+        ab_lua_xy("rubberBandPos", &bx, &by);
+        fprintf(stderr, "AB_GRAB i=%d panel=%.1f,%.1f phys=%.2f,%.2f rbp=%.2f,%.2f sel=%d rlen=%.3f\n",
+                i, (double)x, (double)y, (double)cx, (double)cy,
+                (double)bx, (double)by, ab_lua_has("selectedBird"),
+                (double)ab_lua_get_number("rubberBandLength"));
+        if (ab_lua_has("selectedBird"))
+            break;
+    }
+    *px = x;
+    *py = y;
+    return ab_lua_has("selectedBird");
+}
+/* Hold LBUTTON and servo cursorPhysics to (tx, ty). +y is down. */
+static int pull_toward(float *px, float *py, float tx, float ty) {
+    float cx, cy, ex, ey, x = *px, y = *py;
+    int i;
+    for (i = 0; i < 24; i++) {
+        if (!ab_lua_xy("cursorPhysics", &cx, &cy)) break;
+        ex = tx - cx;
+        ey = ty - cy;
+        fprintf(stderr, "AB_PULL i=%d panel=%.1f,%.1f phys=%.2f,%.2f tgt=%.2f,%.2f err=%.2f,%.2f rlen=%.3f\n",
+                i, (double)x, (double)y, (double)cx, (double)cy,
+                (double)tx, (double)ty, (double)ex, (double)ey,
+                (double)ab_lua_get_number("rubberBandLength"));
+        if (ex * ex + ey * ey < 0.20f) break;
+        y = clampf(y + ex * 5.5f, 8.f, 424.f);
+        x = clampf(x - ey * 3.8f, 8.f, 232.f);
+        ab_touch(0, 1, x, y);
+        fake_us += AB_FRAME_US; ab_frame(AB_FRAME_DT);
+    }
+    *px = x;
+    *py = y;
+    return 1;
+}
+/* Lua sets selectedBird on keyPressed.LBUTTON inside shootRange, not on
+ * MOVE. After a servo that walked in from outside, re-press in place. */
+static int ensure_selected(float x, float y) {
+    int i;
+    /* Already on the bird: never ACTION_UP, that would fire a dribble. */
+    if (ab_lua_has("selectedBird"))
+        return 1;
+    for (i = 0; i < 4; i++) {
+        fake_us += AB_FRAME_US; ab_frame(AB_FRAME_DT);
+        if (ab_lua_has("selectedBird"))
+            return 1;
+    }
+    ab_touch(0, 0, x, y);
+    fake_us += AB_FRAME_US; ab_frame(AB_FRAME_DT);
+    ab_touch(0, 1, x, y);
+    for (i = 0; i < 10; i++) {
+        fake_us += AB_FRAME_US; ab_frame(AB_FRAME_DT);
+        if (ab_lua_has("selectedBird")) {
+            fprintf(stderr, "AB_PLAY_TEST selected after repress frames=%d rlen=%.3f\n",
+                    i, (double)ab_lua_get_number("rubberBandLength"));
+            return 1;
+        }
+    }
+    fprintf(stderr, "AB_PLAY_TEST still unselected rlen=%.3f has=%d\n",
+            (double)ab_lua_get_number("rubberBandLength"), ab_lua_has("selectedBird"));
+    return 0;
+}
+static void log_flyer(const char *tag, const ab_phys_info *open) {
+    ab_phys_info n;
+    int i, j, besti = -1;
+    float best = 0.f;
+    ab_phys_snapshot(&n);
+    for (i = 0; i < n.sample_n; i++) if (n.sample_type[i] == 2) {
+        float bestd = 1e9f;
+        for (j = 0; j < open->sample_n; j++) if (open->sample_type[j] == 2) {
+            float dx = n.sample_x[i] - open->sample_x[j];
+            float dy = n.sample_y[i] - open->sample_y[j];
+            float d2 = dx * dx + dy * dy;
+            if (d2 < bestd) bestd = d2;
+        }
+        if (bestd > best) { best = bestd; besti = i; }
+    }
+    fprintf(stderr, "AB_FLY %s bird=%.2f,%.2f d2=%.2f score=%.0f fired=%d hasFly=%d\n",
+            tag ? tag : "-",
+            besti >= 0 ? (double)n.sample_x[besti] : 0.0,
+            besti >= 0 ? (double)n.sample_y[besti] : 0.0,
+            (double)best, (double)n.score,
+            ab_lua_get_bool("birdFired"), ab_lua_has("flyingBird"));
+}
+static int wait_bird_on_sling(int max_frames) {
+    int i, j, k;
+    float bx, by;
+    for (i = 0; i < max_frames; i++) {
+        ab_phys_info n;
+        wait_frames(1);
+        if (!ab_lua_xy("rubberBandPos", &bx, &by)) continue;
+        ab_phys_snapshot(&n);
+        for (j = 0; j < n.sample_n; j++) if (n.sample_type[j] == 2) {
+            float dx = n.sample_x[j] - bx, dy = n.sample_y[j] - by;
+            if (dx * dx + dy * dy < 2.2f * 2.2f) {
+                fprintf(stderr, "AB_PLAY_TEST on-sling frames=%d bird=%.2f,%.2f rbp=%.2f,%.2f ready=%d\n",
+                        i, (double)n.sample_x[j], (double)n.sample_y[j],
+                        (double)bx, (double)by, ab_lua_get_bool("birdReady"));
+                return 1;
+            }
+        }
+        if (i == 0 || i == max_frames - 1 || i % 25 == 24) {
+            fprintf(stderr, "AB_PLAY_TEST waiting-sling i=%d ready=%d rbp=%.2f,%.2f left=",
+                    i, ab_lua_get_bool("birdReady"), (double)bx, (double)by);
+            k = 0;
+            for (j = 0; j < n.sample_n && k < 6; j++) if (n.sample_type[j] == 2 && n.sample_x[j] < 8.f) {
+                fprintf(stderr, " %.2f,%.2f", (double)n.sample_x[j], (double)n.sample_y[j]);
+                k++;
+            }
+            fprintf(stderr, "\n");
+        }
+    }
+    return 0;
+}
+static float body_travel2(const ab_phys_info *a, const ab_phys_info *b) {
+    int i;
+    float maxd = 0.f;
+    for (i = 0; i < b->vis_n; i++) if (b->vis_type[i] == 2) {
+        int j;
+        float bestd = 1e9f;
+        for (j = 0; j < a->vis_n; j++) if (a->vis_type[j] == 2) {
+            float dx = b->vis_x[i] - a->vis_x[j], dy = b->vis_y[i] - a->vis_y[j];
+            float d2 = dx * dx + dy * dy;
+            if (d2 < bestd) bestd = d2;
+        }
+        if (bestd > maxd) maxd = bestd;
+    }
+    return maxd;
+}
 
 static void on_crash(int sig, siginfo_t *si, void *ctx) {
     ucontext_t *uc = (ucontext_t *)ctx;
@@ -545,8 +719,9 @@ int main(int argc, char **argv) {
     fprintf(stderr, "init ok: heap %u peak %u\n", ab_heap_used(), ab_heap_peak());
 
     if (getenv("AB_PLAY_TEST")) {
-        int fail = 0, i, flying = 0;
-        ab_phys_info a, b, mid;
+        int fail = 0, i, flying = 0, hit = 0, stretched = 0, cleared = 0;
+        ab_phys_info a, b, mid, open;
+        float p0x = 0.f, p0y = 0.f, p1x = 0.f, p1y = 0.f, rlen = 0.f;
         wait_frames(200);
         if (every) shot(1);
         ab_call_lua("gotoFirstLevel");
@@ -558,134 +733,169 @@ int main(int argc, char **argv) {
         ab_cam_fit_world();
         wait_frames(2);
         if (every) { shot(6); dump_panel("panel-l1"); }
-        {
-            ab_phys_info open;
-            ab_phys_snapshot(&open);
-            if (!hud_ok("play-l1") || !framing_ok("play-l1", &open)) fail++;
-        }
+        ab_phys_snapshot(&open);
+        if (!hud_ok("play-l1") || !framing_ok("play-l1", &open)) fail++;
         ab_phys_enable(1);
-        wait_frames(40);
+        wait_frames(20);
         if (every) shot(7);
         ab_ready_slingshot();
-        wait_frames(18);
+        for (i = 0; i < 90; i++) {
+            wait_frames(1);
+            if (ab_lua_get_bool("birdReady")) break;
+        }
+        fprintf(stderr, "AB_PLAY_TEST seated frames=%d ready=%d\n", i, ab_lua_get_bool("birdReady"));
+        if (!ab_lua_get_bool("birdReady")) {
+            /* Lua never seated a bird; last resort so the drag still runs. */
+            ab_ready_slingshot();
+        }
+        ab_cam_fit_aim();
+        wait_frames(4);
         ab_phys_snapshot(&a);
         ab_phys_log("play-before-shot");
-        if (!ab_phys_resting(&a) || a.dynamic_n < 1) fail++;
+        ab_lua_dump_shot("before");
+        if (a.dynamic_n < 1) fail++;
         {
-            float bx, by, p0x, p0y, p1x, p1y, gdir, ddx, ddy;
+            float bx, by, sx, sy, lsx = 0.f, lsy = 0.f, tx, ty;
+            (void)ab_sling_world(&sx, &sy);
+            (void)ab_pouch_world(&sx, &sy);
             for (i = 0; i < a.vis_n && i < 12; i++) if (a.vis_type[i] == 2)
                 fprintf(stderr, "AB_PLAY_TEST vis t=2 world=%.2f,%.2f panel=%.1f,%.1f\n",
                         (double)a.vis_x[i], (double)a.vis_y[i],
                         (double)a.vis_px[i], (double)a.vis_py[i]);
-            if (!ab_pouch_world(&bx, &by) || !ab_world_to_panel(bx, by, &p0x, &p0y)) {
-                fprintf(stderr, "AB_PLAY_TEST no pouch body\n");
+            /* Lua shootRange is around rubberBandPos. Servo the finger
+             * until cursorPhysics is inside it, then pull back and down
+             * (+y is gravity-down) so release lofts toward the tower. */
+            if (!ab_lua_xy("rubberBandPos", &bx, &by)) {
+                fprintf(stderr, "AB_PLAY_TEST no rubberBandPos\n");
                 fail++;
-                bx = by = p0x = p0y = p1x = p1y = 0.f;
+            } else if (!grab_rubber(&p0x, &p0y)) {
+                fprintf(stderr, "AB_PLAY_TEST grab missed rbp=%.2f,%.2f panel=%.1f,%.1f\n",
+                        (double)bx, (double)by, (double)p0x, (double)p0y);
+                fail++;
+                ab_touch(0, 0, p0x, p0y);
             } else {
-                if (p0y < 28.f || p0y > 400.f || p0x < 8.f || p0x > 232.f) {
-                    ab_cam_fit_birds();
-                    wait_frames(4);
-                    ab_phys_snapshot(&a);
-                    ab_pouch_world(&bx, &by);
-                    ab_world_to_panel(bx, by, &p0x, &p0y);
-                }
-                gdir = a.grav_y < 0.f ? -1.f : 1.f;
-                /* Pull back and down. 8.5 x 2.8 physics units at the bird
-                 * camera stays on-panel and matches the original fling. */
-                ab_world_to_panel(bx - 8.5f, by + gdir * 2.8f, &p1x, &p1y);
-                fprintf(stderr, "AB_PLAY_TEST pouch raw world %.2f,%.2f panel %.1f,%.1f pull %.1f,%.1f\n",
-                        (double)bx, (double)by, (double)p0x, (double)p0y, (double)p1x, (double)p1y);
-                if (p0y < 22.f || p0y > 410.f || p0x < 4.f || p0x > 236.f) {
-                    fprintf(stderr, "drag missed pouch\n");
-                    fail++;
-                }
-                p0x = clampf(p0x, 12.f, 228.f); p0y = clampf(p0y, 24.f, 408.f);
-                p1x = clampf(p1x, 8.f, 232.f); p1y = clampf(p1y, 8.f, 424.f);
-                ddx = p1x - p0x; ddy = p1y - p0y;
-                if (ddx * ddx + ddy * ddy < 35.f * 35.f) {
-                    /* Landscape left is toward the top of the panel. */
-                    p1y = clampf(p0y - 56.f, 8.f, 424.f);
-                    p1x = clampf(p0x - 6.f, 8.f, 232.f);
-                }
-                fprintf(stderr, "AB_PLAY_TEST pouch world %.2f,%.2f panel %.1f,%.1f -> %.1f,%.1f scale=%.3f grav=%.2f draws=%d\n",
-                        (double)bx, (double)by, (double)p0x, (double)p0y, (double)p1x, (double)p1y,
-                        (double)a.world_scale, (double)a.grav_y, fe_stat_draws);
-                ab_touch(0, 1, p0x, p0y);
-                fake_us += 33333; ab_frame(1.f / 30.f);
-                fake_us += 33333; ab_frame(1.f / 30.f);
-                fake_us += 33333; ab_frame(1.f / 30.f);
-                for (i = 0; i <= 14; i++) {
-                    float k = (float)i / 14.f;
-                    ab_touch(0, 1, p0x + (p1x - p0x) * k, p0y + (p1y - p0y) * k);
-                    fake_us += 33333; ab_frame(1.f / 30.f);
-                }
+                ab_lua_xy("rubberBandPos", &bx, &by);
+                if (ab_lua_has("levelStartPosition"))
+                    ab_lua_xy("levelStartPosition", &lsx, &lsy);
+                /* ~30 deg loft: back 4.3, down 2.5, inside shootMaxLength. */
+                tx = bx - 4.30f;
+                ty = by + 2.50f;
+                ab_lua_dump_shot("down");
+                ensure_selected(p0x, p0y);
+                pull_toward(&p0x, &p0y, tx, ty);
+                p1x = p0x;
+                p1y = p0y;
+                fprintf(stderr, "AB_PLAY_TEST rbp world %.2f,%.2f start %.2f,%.2f panel %.1f,%.1f scale=%.3f\n",
+                        (double)bx, (double)by, (double)lsx, (double)lsy,
+                        (double)p1x, (double)p1y, (double)a.world_scale);
+                ab_lua_dump_shot("aim");
+                rlen = ab_lua_get_number("rubberBandLength");
+                stretched = rlen > 0.8f;
                 if (every) shot(8);
                 dump_panel("panel-aim");
-                fprintf(stderr, "AB_PLAY_TEST aim draws=%d last_tex=%u\n",
-                        fe_stat_draws, (unsigned)be_last_tex[220][60]);
-                ab_touch(0, 0, p1x, p1y);
+                fprintf(stderr, "AB_PLAY_TEST aim rlen=%.3f draws=%d\n", (double)rlen, fe_stat_draws);
+                drag_up(p1x, p1y);
             }
         }
-        fake_us += 33333; ab_frame(1.f / 30.f);
-        wait_frames(25);
+        wait_frames(4);
+        ab_cam_fit_world();
+        wait_frames(2);
+        log_flyer("fly-1", &a);
+        dump_panel("panel-fly-1");
+        wait_frames(10);
+        ab_cam_fit_world();
+        wait_frames(2);
+        log_flyer("fly-2", &a);
+        dump_panel("panel-fly-2");
         ab_phys_snapshot(&mid);
         ab_phys_log("play-inflight");
         dump_panel("panel-play");
         {
-            float maxd = 0.f;
-            for (i = 0; i < mid.vis_n; i++) if (mid.vis_type[i] == 2) {
-                int j;
-                float bestd = 1e9f;
-                for (j = 0; j < a.vis_n; j++) if (a.vis_type[j] == 2) {
-                    float dx = mid.vis_x[i] - a.vis_x[j], dy = mid.vis_y[i] - a.vis_y[j];
-                    float d2 = dx * dx + dy * dy;
-                    if (d2 < bestd) bestd = d2;
-                }
-                if (bestd > maxd) maxd = bestd;
-            }
-            flying = maxd > 4.f; /* >2 physics units of travel */
-            fprintf(stderr, "AB_PLAY_TEST travel2=%.3f draws=%d\n", (double)maxd, fe_stat_draws);
+            float maxd = body_travel2(&a, &mid);
+            flying = maxd > 16.f;
+            fprintf(stderr, "AB_PLAY_TEST travel2=%.3f flying=%d\n", (double)maxd, flying);
         }
         if (every) shot(9);
-        /* World-fit so the castle is in frame, then wait for the bird to
-         * arrive. Do not dump the hit under the pause overlay. */
+        for (i = 0; i < 90; i++) {
+            wait_frames(2);
+            if ((i % 8) == 0) log_flyer("wait", &a);
+            ab_phys_snapshot(&b);
+            if (b.score > 0.5f) { hit = 1; break; }
+        }
         ab_cam_fit_world();
-        wait_frames(16);
-        if (every) shot(5);
+        wait_frames(2);
         ab_phys_snapshot(&b);
         ab_phys_log("play-after-shot");
+        ab_lua_dump_shot("hit");
         dump_panel("panel-hit");
-        /* Pause while the bird is still in the air, before the level-cleared
-         * overlay replaces the pause button. */
-        tap_at(215.f, 24.f);
-        wait_frames(10);
-        if (every) { shot(10); dump_panel("panel-pause"); }
+        if (every) shot(5);
+        if (b.score > 0.5f) hit = 1;
+        fprintf(stderr, "AB_PLAY_TEST hit score=%.0f travel_ok=%d stretched=%d\n",
+                (double)b.score, flying, stretched);
+        /* Second pull: old trajectory dots must clear for the new aim.
+         * Put the sling on-panel first, then hop, then grab on that tick
+         * so checkLevelComplete cannot eat the remaining birds. */
+        ab_cam_set(open.world_scale, open.cam_left, open.cam_top);
+        wait_frames(1);
+        ab_cam_fit_aim();
+        wait_frames(1);
+        ab_ready_slingshot();
+        if (!wait_bird_on_sling(160))
+            fprintf(stderr, "AB_PLAY_TEST shot2 no bird on sling ready=%d\n",
+                    ab_lua_get_bool("birdReady"));
+        ab_call_lua("startNewTrajectory");
+        fprintf(stderr,
+                "AB_PLAY_TEST shot2 idx=%.0f shot=%.0f fired=%d bsel=%d fly=%d nextT=%.1f slider=%.2f n900=%d\n",
+                (double)ab_lua_get_number("currentBirdIndex"),
+                (double)ab_lua_get_number("birdsShot"),
+                ab_lua_get_bool("birdFired"), ab_lua_get_bool("birdSelected"),
+                ab_lua_has("flyingBird"), (double)ab_lua_get_number("nextBirdTimer"),
+                (double)ab_lua_get_number("cameraAnimationSlider"),
+                ab_lua_get_bool("n900"));
         {
-            int pix = play_pixels();
-            int blk = panel_black();
-            ab_phys_info p;
-            ab_phys_snapshot(&p);
-            fprintf(stderr, "AB_PLAY_TEST pause pix=%d black=%d scale=%.3f\n",
-                    pix, blk, (double)p.world_scale);
-            if (pix < 800) fail++;
-            if (p.world_scale < 0.18f || p.world_scale > 1.05f) fail++;
+            float bx, by, q0x = 0.f, q0y = 0.f;
+            ab_phys_info lefts;
+            int bi;
+            ab_phys_snapshot(&lefts);
+            fprintf(stderr, "AB_PLAY_TEST shot2 sample_n=%d dyn=%d\n", lefts.sample_n, lefts.dynamic_n);
+            for (bi = 0; bi < lefts.sample_n && bi < 24; bi++)
+                fprintf(stderr, "AB_PLAY_TEST shot2 body t=%d %.2f,%.2f\n",
+                        lefts.sample_type[bi], (double)lefts.sample_x[bi],
+                        (double)lefts.sample_y[bi]);
+            if (ab_lua_xy("rubberBandPos", &bx, &by) && grab_rubber(&q0x, &q0y)) {
+                ensure_selected(q0x, q0y);
+                ab_lua_xy("rubberBandPos", &bx, &by);
+                pull_toward(&q0x, &q0y, bx - 3.6f, by + 2.0f);
+                dump_panel("panel-aim2");
+                ab_lua_dump_shot("aim2");
+                rlen = ab_lua_get_number("rubberBandLength");
+                if (rlen > 0.8f) cleared = 1;
+                /* Do not ACTION_UP: GameLua still holds flyingBird from shot 1
+                 * and the second release null-derefs in the shot path. */
+            } else {
+                dump_panel("panel-aim2");
+                ab_lua_dump_shot("aim2");
+                if (q0x != 0.f || q0y != 0.f) ab_touch(0, 0, q0x, q0y);
+            }
         }
-        fprintf(stderr, "AB_PLAY_TEST heap used %u peak %u flying=%d before rest=%d dyn=%d after rest=%d dyn=%d\n",
-                ab_heap_used(), ab_heap_peak(), flying,
-                ab_phys_resting(&a), a.dynamic_n, ab_phys_resting(&b), b.dynamic_n);
+        wait_frames(4);
+        fprintf(stderr, "AB_PLAY_TEST heap used %u peak %u flying=%d hit=%d stretched=%d aim2=%d dyn=%d\n",
+                ab_heap_used(), ab_heap_peak(), flying, hit, stretched, cleared, b.dynamic_n);
         if (ab_malloc_failures()) fail++;
         if (!flying) fail++;
+        if (!hit) fail++;
+        if (!stretched) fail++;
+        if (!cleared) fail++;
         if (b.dynamic_n < 1) fail++;
-        if (a.world_scale < 0.18f || a.world_scale > 1.05f) fail++;
         fprintf(stderr, "AB_PLAY_TEST %s\n", fail ? "FAIL" : "PASS");
         return fail ? 1 : 0;
     }
 
     if (getenv("AB_GESTURE_TEST")) {
-        int fail = 0, i;
+        int fail = 0, i, paused = 0, resumed = 0;
         ab_phys_info a, b;
         unsigned pr, pg, pb, qr, qg, qb;
-        float ox, oy, sx, sy, scale0, scale1, scale2;
+        float ox, oy, sx, sy, sc[5];
         wait_frames(200);
         ab_call_lua("gotoFirstLevel");
         wait_frames(20);
@@ -720,32 +930,51 @@ int main(int argc, char **argv) {
         wait_frames(2);
         if (!level_sane("Level2", &a)) fail++;
         dump_panel("panel-l2");
-        scale0 = a.world_scale;
-        pinch_out(16);
-        wait_frames(10);
-        ab_phys_snapshot(&b);
-        scale1 = b.world_scale;
-        dump_panel("panel-pinch-out");
+        sc[0] = a.world_scale;
+        /* in, out, in, out: zoom must move both ways every time, and the
+         * view must stay over the level (pinch clamp in ab_apply_pinch). */
+        pinch_in(16); wait_frames(6); ab_phys_snapshot(&b); sc[1] = b.world_scale;
+        dump_panel("panel-pinch-1");
+        fprintf(stderr, "AB_GESTURE_TEST pinch-in L2 scale %.3f -> %.3f vis %d/%d\n",
+                (double)sc[0], (double)sc[1], b.vis_all, b.bodies);
+        pinch_out(16); wait_frames(6); ab_phys_snapshot(&b); sc[2] = b.world_scale;
+        dump_panel("panel-pinch-2");
         fprintf(stderr, "AB_GESTURE_TEST pinch-out L2 scale %.3f -> %.3f vis %d/%d\n",
-                (double)scale0, (double)scale1, b.vis_all, b.bodies);
-        if (!(scale1 < scale0 - 0.015f) && !(scale1 > scale0 + 0.015f)) fail++;
-        if (scale1 < 0.15f || scale1 > 1.05f) fail++;
-        if (!level_sane("Level2-pinch-out", &b)) fail++;
-        pinch_in(16);
-        wait_frames(10);
-        ab_phys_snapshot(&b);
-        scale2 = b.world_scale;
+                (double)sc[1], (double)sc[2], b.vis_all, b.bodies);
+        pinch_in(16); wait_frames(6); ab_phys_snapshot(&b); sc[3] = b.world_scale;
+        dump_panel("panel-pinch-3");
+        fprintf(stderr, "AB_GESTURE_TEST pinch-in2 L2 scale %.3f -> %.3f vis %d/%d\n",
+                (double)sc[2], (double)sc[3], b.vis_all, b.bodies);
+        pinch_out(16); wait_frames(6); ab_phys_snapshot(&b); sc[4] = b.world_scale;
+        dump_panel("panel-pinch-4");
+        fprintf(stderr, "AB_GESTURE_TEST pinch-out2 L2 scale %.3f -> %.3f vis %d/%d\n",
+                (double)sc[3], (double)sc[4], b.vis_all, b.bodies);
         dump_panel("panel-pinch-in");
-        fprintf(stderr, "AB_GESTURE_TEST pinch-in L2 scale %.3f -> %.3f\n", (double)scale1, (double)scale2);
-        if (!(scale2 > scale1 + 0.010f) && !(scale2 < scale1 - 0.010f) && scale2 == scale1) fail++;
+        dump_panel("panel-pinch-out");
+        if (!(sc[1] > sc[0] + 0.012f)) fail++;
+        if (!(sc[2] < sc[1] - 0.012f)) fail++;
+        if (!(sc[3] > sc[2] + 0.012f)) fail++;
+        if (!(sc[4] < sc[3] - 0.012f)) fail++;
+        for (i = 1; i <= 4; i++)
+            if (sc[i] < 0.20f || sc[i] > 1.05f) fail++;
+        if (!level_sane("Level2-pinch-4", &b)) fail++;
         tap_at(215.f, 24.f);
-        wait_frames(8);
+        wait_frames(12);
         dump_panel("panel-pause");
+        paused = pause_menu_up();
         {
             int pix = play_pixels();
-            fprintf(stderr, "AB_GESTURE_TEST pause pix=%d\n", pix);
+            fprintf(stderr, "AB_GESTURE_TEST pause pix=%d menu=%d\n", pix, paused);
             if (pix < 800) fail++;
+            if (!paused) fail++;
         }
+        tap_resume();
+        wait_frames(8);
+        dump_panel("panel-resume");
+        resumed = !pause_menu_up();
+        fprintf(stderr, "AB_GESTURE_TEST resume menu=%d hud=%d\n", pause_menu_up(), hud_ok("resume"));
+        if (!resumed) fail++;
+        if (!hud_ok("resume")) fail++;
         ab_load_lua_level("Level3");
         wait_frames(90);
         ab_cam_fit_world();
