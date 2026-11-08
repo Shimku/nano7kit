@@ -1,0 +1,13 @@
+/* shims.h: bionic / GLES import resolver for libangrybirds.so (nano7kit, MIT). */
+#ifndef AB_SHIMS_H
+#define AB_SHIMS_H
+#include <stddef.h>
+#include <stdint.h>
+void *ab_resolve(const char *name);
+void ab_install_cxa_hook(void);
+uint32_t ab_heap_used(void);
+uint32_t ab_heap_peak(void);
+uint32_t ab_malloc_failures(void);
+void ab_heap_init(void *p, uint32_t n);
+void ab_shims_reset(void);
+#endif

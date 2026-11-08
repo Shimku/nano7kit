@@ -44,7 +44,7 @@ class Item:
     name: str             # ./start apps add NAME
     group: str            # apps | games | pocketjs
     needs: str = ""       # one line: what you supply ("" = nothing)
-    kind: str = "none"    # none | rom | ipa | folder
+    kind: str = "none"    # none | rom | ipa | apk | folder
     tested: bool = True   # run on a real nano
     blurb: str = ""
     bundle: str = ""      # iOS bundle id for kind == ipa
@@ -84,6 +84,8 @@ ITEMS: Tuple[Item, ...] = (
          bundle="com.imangi.templerun", version="1.0"),
     Item("Fruit Ninja", "Fruit Ninja", "games", "your decrypted Fruit Ninja 1.0 .ipa", "ipa",
          bundle="com.Halfbrick.Fruit", version="1.0"),
+    Item("Angry Birds", "Angry Birds", "games", "your Angry Birds Android 1.0.0 APK", "apk",
+         bundle="com.rovio.angrybirds", version="1.0.0", tested=False),
     Item("PvZ Portable", "PvZ Portable", "games",
          "your PC Plants vs. Zombies GOTY folder (main.pak + properties/)", "folder"),
     Item("Flappy Bird", "Flappy Bird", "games", "your Flappy Bird 1.2 .ipa", "ipa", tested=False,
@@ -508,6 +510,13 @@ def check_file(item: Item, path: Path) -> Tuple[bool, str]:
         if _digest(pak, "sha256") != PVZ_PAK_SHA256:
             return False, "main.pak is not the PC GOTY version this port needs (checksum differs)"
         return True, "PvZ GOTY files, checksum OK"
+    if item.kind == "apk":
+        if not p.is_file():
+            return False, "pick the Angry Birds Android 1.0.0 APK (or a zip of that APK)"
+        from .angrybirds import APK_SHA256
+        ok = _digest(p, "sha256") == APK_SHA256
+        return (True, "Angry Birds Android 1.0.0, checksum OK") if ok else (
+            False, "not the Angry Birds Android 1.0.0 APK this port needs (checksum differs)")
     if item.kind == "ipa":
         try:
             facts = read_bundle(p)
@@ -532,6 +541,8 @@ def scan_drop_dir(item: Item, folder: Path = DROP_DIR) -> Optional[Path]:
         if item.kind == "rom" and p.is_file() and p.suffix.lower() == ".z64":
             cands.append(p)
         elif item.kind == "ipa" and (p.suffix.lower() in (".ipa", ".app")):
+            cands.append(p)
+        elif item.kind == "apk" and p.is_file() and p.suffix.lower() in (".apk", ".zip"):
             cands.append(p)
         elif item.kind == "folder" and p.is_dir() and (p / "main.pak").exists():
             cands.append(p)
@@ -593,7 +604,7 @@ def build_na_plan(state: NanoState, selected: Sequence[str], files: Dict[str, Pa
         argv = ["nabase", "add", item.name]
         if item.kind == "rom":
             argv += ["--rom", str(files[item.key])]
-        elif item.kind in ("ipa", "folder"):
+        elif item.kind in ("ipa", "apk", "folder"):
             argv += ["--payload", str(files[item.key])]
         title = f"Copy {item.name} into /Apps" if item.name.endswith(".nanoapp") else f"Add {item.key}"
         step = Step(title, argv, kind="na", root=False, check=item.key)
@@ -654,7 +665,7 @@ def build_plan(state: NanoState, selected: Sequence[str], files: Dict[str, Path]
         argv = ["apps", "add", item.name, "--skip-wait"]
         if item.kind == "rom":
             argv += ["--rom", str(files[item.key])]
-        elif item.kind in ("ipa", "folder"):
+        elif item.kind in ("ipa", "apk", "folder"):
             argv += ["--payload", str(files[item.key])]
         step = Step(f"Add {item.key}", argv, check=item.key)
         if item.name == "JS QuickJS":

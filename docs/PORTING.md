@@ -160,6 +160,30 @@ olievans123's Temple Run port; none of its code is used.
   The host harness showed the blade dying; `tests/test_fruitninja_rc.py` checks the fix.
 - **Writes:** `Fruit Ninja.hbapp` (about 920 KB) and `/Apps/Data/FruitNinja` (about 9.2 MB).
 
+### Angry Birds (Android 1.0.0 `.so`, loaded by nano7kit)
+
+Files: `games/angrybirds`, `host/angrybirds.py`. The approach follows olievans123's
+Temple Run port; none of its code is used. The iOS recompile on `cursor/angry-birds-6a18`
+is not used as the engine; this path runs Rovio's original `libangrybirds.so`.
+
+- **Input:** Angry Birds Android 1.0.0 APK (`com.rovio.angrybirds`, versionCode 100).
+  The installer pins sha256 `c80ed55b…104c477` for the provided zip and
+  `6d906957…704c95` for `lib/armeabi-v7a/libangrybirds.so`.
+- **Host harness:** `qemu-arm-static -cpu cortex-a8` loads the `.so`, resolves ~182
+  bionic/GLES imports, fakes JNI, and renders 240x432 through the same GL front end
+  as Fruit Ninja. `AB_LEVELS_TEST`, `AB_GESTURE_TEST` and `AB_PLAY_TEST` in
+  `games/angrybirds/host/main.c` check L1-L3 structures, pinch, pause, and a launched
+  bird. Missing wav/mp3 (skipped at convert) are filled with a tiny silent stub so
+  Lua can leave the splash. Guest malloc peak about 2.8 MB; software GL textures
+  about 6.0 MB uncompressed.
+- **Device:** at Mac install time `tools/so_to_obj.py` turns the `.so` into an ET_REL
+  object (R_ARM_RELATIVE -> ABS32 vs image base, `gl*` -> `ab_gl*`) and links it into
+  the `.hbapp` so existing HRL1 reloc and icache still work. The engine malloc pool is
+  3.0 MB (host peak 2.8 MB). Converted textures keep 512 on a side (half of 1024).
+  Silent (pthread_create fails, no audio). Not yet run on a nano.
+- **Writes:** `Angry Birds.hbapp` and `/Apps/Data/AngryBirds` (converted `data/`;
+  wav/mp3 skipped). The `.so` is not copied onto the iPod.
+
 ## Adding a game to nano7kit
 
 Follow how PvZ Portable is wired in (`rg "PvZ Portable" host`):

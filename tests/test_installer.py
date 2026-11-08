@@ -75,7 +75,8 @@ class MenuTests(unittest.TestCase):
         for key in ("Mario 64", "Temple Run", "Fruit Ninja", "PvZ Portable"):
             self.assertEqual(by_name(key).group, "games")
             self.assertTrue(by_name(key).tested)
-        self.assertEqual({i.key for i in ITEMS if not i.tested}, {"Mario Kart 64", "Flappy Bird", "Doodle Jump"})
+        self.assertEqual({i.key for i in ITEMS if not i.tested},
+                         {"Mario Kart 64", "Flappy Bird", "Doodle Jump", "Angry Birds"})
         self.assertEqual(by_name("Paint folder").name, "Paint.nanoapp")
         self.assertEqual(by_name("Free RAM folder").name, "Free RAM.nanoapp")
 
@@ -179,7 +180,7 @@ class MenuTests(unittest.TestCase):
         self.assertIn("Paint folder     same app as Paint below", text)
         self.assertIn("Free RAM folder  same app as Free RAM below", text)
         untested = [l.split()[3] for l in text.splitlines() if l.endswith("(untested)")]
-        self.assertEqual(untested, ["Mario", "Flappy", "Doodle"])
+        self.assertEqual(untested, ["Mario", "Angry", "Flappy", "Doodle"])
         self.assertIn("Always included: Blocks, Game Boy, Probe.", text)
         self.assertIn("Home apps: 5 of 16", text)
         self.assertNotIn("\u2014", text)
@@ -346,6 +347,20 @@ class FileCheckTests(unittest.TestCase):
         (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "com.Halfbrick.Fruit", "CFBundleVersion": "1.0"}))
         self.assertTrue(check_file(by_name("Fruit Ninja"), app)[0])
 
+    def test_angry_birds_apk_checksum(self):
+        apk = self.dir / "ab.apk"
+        apk.write_bytes(b"not the apk")
+        ok, msg = check_file(by_name("Angry Birds"), apk)
+        self.assertFalse(ok)
+        self.assertIn("checksum differs", msg)
+        zip_name = self.dir / "ab.zip"
+        zip_name.write_bytes(b"wrapped")
+        self.assertFalse(check_file(by_name("Angry Birds"), zip_name)[0])
+        self.assertFalse(check_file(by_name("Angry Birds"), self.dir)[0])
+        with mock.patch("host.angrybirds.APK_SHA256", hashlib.sha256(b"not the apk").hexdigest()):
+            ok, msg = check_file(by_name("Angry Birds"), apk)
+        self.assertTrue(ok, msg)
+
     def test_pvz_folder(self):
         game = self.dir / "pvz"
         game.mkdir()
@@ -369,6 +384,9 @@ class FileCheckTests(unittest.TestCase):
         with mock.patch.object(installer, "SM64_SHA1", hashlib.sha1(b"mario").hexdigest()):
             self.assertEqual(scan_drop_dir(by_name("Mario 64"), self.dir).name, "mine.z64")
         self.assertEqual(scan_drop_dir(by_name("Fruit Ninja"), self.dir).name, "fn.ipa")
+        (self.dir / "ab.zip").write_bytes(b"ab")
+        with mock.patch("host.angrybirds.APK_SHA256", hashlib.sha256(b"ab").hexdigest()):
+            self.assertEqual(scan_drop_dir(by_name("Angry Birds"), self.dir).name, "ab.zip")
         self.assertIsNone(scan_drop_dir(by_name("Temple Run"), self.dir))
         self.assertIsNone(scan_drop_dir(by_name("Temple Run"), self.dir / "missing"))
 

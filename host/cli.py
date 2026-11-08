@@ -1721,9 +1721,9 @@ def _apps_add_plan(args, names, payload) -> int:
     from .apps import normalize_selection
 
     selected = normalize_selection(names, default_all=False, allow_extra=True)
-    if selected not in (["Temple Run"], ["Fruit Ninja"], ["PvZ Portable"]):
+    if selected not in (["Temple Run"], ["Fruit Ninja"], ["PvZ Portable"], ["Angry Birds"]):
         raise Refused(
-            "apps add --plan is for one port at a time and covers Temple Run, Fruit Ninja, PvZ and PvZ Portable: "
+            "apps add --plan is for one port at a time and covers Temple Run, Fruit Ninja, PvZ, PvZ Portable and Angry Birds: "
             "./start apps add TempleRun --ipa /path/to/TempleRun.ipa --plan"
         )
     from .templerun import parse_size, plan_lines
@@ -1739,6 +1739,12 @@ def _apps_add_plan(args, names, payload) -> int:
 
         def plan_lines(payload, **kw):  # noqa: F811 - same call shape as Temple Run's
             return pvzp_plan_lines(payload, kw.pop("heap_free"), kw.pop("largest"), **kw)
+
+    if selected == ["Angry Birds"]:
+        from .angrybirds import plan_lines as angry_plan_lines
+
+        def plan_lines(payload, **kw):  # noqa: F811 - same call shape as Temple Run's
+            return angry_plan_lines(payload, kw.pop("heap_free"), kw.pop("largest"), **kw)
 
     heap_free = parse_size(getattr(args, "heap_free", None))
     largest = parse_size(getattr(args, "largest", None))

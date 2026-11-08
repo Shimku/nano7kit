@@ -161,6 +161,7 @@ CATEGORIES = {
         "Doodle Jump",
         "Fruit Ninja",
         "PvZ Portable",
+        "Angry Birds",
     ),
     "needs-rom": ("Mario Kart", "Mario 64"),
 }
@@ -185,6 +186,10 @@ AUTHORS = {
     "Fruit Ninja": (
         "nano7kit first-party static recompile (MIT; approach after "
         "olievans123 nano-templerun); original Halfbrick Fruit Ninja 1.0 not in git"
+    ),
+    "Angry Birds": (
+        "nano7kit first-party JNI loader for Rovio Android 1.0.0 libangrybirds.so "
+        "(MIT; approach after olievans123 nano-templerun); original APK not in git"
     ),
     "PvZ Portable": (
         "PvZ-Portable engine by wszqkzqk (LGPL-3.0-or-later, fetched at build time) with nano7kit's device "
@@ -245,6 +250,10 @@ ALIASES = {
     "fruitninja": "Fruit Ninja",
     "fruit-ninja": "Fruit Ninja",
     "ninja": "Fruit Ninja",
+    "angry": "Angry Birds",
+    "angrybirds": "Angry Birds",
+    "angry-birds": "Angry Birds",
+    "abirds": "Angry Birds",
     "pvzportable": "PvZ Portable",
     "pvz-portable": "PvZ Portable",
     "pvz_portable": "PvZ Portable",
@@ -352,6 +361,7 @@ _RISK_BY_NAME = {
     "Doodle Jump": 6,
     "Fruit Ninja": 6,
     "PvZ Portable": 6,
+    "Angry Birds": 6,
     "Lap": 1,
     "JS Hello": 1,
     "JS Hero": 5,
