@@ -134,6 +134,10 @@ class SourceTests(unittest.TestCase):
         shims = (GAME / "rt" / "shims.c").read_text()
         self.assertIn("ab_glActiveTexture", shims)
         self.assertIn("ab_malloc", shims)
+        self.assertIn("memset(h + 1, 0, n)", shims)
+        self.assertIn("memset(c + 1, 0, n)", shims)
+        self.assertIn("double ab_sin(double x)", shims)
+        self.assertIn("A(sin, ab_sin)", shims)
         conv = (GAME / "tools" / "so_to_obj.py").read_text()
         self.assertIn("ab_gl", conv)
         self.assertIn('"malloc": "ab_malloc"', conv)
@@ -170,6 +174,14 @@ class SourceTests(unittest.TestCase):
         self.assertIn("ab_set_body_velocity", entry)
         self.assertIn("ab_pouch_world", entry)
         self.assertIn("ab_world_to_panel", entry)
+        self.assertIn("SpriteC1", entry)
+        self.assertIn("hook_spr_ctor", entry)
+        self.assertIn("AB_SPRITE", entry)
+        self.assertIn("getSpriteBounds(\"\", sprite)", entry)
+        self.assertIn("ab_lua_get_number", entry)
+        self.assertIn("_ZNK3lua8LuaTable9getNumberEPKc", entry)
+        self.assertIn("ab_phys_enable(0)", entry)
+        self.assertIn("33333 us per frame", entry)
         self.assertIn("ShootingPlatform01", entry)
         self.assertIn("getBody", entry)
         self.assertIn("hook_set_scale", entry)
@@ -219,6 +231,13 @@ class SourceTests(unittest.TestCase):
         self.assertIn("pause_yel", host)
         self.assertIn("dump_castle_crop", host)
         self.assertIn("ab_cam_fit_world", host)
+        self.assertIn("AB_SCORE", host)
+        self.assertIn("AB_HOLD", host)
+        self.assertIn("AB_LUA_POS", host)
+        self.assertIn("panel-hit", host)
+        self.assertIn("hold_ok", host)
+        self.assertIn("match_level_file", host)
+        self.assertIn("AB_FRAME_US", host)
         self.assertIn("minx -= 40.f", entry)
         self.assertNotIn("minx -= 180.f", entry)
         self.assertIn("AB_CAM fit", entry)
@@ -248,6 +267,7 @@ class SourceTests(unittest.TestCase):
         self.assertIn("texscale", src)
         self.assertIn("scale_sheet_dat", src)
         self.assertIn('block_dat = {"INGAME", "INGAME_1"}', src)
+        self.assertIn("empty sheet name", src)
 
 
 @unittest.skipUnless(APK, "set NANO7KIT_ANGRY_APK to the Angry Birds 1.0.0 apk/zip to run")
@@ -281,12 +301,12 @@ class PhysicsHarnessTests(unittest.TestCase):
 
     def test_levels_1_3_draw_objects(self):
         import subprocess
-        env = self._harness_env(AB_LEVELS_TEST="1", AB_PHYS_WARM="200", AB_LEVELS_SETTLE="90")
+        env = self._harness_env(AB_LEVELS_TEST="1", AB_PHYS_WARM="200", AB_LEVELS_SETTLE="150")
         out = ROOT / "build" / "angrybirds_rc" / "levels-test"
         out.mkdir(parents=True, exist_ok=True)
         r = subprocess.run(
             ["qemu-arm-static", "-cpu", "cortex-a8", str(ABHOST), str(ABDATA), str(ABSO), str(out), "1", "0"],
-            env=env, capture_output=True, text=True, timeout=300)
+            env=env, capture_output=True, text=True, timeout=420)
         err = (r.stderr or "") + (r.stdout or "")
         self.assertIn("AB_LEVELS_TEST PASS", err, err[-8000:])
         self.assertEqual(r.returncode, 0, err[-4000:])
@@ -299,7 +319,17 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("AB_HUD Level2", err)
         self.assertIn("AB_FRAME Level2", err)
         self.assertIn("pause_yel=", err)
+        self.assertIn("AB_SPRITE", err)
         import re
+        for lvl in ("Level1", "Level2", "Level3"):
+            self.assertRegex(err, rf"AB_SCORE {lvl} open=0")
+            self.assertRegex(err, rf"AB_SCORE {lvl} hold=0")
+            self.assertIn(f"AB_HOLD {lvl} ", err)
+            pos = re.search(rf"AB_LUA_POS {lvl} file_xy=(\d+) matched=(\d+) miss=(\d+)", err)
+            self.assertIsNotNone(pos, err[-4000:])
+            self.assertGreaterEqual(int(pos.group(1)), 4, f"{lvl} file_xy")
+            self.assertGreaterEqual(int(pos.group(2)), 4, f"{lvl} matched")
+            self.assertLessEqual(int(pos.group(3)) * 4, int(pos.group(1)), f"{lvl} miss")
         for lvl in ("Level1", "Level2"):
             m = re.search(rf"AB_HUD {lvl} pause_yel=(\d+) icon_yel=(\d+) pause_dark=\d+ pause_grn=(\d+) score_ink=(\d+)", err)
             self.assertIsNotNone(m, err[-4000:])
@@ -331,6 +361,7 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("AB_PLAY_TEST pouch", err)
         self.assertNotIn("setVelocity", err)
         self.assertNotIn("drag missed pouch", err)
+        self.assertTrue((out / "panel-hit.ppm").is_file(), err[-2000:])
 
     def test_gesture_frame_fixed_pinch_and_l1_l2_l3(self):
         import subprocess

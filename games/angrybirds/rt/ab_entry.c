@@ -1,5 +1,6 @@
 /* ab_entry.c: drive Ka3D through JNI natives in libangrybirds.so (nano7kit, MIT). */
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,10 +23,14 @@ typedef void (*set_f_fn)(void *, float);
 typedef void (*set_ff_fn)(void *, float, float);
 typedef void (*set_vel_fn)(void *, void *, float, float);
 typedef void (*set_num_fn)(void *, const char *, float);
+typedef float (*get_num_fn)(void *, const char *);
 typedef void (*set_str_fn)(void *, const char *, const char *);
 typedef void (*set_bname_fn)(void *, const char *, int);
 typedef void *(*get_body_fn)(void *, const void *);
 typedef void *(*app_get_fn)(void);
+typedef void (*sheet_ctor_fn)(void *, void *, const void *);
+typedef void (*spr_ctor_fn)(void *, void *, int, int, int, int, int, int);
+typedef const char *(*cstr_fn)(const void *);
 
 static jni_init_fn j_init;
 static jni_void_fn j_update, j_deinit;
@@ -39,15 +44,23 @@ static set_f_fn set_scale;
 static set_ff_fn set_topleft;
 static set_vel_fn set_vel;
 static set_num_fn lua_set_num;
+static get_num_fn lua_get_num;
 static set_str_fn lua_set_str;
 static set_bname_fn lua_set_bool;
 static get_body_fn get_body;
 static app_get_fn app_get;
+static sheet_ctor_fn sheet_ctor;
+static spr_ctor_fn spr_ctor;
+static cstr_fn str_cstr;
 static int started;
 static int cam_hold;
 static float hold_scale, hold_left, hold_top;
 static uint32_t scale_saved[2], topleft_saved[2];
+static uint32_t sheet_ctor_saved[2], spr_ctor_saved[2];
 static int cam_hooks_on;
+static int block_sheet_loading;
+static int spr_log_n;
+static int score_readable;
 static const char *so_path = "libangrybirds.so";
 static struct { int down, id; float x, y, gx, gy; } fed[AB_FINGERS];
 static int pinch_on;
@@ -108,7 +121,11 @@ static void *must_sym(const char *n) {
 static void patch_arm_jump(void *fn, void *hook);
 static void hook_set_scale(void *lua, float s);
 static void hook_set_topleft(void *lua, float left, float top);
+static void hook_sheet_ctor(void *self, void *ctx, const void *name);
+static void hook_spr_ctor(void *self, void *sheet, int x, int y, int w, int h, int ox, int oy);
 static void mk_string(void *slot, const char *s);
+static void install_jump(void *fn, void *hook, uint32_t saved[2]);
+static void restore_jump(void *fn, const uint32_t saved[2]);
 
 static void reset_view(void) {
     int i;
@@ -148,21 +165,27 @@ int ab_start(void) {
     set_topleft = (set_ff_fn)so_sym(&g_so, "_ZN7GameLua10setTopLeftEff");
     set_vel = (set_vel_fn)so_sym(&g_so, "_ZN7GameLua11setVelocityEN4lang6StringEff");
     lua_set_num = (set_num_fn)so_sym(&g_so, "_ZN3lua8LuaTable9setNumberEPKcf");
+    lua_get_num = (get_num_fn)so_sym(&g_so, "_ZNK3lua8LuaTable9getNumberEPKc");
     lua_set_str = (set_str_fn)so_sym(&g_so, "_ZN3lua8LuaTable9setStringEPKcS2_");
     lua_set_bool = (set_bname_fn)so_sym(&g_so, "_ZN3lua8LuaTable10setBooleanEPKcb");
     get_body = (get_body_fn)so_sym(&g_so, "_ZN7GameLua7getBodyERKN4lang6StringE");
     app_get = (app_get_fn)so_sym(&g_so, "_ZN9framework3App3getEv");
-    if (set_scale) {
-        uint32_t *p = (uint32_t *)set_scale;
-        scale_saved[0] = p[0]; scale_saved[1] = p[1];
-        patch_arm_jump((void *)set_scale, (void *)hook_set_scale);
-    }
-    if (set_topleft) {
-        uint32_t *p = (uint32_t *)set_topleft;
-        topleft_saved[0] = p[0]; topleft_saved[1] = p[1];
-        patch_arm_jump((void *)set_topleft, (void *)hook_set_topleft);
-    }
+    str_cstr = (cstr_fn)so_sym(&g_so, "_ZNK4lang6String5c_strEv");
+    sheet_ctor = (sheet_ctor_fn)so_sym(&g_so,
+        "_ZN4game11SpriteSheetC1EPN2gr7ContextERKN4lang6StringE");
+    spr_ctor = (spr_ctor_fn)so_sym(&g_so,
+        "_ZN4game6SpriteC1EPNS_11SpriteSheetEiiiiii");
+    if (set_scale) install_jump((void *)set_scale, (void *)hook_set_scale, scale_saved);
+    if (set_topleft) install_jump((void *)set_topleft, (void *)hook_set_topleft, topleft_saved);
     cam_hooks_on = 1;
+    /* convert_assets halves INGAME/INGAME_1 .dat so UVs fit the 512 texture.
+     * createObject calls getSpriteBounds("", sprite) (empty sheet, registry
+     * lookup), so a getSpriteWidth hook keyed on "INGAME" never runs. The
+     * sheet parser constructs Sprite objects directly. Double width/height/
+     * pivot shorts after that ctor; UVs are already baked from the halved
+     * rect and stay put. Draw stretches onto the restored body. */
+    if (spr_ctor) install_jump((void *)spr_ctor, (void *)hook_spr_ctor, spr_ctor_saved);
+    if (sheet_ctor) install_jump((void *)sheet_ctor, (void *)hook_sheet_ctor, sheet_ctor_saved);
     env = ab_jni_env();
     files = ab_jni_new_utf(plat_files_dir());
     plat_log_line("ab_start: nativeInit 480x320");
@@ -355,6 +378,69 @@ static void patch_arm_jump(void *fn, void *hook) {
     p[1] = (uint32_t)(uintptr_t)hook;
     __builtin___clear_cache((char *)p, (char *)(p + 2));
 }
+static void install_jump(void *fn, void *hook, uint32_t saved[2]) {
+    uint32_t *p = (uint32_t *)fn;
+    if (!p || !hook || !saved) return;
+    saved[0] = p[0]; saved[1] = p[1];
+    patch_arm_jump(fn, hook);
+}
+static void restore_jump(void *fn, const uint32_t saved[2]) {
+    uint32_t *p = (uint32_t *)fn;
+    if (!p || !saved) return;
+    p[0] = saved[0]; p[1] = saved[1];
+    __builtin___clear_cache((char *)p, (char *)(p + 2));
+}
+static int is_block_sheet_name(const char *p) {
+    const char *slash, *dot;
+    char stem[32];
+    size_t n;
+    if (!p || !p[0]) return 0;
+    slash = strrchr(p, '/');
+    if (slash) p = slash + 1;
+    dot = strrchr(p, '.');
+    n = (size_t)((dot && dot > p) ? (size_t)(dot - p) : strlen(p));
+    if (n == 0 || n >= sizeof stem) return 0;
+    memcpy(stem, p, n);
+    stem[n] = 0;
+    return strcmp(stem, "INGAME") == 0 || strcmp(stem, "INGAME_1") == 0;
+}
+static void hook_sheet_ctor(void *self, void *ctx, const void *name) {
+    const char *p = (name && str_cstr) ? str_cstr(name) : 0;
+    int prev = block_sheet_loading;
+    block_sheet_loading = is_block_sheet_name(p);
+    {
+        char b[192];
+        snprintf(b, sizeof b, "AB_SPRITE sheet %s block=%d", p ? p : "?", block_sheet_loading);
+        plat_log_line(b);
+    }
+    if (sheet_ctor) {
+        restore_jump((void *)sheet_ctor, sheet_ctor_saved);
+        sheet_ctor(self, ctx, name);
+        patch_arm_jump((void *)sheet_ctor, (void *)hook_sheet_ctor);
+    }
+    block_sheet_loading = prev;
+}
+static void hook_spr_ctor(void *self, void *sheet, int x, int y, int w, int h, int ox, int oy) {
+    if (!spr_ctor) return;
+    restore_jump((void *)spr_ctor, spr_ctor_saved);
+    spr_ctor(self, sheet, x, y, w, h, ox, oy);
+    patch_arm_jump((void *)spr_ctor, (void *)hook_spr_ctor);
+    if (block_sheet_loading && self) {
+        int16_t *d = (int16_t *)((uint8_t *)self + 16);
+        int rw = d[0], rh = d[1];
+        if (d[0]) d[0] = (int16_t)(d[0] * 2);
+        if (d[1]) d[1] = (int16_t)(d[1] * 2);
+        if (d[2]) d[2] = (int16_t)(d[2] * 2);
+        if (d[3]) d[3] = (int16_t)(d[3] * 2);
+        if (spr_log_n < 16) {
+            char b[160];
+            snprintf(b, sizeof b, "AB_SPRITE raw=%d,%d scaled=%d,%d xy=%d,%d",
+                     rw, rh, (int)d[0], (int)d[1], x, y);
+            plat_log_line(b);
+            spr_log_n++;
+        }
+    }
+}
 
 static void cam_unpatch(void) {
     uint32_t *p;
@@ -525,6 +611,9 @@ void ab_cam_fit_play(void) {
 void ab_frame_q(float dt, const ab_tsample *q, int n) {
     int i;
     ab_phys_info info;
+    /* dt is not passed into nativeUpdate. The .so samples gettimeofday and
+     * clamps to 0.1s, then GameLua::update steps Box2D at a fixed 1/30.
+     * The harness therefore advances plat_time_us by 33333 us per frame. */
     (void)dt;
     if (!started) return;
     ab_phys_snapshot(&info);
@@ -573,6 +662,7 @@ void ab_call_lua(const char *name) {
 }
 
 void ab_load_lua_level(const char *name) {
+    void *lua;
     if (!name) return;
     ab_lua_set_number("screenWidth", AB_VIEW_W);
     ab_lua_set_number("screenHeight", AB_VIEW_H);
@@ -582,6 +672,11 @@ void ab_load_lua_level(const char *name) {
     ab_lua_set_bool("showTutorials", 0);
     plat_log_line(name);
     fe_reset_matrices();
+    /* Spawn with gravity off so later blocks are not dropped onto the
+     * ones that already exist. GameLua::update steps Box2D at 1/30. */
+    ab_phys_enable(0);
+    lua = game_lua();
+    if (lua) wf32((uint8_t *)lua + AB_ACC_OFF, 0.f);
     ab_call_lua("updateLoading");
     /* Hold the castle / whole-level camera so structures and pigs stay in
      * frame. defaultCamera alone slides back to the slingshot after a few
@@ -591,10 +686,20 @@ void ab_load_lua_level(const char *name) {
     ab_lua_set_number("cameraAnimationSlider", 1.f);
     ab_lua_set_number("cameraAnimationSliderTarget", 1.f);
     ab_lua_set_bool("allowResetToBirdCamera", 0);
+    /* Skip the bird-to-slingshot hop so an idle hold does not walk birds. */
+    ab_lua_set_number("levelStartTimer", 100.f);
+    ab_lua_set_number("birdToSlingshotAnimationTimer", 100.f);
     ab_call_lua("defaultCamera");
     ab_phys_enable(1);
+    score_readable = 1;
     ab_cam_fit_world();
     ab_phys_log(name);
+}
+
+float ab_lua_get_number(const char *name) {
+    void *lua = game_lua();
+    if (!lua || !lua_get_num || !name) return 0.f;
+    return lua_get_num(lua, name);
 }
 
 void ab_cam_fit_birds(void) {
@@ -686,6 +791,9 @@ void ab_phys_snapshot(ab_phys_info *o) {
     memcpy(&world, lua + AB_WORLD_OFF, 4);
     o->world = (uint32_t)(uintptr_t)world;
     if (!world) return;
+    /* LuaTable::getNumber throws if the key is missing or not a number.
+     * Splash frames have a world but no score yet. */
+    if (score_readable) o->score = ab_lua_get_number("score");
     nmax = (int)ru32(world + B2_BODY_COUNT);
     o->contacts_hint = (int)ru32(world + B2_JOINT_COUNT);
     o->grav_x = rf32(world + B2_GRAV_X);
@@ -749,10 +857,11 @@ void ab_phys_log(const char *tag) {
     ab_phys_snapshot(&i);
     snprintf(buf, sizeof buf,
              "phys %s lua=%08x world=%08x on=%d n=%d st=%d dyn=%d fix=%d g=%.2f,%.2f "
-             "dynY=%.2f..%.2f scale=%.3f vis=%d/%d heap=%u peak=%u texfail=%d",
+             "dynY=%.2f..%.2f scale=%.3f vis=%d/%d score=%.0f acc=%.3f heap=%u peak=%u texfail=%d",
              tag ? tag : "-", i.lua, i.world, i.phys_on, i.bodies, i.static_n, i.dynamic_n,
              i.fixtures, (double)i.grav_x, (double)i.grav_y, (double)i.dyn_ymin, (double)i.dyn_ymax,
-             (double)i.world_scale, i.vis_all, i.bodies, ab_heap_used(), ab_heap_peak(), be_stat_tex_fail);
+             (double)i.world_scale, i.vis_all, i.bodies, (double)i.score, (double)i.acc,
+             ab_heap_used(), ab_heap_peak(), be_stat_tex_fail);
     plat_log_line(buf);
     plat_log_flush();
 }

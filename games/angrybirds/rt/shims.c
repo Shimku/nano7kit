@@ -30,7 +30,31 @@ void _fini(void) {}
 void __libc_fini(void) {}
 #endif
 
-/* Host (armel) and device libm are already softfp/GPR, matching the SO. */
+/* Host (armel) and device libm are already softfp/GPR, matching the SO.
+ * Bind through these C wrappers anyway: the .so's sinf/cosf/sqrtf convert
+ * to double and call sin@plt, and Box2D rotations go to garbage if a
+ * hardfp libm ever returns in s0/d0 instead of r0/r0:r1. */
+double ab_sin(double x) { return sin(x); }
+double ab_cos(double x) { return cos(x); }
+double ab_sqrt(double x) { return sqrt(x); }
+double ab_atan2(double y, double x) { return atan2(y, x); }
+double ab_floor(double x) { return floor(x); }
+double ab_ceil(double x) { return ceil(x); }
+double ab_fmod(double x, double y) { return fmod(x, y); }
+double ab_acos(double x) { return acos(x); }
+double ab_asin(double x) { return asin(x); }
+double ab_atan(double x) { return atan(x); }
+double ab_cosh(double x) { return cosh(x); }
+double ab_sinh(double x) { return sinh(x); }
+double ab_tanh(double x) { return tanh(x); }
+double ab_tan(double x) { return tan(x); }
+double ab_exp(double x) { return exp(x); }
+double ab_log(double x) { return log(x); }
+double ab_log10(double x) { return log10(x); }
+double ab_pow(double x, double y) { return pow(x, y); }
+double ab_frexp(double x, int *e) { return frexp(x, e); }
+double ab_ldexp(double x, int e) { return ldexp(x, e); }
+double ab_modf(double x, double *i) { return modf(x, i); }
 
 /* Bionic exports these as pointers (GOT is the address of the pointer). */
 char ab_ctype_tab[257];
@@ -90,6 +114,7 @@ static void *pool_alloc(uint32_t n) {
             *pp = c->next;
         }
         c->next = 0;
+        memset(c + 1, 0, n);
         return c + 1;
     }
     return 0;
@@ -135,6 +160,7 @@ void *ab_malloc(size_t n) {
     h = malloc(n + sizeof *h);
     if (!h) { heap_fail++; return 0; }
     h->mag = AMAG; h->n = (uint32_t)n;
+    memset(h + 1, 0, n);
     heap_now += (uint32_t)n;
     if (heap_now > heap_peak) heap_peak = heap_now;
     return h + 1;
@@ -655,9 +681,11 @@ typedef struct { const char *n; void *p; } rec;
 #define A(s, p) { #s, (void *)p }
 
 static rec tab[] = {
-    W(acos), W(asin), W(atan), W(atan2), W(ceil), W(cos), W(cosh), W(exp),
-    W(floor), W(fmod), W(frexp), W(ldexp), W(log), W(log10), W(modf), W(pow),
-    W(sin), W(sinh), W(sqrt), W(tan), W(tanh),
+    A(acos, ab_acos), A(asin, ab_asin), A(atan, ab_atan), A(atan2, ab_atan2),
+    A(ceil, ab_ceil), A(cos, ab_cos), A(cosh, ab_cosh), A(exp, ab_exp),
+    A(floor, ab_floor), A(fmod, ab_fmod), A(frexp, ab_frexp), A(ldexp, ab_ldexp),
+    A(log, ab_log), A(log10, ab_log10), A(modf, ab_modf), A(pow, ab_pow),
+    A(sin, ab_sin), A(sinh, ab_sinh), A(sqrt, ab_sqrt), A(tan, ab_tan), A(tanh, ab_tanh),
     A(malloc, ab_malloc), A(free, ab_free), A(realloc, ab_realloc),
     R(memcpy), R(memmove), R(memset), R(memcmp), R(memchr),
     R(strcpy), R(strncpy), R(strcat), R(strncat), R(strcmp), R(strncmp),

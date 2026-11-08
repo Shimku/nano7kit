@@ -1,6 +1,7 @@
 /* host harness for Android libangrybirds.so under qemu-arm (nano7kit, MIT). */
 #include <execinfo.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -126,9 +127,161 @@ static void shot(int frame) {
     fclose(f);
     shot_panel(frame);
 }
+/* nativeUpdate computes dt from gettimeofday (plat_time_us). GameLua::update
+ * accumulates that and steps Box2D at a fixed 1/30. Advance 33333 us so each
+ * harness frame is one physics step, never a 0.1s clamp catch-up. */
+#define AB_FRAME_US 33333ull
+#define AB_FRAME_DT (1.f / 30.f)
 static void wait_frames(int n) {
     int f;
-    for (f = 0; f < n; f++) { fake_us += 33333; ab_frame(1.f / 30.f); }
+    for (f = 0; f < n; f++) { fake_us += AB_FRAME_US; ab_frame(AB_FRAME_DT); }
+}
+
+static uint32_t lua_u32(const uint8_t *b, uint32_t *i, uint32_t n, int *ok) {
+    uint32_t v = 0;
+    if (*i + 4 > n) { *ok = 0; return 0; }
+    memcpy(&v, b + *i, 4);
+    *i += 4;
+    return v;
+}
+static int lua_skip_str(const uint8_t *b, uint32_t *i, uint32_t n) {
+    int ok = 1;
+    uint32_t ln = lua_u32(b, i, n, &ok);
+    if (!ok || *i + ln > n) return 0;
+    *i += ln;
+    return 1;
+}
+/* Lua 5.1 SETTABLE of numeric world.x / world.y (physics metres). */
+static int load_level_xy(const char *file, float *xs, float *ys, int maxn) {
+    void *buf = 0; uint32_t n = 0, i = 12, ncode, nconst, pc, k;
+    uint8_t *b; int ok = 1, nxy = 0;
+    uint32_t *code; float *nums; char **strs; uint8_t *typ;
+    if (plat_read_file(file, &buf, &n) || !buf || n < 24) { free(buf); return 0; }
+    b = (uint8_t *)buf;
+    if (memcmp(b, "\x1bLua", 4) != 0) { free(buf); return 0; }
+    if (!lua_skip_str(b, &i, n)) { free(buf); return 0; }
+    lua_u32(b, &i, n, &ok); lua_u32(b, &i, n, &ok);
+    if (i + 4 > n) { free(buf); return 0; }
+    i += 4;
+    ncode = lua_u32(b, &i, n, &ok);
+    if (!ok || ncode > 8000 || i + ncode * 4 > n) { free(buf); return 0; }
+    code = (uint32_t *)malloc(ncode * 4);
+    if (!code) { free(buf); return 0; }
+    memcpy(code, b + i, ncode * 4); i += ncode * 4;
+    nconst = lua_u32(b, &i, n, &ok);
+    if (!ok || nconst > 4000) { free(code); free(buf); return 0; }
+    nums = (float *)calloc(nconst, 4);
+    strs = (char **)calloc(nconst, sizeof(char *));
+    typ = (uint8_t *)calloc(nconst, 1);
+    if (!nums || !strs || !typ) { free(code); free(nums); free(strs); free(typ); free(buf); return 0; }
+    for (k = 0; k < nconst; k++) {
+        if (i >= n) { ok = 0; break; }
+        typ[k] = b[i++];
+        if (typ[k] == 0) continue;
+        if (typ[k] == 1) { if (i >= n) { ok = 0; break; } i++; continue; }
+        if (typ[k] == 3) {
+            if (i + 4 > n) { ok = 0; break; }
+            memcpy(&nums[k], b + i, 4); i += 4; continue;
+        }
+        if (typ[k] == 4) {
+            uint32_t ln = lua_u32(b, &i, n, &ok);
+            if (!ok || i + ln > n) { ok = 0; break; }
+            strs[k] = (char *)(b + i);
+            i += ln;
+            continue;
+        }
+        ok = 0; break;
+    }
+    if (ok) {
+        int kx = -1, ky = -1;
+        float pending_x = 0.f; int have_x = 0; int pend_a = -1;
+        for (k = 0; k < nconst; k++) {
+            if (typ[k] != 4 || !strs[k]) continue;
+            if (strs[k][0] == 'x' && strs[k][1] == 0) kx = (int)k;
+            if (strs[k][0] == 'y' && strs[k][1] == 0) ky = (int)k;
+        }
+        for (pc = 0; pc < ncode && nxy < maxn; pc++) {
+            uint32_t w = code[pc], op = w & 63u, a = (w >> 6) & 255u;
+            uint32_t bb = (w >> 23) & 511u, cc = (w >> 14) & 511u;
+            int key, valk;
+            if (op != 9) continue;
+            if (!(bb & 256u) || !(cc & 256u)) continue;
+            key = (int)(bb & 255u); valk = (int)(cc & 255u);
+            if (valk >= (int)nconst || typ[valk] != 3) continue;
+            if (key == kx) {
+                pending_x = nums[valk]; have_x = 1; pend_a = (int)a;
+            } else if (key == ky && have_x && pend_a == (int)a) {
+                float x = pending_x, y = nums[valk];
+                have_x = 0;
+                if (x > -80.f && x < 160.f && y > -60.f && y < 40.f) {
+                    xs[nxy] = x; ys[nxy] = y; nxy++;
+                }
+            }
+        }
+    }
+    free(code); free(nums); free(strs); free(typ); free(buf);
+    return nxy;
+}
+static int match_level_file(const char *lvl, const ab_phys_info *a) {
+    float xs[128], ys[128];
+    char file[40];
+    int n, i, hit = 0, miss = 0;
+    snprintf(file, sizeof file, "%s.lua", lvl);
+    n = load_level_xy(file, xs, ys, 128);
+    for (i = 0; i < n; i++) {
+        int j, ok = 0;
+        float best = 1e9f;
+        for (j = 0; j < a->sample_n; j++) {
+            float dx = a->sample_x[j] - xs[i], dy = a->sample_y[j] - ys[i];
+            float d2 = dx * dx + dy * dy;
+            if (d2 < best) best = d2;
+            if (d2 < 2.25f) { ok = 1; break; }
+        }
+        if (ok) hit++;
+        else {
+            miss++;
+            if (miss <= 6)
+                fprintf(stderr, "AB_LUA_POS %s miss file=%.2f,%.2f nearest2=%.3f\n",
+                        lvl, (double)xs[i], (double)ys[i], (double)best);
+        }
+    }
+    fprintf(stderr, "AB_LUA_POS %s file_xy=%d matched=%d miss=%d bodies=%d\n",
+            lvl, n, hit, miss, a->sample_n);
+    return n >= 4 && miss * 4 <= n;
+}
+static int hold_ok(const char *lvl, const ab_phys_info *open, const ab_phys_info *now) {
+    float oh, nh, drop, maxdy = 0.f, cut;
+    int i, lost, castle_open = 0, castle_now = 0;
+    oh = open->dyn_ymax - open->dyn_ymin;
+    nh = now->dyn_ymax - now->dyn_ymin;
+    if (oh < 0.5f) oh = 0.5f;
+    drop = (oh - nh) / oh;
+    cut = open->dyn_ymin + 0.35f * oh;
+    for (i = 0; i < open->sample_n; i++)
+        if (open->sample_type[i] == 2 && open->sample_y[i] < cut) castle_open++;
+    for (i = 0; i < now->sample_n; i++)
+        if (now->sample_type[i] == 2 && now->sample_y[i] < cut) castle_now++;
+    for (i = 0; i < now->sample_n; i++) if (now->sample_type[i] == 2) {
+        int j; float best = 1e9f;
+        for (j = 0; j < open->sample_n; j++) if (open->sample_type[j] == 2) {
+            float dx = now->sample_x[i] - open->sample_x[j];
+            float dy = now->sample_y[i] - open->sample_y[j];
+            float d2 = dx * dx + dy * dy;
+            if (d2 < best) best = d2;
+        }
+        if (best > maxdy) maxdy = best;
+    }
+    lost = open->dynamic_n - now->dynamic_n;
+    fprintf(stderr, "AB_HOLD %s score=%.0f->%.0f dyn=%d->%d h=%.2f->%.2f drop=%.2f maxd2=%.3f castle=%d->%d\n",
+            lvl, (double)open->score, (double)now->score, open->dynamic_n, now->dynamic_n,
+            (double)oh, (double)nh, (double)drop, (double)maxdy, castle_open, castle_now);
+    if (now->score > 0.5f) return 0;
+    if (open->score > 0.5f) return 0;
+    if (drop > 0.25f) return 0;
+    if (maxdy > (oh * 0.35f) * (oh * 0.35f) && maxdy > 4.f) return 0;
+    if (lost > 1) return 0;
+    if (castle_open >= 3 && castle_now + 1 < castle_open) return 0;
+    return 1;
 }
 static void tap_at(float x, float y) {
     ab_touch(0, 1, x, y);
@@ -437,7 +590,8 @@ int main(int argc, char **argv) {
                     ab_world_to_panel(bx, by, &p0x, &p0y);
                 }
                 gdir = a.grav_y < 0.f ? -1.f : 1.f;
-                /* Pull back about 8 physics units (away from the castle). */
+                /* Pull back and down. 8.5 x 2.8 physics units at the bird
+                 * camera stays on-panel and matches the original fling. */
                 ab_world_to_panel(bx - 8.5f, by + gdir * 2.8f, &p1x, &p1y);
                 fprintf(stderr, "AB_PLAY_TEST pouch raw world %.2f,%.2f panel %.1f,%.1f pull %.1f,%.1f\n",
                         (double)bx, (double)by, (double)p0x, (double)p0y, (double)p1x, (double)p1y);
@@ -493,6 +647,14 @@ int main(int argc, char **argv) {
             fprintf(stderr, "AB_PLAY_TEST travel2=%.3f draws=%d\n", (double)maxd, fe_stat_draws);
         }
         if (every) shot(9);
+        /* World-fit so the castle is in frame, then wait for the bird to
+         * arrive. Do not dump the hit under the pause overlay. */
+        ab_cam_fit_world();
+        wait_frames(16);
+        if (every) shot(5);
+        ab_phys_snapshot(&b);
+        ab_phys_log("play-after-shot");
+        dump_panel("panel-hit");
         /* Pause while the bird is still in the air, before the level-cleared
          * overlay replaces the pause button. */
         tap_at(215.f, 24.f);
@@ -508,10 +670,6 @@ int main(int argc, char **argv) {
             if (pix < 800) fail++;
             if (p.world_scale < 0.18f || p.world_scale > 1.05f) fail++;
         }
-        wait_frames(95);
-        if (every) shot(5);
-        ab_phys_snapshot(&b);
-        ab_phys_log("play-after-shot");
         fprintf(stderr, "AB_PLAY_TEST heap used %u peak %u flying=%d before rest=%d dyn=%d after rest=%d dyn=%d\n",
                 ab_heap_used(), ab_heap_peak(), flying,
                 ab_phys_resting(&a), a.dynamic_n, ab_phys_resting(&b), b.dynamic_n);
@@ -602,7 +760,7 @@ int main(int argc, char **argv) {
     if (getenv("AB_LEVELS_TEST")) {
         int fail = 0, n, loaded = 0;
         int warm = atoi(getenv("AB_PHYS_WARM") ? getenv("AB_PHYS_WARM") : "200");
-        int settle = atoi(getenv("AB_LEVELS_SETTLE") ? getenv("AB_LEVELS_SETTLE") : "90");
+        int hold = atoi(getenv("AB_LEVELS_SETTLE") ? getenv("AB_LEVELS_SETTLE") : "150");
         int min_n = atoi(getenv("AB_LEVELS_MIN") ? getenv("AB_LEVELS_MIN") : "1");
         int max_n = atoi(getenv("AB_LEVELS_MAX") ? getenv("AB_LEVELS_MAX") : "3");
         wait_frames(warm);
@@ -611,7 +769,7 @@ int main(int argc, char **argv) {
         tap_at(49.f, 324.f);
         for (n = min_n; n <= max_n; n++) {
             char name[24], file[28];
-            ab_phys_info a;
+            ab_phys_info open, held, a;
             int bad = 0, pix, blk;
             FILE *lf;
             snprintf(name, sizeof name, "Level%d", n);
@@ -619,9 +777,17 @@ int main(int argc, char **argv) {
             if (open_named(file, &lf)) continue;
             fclose(lf);
             ab_load_lua_level(name);
-            wait_frames(settle);
-            /* Physics may slide a block during settle; re-fit so the opening
-             * dump still has the castle inside the 480x320 view. */
+            wait_frames(2);
+            ab_phys_snapshot(&open);
+            fprintf(stderr, "AB_SCORE %s open=%.0f\n", name, (double)open.score);
+            if (open.score > 0.5f) bad = 1;
+            if (!match_level_file(name, &open)) bad = 1;
+            wait_frames(hold);
+            ab_phys_snapshot(&held);
+            fprintf(stderr, "AB_SCORE %s hold=%.0f\n", name, (double)held.score);
+            if (!hold_ok(name, &open, &held)) bad = 1;
+            /* Re-fit after the idle so the opening dump still has the castle
+             * inside the 480x320 view. */
             ab_cam_fit_world();
             wait_frames(2);
             ab_phys_snapshot(&a);
@@ -639,10 +805,11 @@ int main(int argc, char **argv) {
                 if (!bodies_textured(name, &a, &tok, &tflat)) bad = 1;
                 if (!hud_ok(name)) bad = 1;
                 if (!framing_ok(name, &a)) bad = 1;
-                fprintf(stderr, "AB_LEVELS_TEST %s dyn=%d vis=%d/%d scale=%.3f pix=%d black=%d tex_ok=%d tex_flat=%d %s\n",
+                fprintf(stderr, "AB_LEVELS_TEST %s dyn=%d vis=%d/%d scale=%.3f pix=%d black=%d tex_ok=%d tex_flat=%d score=%.0f %s\n",
                         name, a.dynamic_n, a.vis_all, a.bodies, (double)a.world_scale, pix, blk,
-                        tok, tflat, bad ? "FAIL" : "ok");
+                        tok, tflat, (double)a.score, bad ? "FAIL" : "ok");
             }
+            if (a.score > 0.5f) bad = 1;
             if (bad) fail++;
             {
                 char pan[24], crop[32];

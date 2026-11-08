@@ -13,13 +13,13 @@ void ab_load_level(const char *name);
 void ab_call_lua(const char *name);
 void ab_load_lua_level(const char *name);
 
-#define AB_PHYS_SAMPLE 32
+#define AB_PHYS_SAMPLE 96
 #define AB_VIS_MAX 64
 typedef struct {
     uint32_t lua, world;
     int phys_on, bodies, static_n, dynamic_n, fixtures, contacts, contacts_hint;
     uint32_t filter;
-    float grav_x, grav_y, acc;
+    float grav_x, grav_y, acc, score;
     float dyn_ymin, dyn_ymax, stat_ymin, stat_ymax;
     float world_scale, cam_left, cam_top;
     int vis_dyn, vis_all, obj_n, ctx_w, ctx_h;
@@ -35,6 +35,7 @@ void ab_phys_snapshot(ab_phys_info *o);
 void ab_phys_log(const char *tag);
 int ab_phys_resting(const ab_phys_info *o);
 void ab_phys_enable(int on);
+float ab_lua_get_number(const char *name);
 void ab_cam_fit_play(void);
 void ab_cam_fit_world(void);
 void ab_cam_fit_birds(void);

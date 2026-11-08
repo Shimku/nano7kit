@@ -429,6 +429,10 @@ def convert_tree(app: Path, dest: Path) -> dict:
     # the 433-wide INGAME_1 image, so Ka3D skipped the sprite and drew the
     # untextured white body fill. Background sheets keep original rects so
     # 480x320 layers still cover the view; fngl uv_div undoes those UVs.
+    # Halved rects also shrink Sprite width/height. ab_entry.c doubles those
+    # shorts while INGAME/INGAME_1 sheets parse (createObject looks sprites
+    # up with an empty sheet name). Do not drop the .dat scale without also
+    # changing that hook.
     block_dat = {"INGAME", "INGAME_1"}
     for src in sorted(data.rglob("*.dat")):
         if not src.is_file() or src.name.startswith("._"):
