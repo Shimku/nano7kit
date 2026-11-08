@@ -3,6 +3,7 @@
 #define FN_RT_PLAT_H
 #include <stdint.h>
 void plat_log_line(const char *line);
+void plat_log_flush(void);                 /* nano: append log.txt; host: no-op */
 void plat_fatal(const char *why);
 uint32_t plat_load_image(void *dst, uint32_t size);   /* guest.img */
 uint64_t plat_time_us(void);

@@ -31,7 +31,7 @@ IPA_SHA256_PREFIX = "cdea1290"
 CMD = "./start nabase add 'Angry Birds' --payload /path/to/AngryBirds.ipa"
 FAT_EXE = "/Apps/Executables/Angry Birds.hbapp"
 FAT_DATA = "/Apps/Data/AngryBirds"
-RECIPE = 8
+RECIPE = 9
 
 # Memory model. IMAGE_BYTES is the loaded .hbapp span (code + log in .bss).
 # The translated engine is Thumb + software float so this fits; runtime/GL stay ARM+VFP.

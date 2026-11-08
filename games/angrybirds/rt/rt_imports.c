@@ -152,7 +152,13 @@ IMP(_snprintf) { args_t a = {3, {r0, r1, r2, r3}, 0}; RET(format((char *)G8(r0),
 IMP(_vsprintf) { UNUSED; args_t a = {0, {0}, r2}; RET(format((char *)G8(r0), 0x7fffffff, gstr(r1), &a)); }
 IMP(_vsnprintf) { UNUSED; args_t a = {0, {0}, r3}; RET(format((char *)G8(r0), r1, gstr(r2), &a)); }
 IMP(_printf) { args_t a = {1, {r0, r1, r2, r3}, 0}; char buf[512]; format(buf, sizeof buf, gstr(r0), &a);
-    size_t l = strlen(buf); while (l && buf[l - 1] == '\n') buf[--l] = 0; if (l) rt_log("game: %s", buf); RET(l); }
+    size_t l = strlen(buf); while (l && buf[l - 1] == '\n') buf[--l] = 0;
+    if (l) {
+        int err = strstr(buf, "error") || strstr(buf, "Error") || strstr(buf, "PANIC")
+               || strstr(buf, "stack traceback");
+        rt_log(err ? "luaerr %s" : "game: %s", buf);
+    }
+    RET(l); }
 IMP(_NSLog) { UNUSED; RET(0); }
 
 IMP(_sscanf) {

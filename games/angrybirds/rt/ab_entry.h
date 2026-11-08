@@ -4,12 +4,11 @@
 #include <stdint.h>
 int ab_start(void);
 void ab_frame(float dt);
-typedef struct { float x, y; int down; } ab_tsample;
+typedef struct { float x, y; int down; int id; } ab_tsample;
 #define AB_MAX_STEPS 4
+#define AB_FINGERS 8
 void ab_frame_q(float dt, const ab_tsample *q, int n);
 void ab_touch(int id, int down, float panel_x, float panel_y);
-void ab_zoom_by(float factor);
-void ab_pan_by(float dx, float dy);
 void ab_load_level(const char *name);
 void ab_call_lua(const char *name);
 void ab_load_lua_level(const char *name);

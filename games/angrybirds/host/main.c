@@ -18,6 +18,7 @@ extern int be_stat_tex_fail;
 static const char *data_dir, *img_path, *out_dir;
 static uint64_t fake_us;
 void plat_log_line(const char *l) { fprintf(stderr, "%s\n", l); }
+void plat_log_flush(void) {}
 void plat_trace(void) { void *b[24]; int n = backtrace(b, 24); char **s = backtrace_symbols(b, n);
     fprintf(stderr, "  at"); for (int i = 1; i < n; i++) { const char *p = strchr(s[i], '('); if (p && p[1] == 'F') fprintf(stderr, " %.*s", (int)(strcspn(p + 1, "+)")), p + 1); } fprintf(stderr, "\n"); }
 void *plat_os_alloc(uint32_t n) { return calloc(1, n ? n : 1); }
@@ -74,15 +75,19 @@ static int panel_black(void) {
     }
     return n;
 }
-static void shot_panel(int frame) {
-    /* Same orientation as a nano framebuffer grab (240x432 portrait, y down). */
-    char p[512]; snprintf(p, sizeof p, "%s/panel-%05d.ppm", out_dir, frame);
+static void dump_panel(const char *name) {
+    char p[512]; snprintf(p, sizeof p, "%s/%s.ppm", out_dir, name);
     FILE *f = fopen(p, "wb"); if (!f) return;
     fprintf(f, "P6 240 432 255\n");
     for (int y = 0; y < 432; y++)
         for (int x = 0; x < 240; x++)
             fwrite(be_fb[y][x], 1, 3, f);
     fclose(f);
+}
+static void shot_panel(int frame) {
+    /* Same orientation as a nano framebuffer grab (240x432 portrait, y down). */
+    char p[32]; snprintf(p, sizeof p, "panel-%05d", frame);
+    dump_panel(p);
 }
 static void shot(int frame) {
     /* Same home-on-right landscape dump as PvZ n7soft_shot: rotate the portrait
@@ -109,6 +114,39 @@ static void tap_at(float x, float y) {
     fake_us += 33333; ab_frame(1.f / 30.f);
     fake_us += 33333; ab_frame(1.f / 30.f);
     ab_touch(0, 0, x, y);
+    fake_us += 33333; ab_frame(1.f / 30.f);
+}
+static int level_sane(const char *name, ab_phys_info *a) {
+    int pix, blk, bad = 0;
+    ab_phys_snapshot(a);
+    pix = play_pixels();
+    blk = panel_black();
+    if (a->dynamic_n < 1) bad = 1;
+    if (a->vis_dyn < 1 || a->vis_all < 2) bad = 1;
+    if (a->world_scale < 0.22f || a->world_scale > 1.05f) bad = 1;
+    if (pix < 800) bad = 1;
+    if (blk > 240 * 432 / 12) bad = 1;
+    if (be_stat_tex_fail) bad = 1;
+    fprintf(stderr, "AB_GESTURE_TEST %s dyn=%d vis=%d/%d scale=%.3f pix=%d black=%d tex=%d fail=%d %s\n",
+            name, a->dynamic_n, a->vis_dyn, a->vis_all, (double)a->world_scale,
+            pix, blk, fe_stat_tex_count, be_stat_tex_fail, bad ? "FAIL" : "ok");
+    return !bad;
+}
+static void pinch_out(int frames) {
+    int i;
+    ab_touch(0, 1, 80.f, 216.f);
+    ab_touch(1, 1, 160.f, 216.f);
+    fake_us += 33333; ab_frame(1.f / 30.f);
+    fake_us += 33333; ab_frame(1.f / 30.f);
+    for (i = 1; i <= frames; i++) {
+        float k = (float)i / (float)frames;
+        ab_touch(0, 1, 80.f - 50.f * k, 216.f);
+        ab_touch(1, 1, 160.f + 50.f * k, 216.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+    }
+    for (i = 0; i < 8; i++) { fake_us += 33333; ab_frame(1.f / 30.f); }
+    ab_touch(0, 0, 30.f, 216.f);
+    ab_touch(1, 0, 210.f, 216.f);
     fake_us += 33333; ab_frame(1.f / 30.f);
 }
 int main(int argc, char **argv) {
@@ -300,6 +338,75 @@ int main(int argc, char **argv) {
         fprintf(stderr, "AB_PLAY_TEST %s\n", fail ? "FAIL" : "PASS");
         return fail ? 1 : 0;
     }
+    if (getenv("AB_GESTURE_TEST")) {
+        /* Device test 5: a drag must not move the composited frame (HUD/pause
+         * stay put). Two fingers pinch the game's worldScale. L1 then L2 then
+         * L3 load in one session with a sane camera and no white frame. */
+        int fail = 0, i;
+        ab_phys_info a, b;
+        unsigned pr, pg, pb, qr, qg, qb;
+        float ox, oy, sx, sy, scale0, scale1;
+        wait_frames(200);
+        ab_call_lua("gotoFirstLevel");
+        wait_frames(20);
+        for (i = 0; i < 8; i++) {
+            tap_at(49.f, 324.f);
+            tap_at(55.f, 333.f);
+        }
+        wait_frames(20);
+        ab_load_lua_level("Level1");
+        wait_frames(90);
+        if (!level_sane("Level1", &a)) fail++;
+        dump_panel("panel-l1");
+        ox = fe_off_x; oy = fe_off_y; sx = fe_scale; sy = fe_scale_y;
+        pr = be_fb[24][215][0]; pg = be_fb[24][215][1]; pb = be_fb[24][215][2];
+        ab_touch(0, 1, 120.f, 80.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        for (i = 1; i <= 20; i++) {
+            ab_touch(0, 1, 120.f + (float)i, 80.f + 8.f * (float)i);
+            fake_us += 33333; ab_frame(1.f / 30.f);
+        }
+        ab_touch(0, 0, 140.f, 240.f);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+        qr = be_fb[24][215][0]; qg = be_fb[24][215][1]; qb = be_fb[24][215][2];
+        fprintf(stderr, "AB_GESTURE_TEST frame fe_off=%.1f,%.1f fe_scale=%.3f,%.3f hud %u,%u,%u -> %u,%u,%u\n",
+                (double)fe_off_x, (double)fe_off_y, (double)fe_scale, (double)fe_scale_y,
+                pr, pg, pb, qr, qg, qb);
+        if (fe_off_x != 0.f || fe_off_y != 0.f || fe_scale != 0.75f || fe_scale_y != 0.9f) fail++;
+        if (fe_off_x != ox || fe_off_y != oy || fe_scale != sx || fe_scale_y != sy) fail++;
+        if (pr != qr || pg != qg || pb != qb) fail++;
+        ab_load_lua_level("Level2");
+        wait_frames(90);
+        if (!level_sane("Level2", &a)) fail++;
+        scale0 = a.world_scale;
+        pinch_out(16);
+        wait_frames(10);
+        ab_phys_snapshot(&b);
+        scale1 = b.world_scale;
+        fprintf(stderr, "AB_GESTURE_TEST pinch L2 scale %.3f -> %.3f vis %d/%d\n",
+                (double)scale0, (double)scale1, b.vis_all, b.bodies);
+        if (!(scale1 < scale0 - 0.015f) && !(scale1 > scale0 + 0.015f)) fail++;
+        if (scale1 < 0.15f || scale1 > 1.05f) fail++;
+        if (!level_sane("Level2-pinch", &b)) fail++;
+        dump_panel("panel-l2");
+        tap_at(215.f, 24.f);
+        wait_frames(8);
+        dump_panel("panel-pause");
+        {
+            int pix = play_pixels();
+            fprintf(stderr, "AB_GESTURE_TEST pause pix=%d\n", pix);
+            if (pix < 800) fail++;
+        }
+        ab_load_lua_level("Level3");
+        wait_frames(90);
+        if (!level_sane("Level3", &a)) fail++;
+        fprintf(stderr, "AB_GESTURE_TEST %s\n", fail ? "FAIL" : "PASS");
+        if (rt_malloc_failures()) {
+            fprintf(stderr, "FATAL: %u guest allocations failed\n", rt_malloc_failures());
+            return 3;
+        }
+        return fail ? 1 : 0;
+    }
     if (getenv("AB_LEVELS_TEST")) {
         int fail = 0, n, loaded = 0, vis_fail = 0;
         int warm = atoi(getenv("AB_PHYS_WARM") ? getenv("AB_PHYS_WARM") : "200");
@@ -384,7 +491,7 @@ int main(int argc, char **argv) {
         if (getenv("AB_BURST") && f == 110) {   /* the nano case: a whole drag sampled inside one frame */
             int nb = atoi(getenv("AB_BURST")); ab_tsample q[8];
             for (int i = 0; i < nb && i < 8; i++) {
-                q[i].x = 90.f; q[i].y = 300.f - 80.f * (float)i / (float)(nb - 1); q[i].down = 1;
+                q[i].x = 90.f; q[i].y = 300.f - 80.f * (float)i / (float)(nb - 1); q[i].down = 1; q[i].id = 0;
             }
             ab_frame_q(1.f / 30.f, q, nb < 8 ? nb : 8);
         } else if (getenv("AB_BURST") && f == 111) {

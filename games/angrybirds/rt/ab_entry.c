@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "rt.h"
+#include "rt_plat.h"
 #include "fngl.h"
 #include "ab_entry.h"
 #include "rt_entry.h"
@@ -16,12 +17,16 @@
 
 static uint32_t osi, ctx, app, str_data, str_docs, view_rect;
 static int started;
-static int fed_down, fed_id;
-static float fed_x, fed_y;
-static float view_zoom = 1.f;
+static struct { int down, id; float x, y, gx, gy; } fed[AB_FINGERS];
+static int lbutton_held;
+static int pinch_on;
+static float pinch_d0, pinch_s0, pinch_cx, pinch_cy;
 static int guest_ok(uint32_t a, uint32_t n);
 static uint32_t intern_str(const char *s);
 static void ab_lua_iphone_screen(void);
+static void ab_lua_set_number(const char *name, float v);
+static uint32_t game_lua(void);
+static void ab_apply_pinch(void);
 
 static uint32_t mk_string(const char *s) {
     uint32_t o = g_malloc(16), p = g_strdup(s);
@@ -40,12 +45,18 @@ static uint32_t make_osi(void) {
     return o;
 }
 
+/* Fruit Ninja keeps fe_scale/fe_off fixed after reset: the 480x320 landscape
+ * fills 240x432 with Home on the right. Do not pan or zoom this map; only
+ * lua cameraFunction moves the world. */
 static void reset_view(void) {
-    view_zoom = 1.f;
+    int i;
     fe_scale = 0.75f;
     fe_scale_y = 0.9f;
     fe_off_x = 0.f;
     fe_off_y = 0.f;
+    lbutton_held = 0;
+    pinch_on = 0;
+    for (i = 0; i < AB_FINGERS; i++) memset(&fed[i], 0, sizeof fed[i]);
 }
 
 int ab_start(void) {
@@ -167,40 +178,85 @@ static void panel_to_game(float px, float py, float *gx, float *gy) {
 #endif
 #define AB_LBUTTON 57u
 /* GameLua::update copies App::touches().size() (App+628) into lua `touches`.
- * updateGame only starts a slingshot drag when that count is exactly 1.
- * TouchBegan/Ended grow a 12-byte slot vector; a missed Ended after a menu
- * tap leaves count at 2+ and the pouch never grabs. Pin the count. */
-static void pin_touch_count(uint32_t a, int down, int id, float gx, float gy) {
+ * updateGame starts a slingshot only when that count is exactly 1; GameApp::update
+ * pinches when it is exactly 2 (App+636/640 -> lua zoomLevel). TouchEvent is
+ * 12 bytes (int id, x, y) in 480x320 landscape pixels. Pin the vector from the
+ * live fingers rather than forcing count=1 / id=0. */
+static int finger_down_count(void) {
+    int n = 0, i;
+    for (i = 0; i < AB_FINGERS; i++) if (fed[i].down) n++;
+    return n;
+}
+
+static void pin_touch_count(uint32_t a) {
     uint32_t data;
+    int n = 0, i;
     if (!a || !guest_ok(a, 636u)) return;
     data = gr32(a + 624u);
-    if (down) {
-        if (!data || !guest_ok(data, 12u)) {
-            data = g_malloc(36);
+    n = finger_down_count();
+    if (n > 0) {
+        if (!data || !guest_ok(data, (uint32_t)n * 12u)) {
+            data = g_malloc(12u * AB_FINGERS);
             if (!data) return;
-            memset(G8(data), 0, 36);
+            memset(G8(data), 0, 12u * AB_FINGERS);
             gw32(a + 624u, data);
-            gw32(a + 632u, 3u);
+            gw32(a + 632u, (uint32_t)AB_FINGERS);
         }
-        gw32(data, (uint32_t)id);
-        gw32(data + 4u, F2U(gx));
-        gw32(data + 8u, F2U(gy));
-        gw32(a + 628u, 1u);
+        n = 0;
+        for (i = 0; i < AB_FINGERS; i++) {
+            int32_t ix, iy;
+            uint32_t slot;
+            if (!fed[i].down) continue;
+            ix = (int32_t)(fed[i].gx + (fed[i].gx < 0.f ? -0.5f : 0.5f));
+            iy = (int32_t)(fed[i].gy + (fed[i].gy < 0.f ? -0.5f : 0.5f));
+            slot = (uint32_t)n * 12u;
+            gw32(data + slot, (uint32_t)fed[i].id);
+            gw32(data + slot + 4u, (uint32_t)ix);
+            gw32(data + slot + 8u, (uint32_t)iy);
+            n++;
+        }
+        gw32(a + 628u, (uint32_t)n);
     } else {
         gw32(a + 628u, 0u);
+    }
+}
+
+static void sync_lbutton(int id, float gx, float gy) {
+    int want, n;
+    int32_t ix, iy;
+    if (!app) return;
+    n = finger_down_count();
+    want = (n == 1 && fed[0].down);
+    ix = (int32_t)(gx + (gx < 0.f ? -0.5f : 0.5f));
+    iy = (int32_t)(gy + (gy < 0.f ? -0.5f : 0.5f));
+    /* menus and the slingshot read LBUTTON + mouseMove for finger 0 only.
+     * A second finger is a pinch: drop LBUTTON so lua does not grab the pouch. */
+    if (id == 0 && AB_MouseMove)
+        rt_call("mouseMove", AB_MouseMove, app, (uint32_t)ix, (uint32_t)iy, 0, 0, 0);
+    if (want && !lbutton_held) {
+        G8(app + 532u + AB_LBUTTON)[0] = 1;
+        if (AB_KeyDown) rt_call("keyDown", AB_KeyDown, app, AB_LBUTTON, 0, 0, 0, 0);
+        lbutton_held = 1;
+    } else if (!want && lbutton_held) {
+        G8(app + 532u + AB_LBUTTON)[0] = 0;
+        if (AB_KeyUp) rt_call("keyUp", AB_KeyUp, app, AB_LBUTTON, 0, 0, 0, 0);
+        lbutton_held = 0;
+    } else {
+        G8(app + 532u + AB_LBUTTON)[0] = (uint8_t)(want ? 1 : 0);
     }
 }
 
 static void send_touch(int began, int moved, int ended, int id, float gx, float gy) {
     static uint32_t ev;
     uint32_t glu, app2;
-    if (!ev) ev = g_malloc(16);
-    int32_t ix = (int32_t)(gx + (gx < 0.f ? -0.5f : 0.5f));
-    int32_t iy = (int32_t)(gy + (gy < 0.f ? -0.5f : 0.5f));
-    gw32(ev, (uint32_t)id);
-    gw32(ev + 4, F2U(gx));
-    gw32(ev + 8, F2U(gy));
+    int32_t ix, iy;
     uint32_t fn = 0;
+    if (!ev) ev = g_malloc(16);
+    ix = (int32_t)(gx + (gx < 0.f ? -0.5f : 0.5f));
+    iy = (int32_t)(gy + (gy < 0.f ? -0.5f : 0.5f));
+    gw32(ev, (uint32_t)id);
+    gw32(ev + 4, (uint32_t)ix);
+    gw32(ev + 8, (uint32_t)iy);
     if (began) fn = AB_TouchBegan;
     else if (ended) fn = AB_TouchEnded;
     else fn = AB_TouchMoved;
@@ -208,50 +264,35 @@ static void send_touch(int began, int moved, int ended, int id, float gx, float 
     if (!app) return;
     glu = gr32(app + 652u);
     app2 = guest_ok(glu, 32u) ? gr32(glu + 28u) : 0;
-    pin_touch_count(app, began || moved, id, gx, gy);
-    if (app2 && app2 != app) pin_touch_count(app2, began || moved, id, gx, gy);
-    /* iOS mapped a finger to LBUTTON + mouseMove; Lua menus read those, not only TouchEvent. */
-    if (AB_MouseMove) rt_call("mouseMove", AB_MouseMove, app, (uint32_t)ix, (uint32_t)iy, 0, 0, 0);
-    G8(app + 532u + AB_LBUTTON)[0] = (uint8_t)((began || moved) ? 1 : 0);
-    if (began && AB_KeyDown) rt_call("keyDown", AB_KeyDown, app, AB_LBUTTON, 0, 0, 0, 0);
-    if (ended && AB_KeyUp) rt_call("keyUp", AB_KeyUp, app, AB_LBUTTON, 0, 0, 0, 0);
+    pin_touch_count(app);
+    if (app2 && app2 != app) pin_touch_count(app2);
+    sync_lbutton(id, gx, gy);
     if (getenv("AB_TOUCH_LOG"))
-        rt_log("touch b=%d m=%d e=%d game=%d,%d lua=%08x app2=%08x n=%d n2=%d kDown=%u kHold=%u kUp=%u",
-               began, moved, ended, ix, iy, glu, app2,
+        rt_log("touch b=%d m=%d e=%d id=%d game=%d,%d lua=%08x app2=%08x n=%d n2=%d kDown=%u kHold=%u kUp=%u zoom=%g prev=%g",
+               began, moved, ended, id, ix, iy, glu, app2,
                guest_ok(app, 632u) ? (int)gr32(app + 628u) : -1,
                guest_ok(app2, 632u) ? (int)gr32(app2 + 628u) : -1,
-               G8(app + 721u)[0], G8(app + 532u + AB_LBUTTON)[0], G8(app + 807u)[0]);
+               G8(app + 721u)[0], G8(app + 532u + AB_LBUTTON)[0], G8(app + 807u)[0],
+               guest_ok(app, 644u) ? (double)U2F(gr32(app + 636u)) : 0.0,
+               guest_ok(app, 644u) ? (double)U2F(gr32(app + 640u)) : 0.0);
 }
 
 void ab_touch(int id, int down, float px, float py) {
     float gx, gy;
+    int began, moved, ended;
+    if (id < 0 || id >= AB_FINGERS) id = 0;
     panel_to_game(px, py, &gx, &gy);
-    if (down && !fed_down) send_touch(1, 0, 0, id, gx, gy);
-    else if (down && fed_down) send_touch(0, 1, 0, id, gx, gy);
-    else if (!down && fed_down) send_touch(0, 0, 1, id, gx, gy);
-    fed_down = down != 0;
-    fed_id = id;
-    fed_x = px;
-    fed_y = py;
-}
-
-void ab_zoom_by(float factor) {
-    float cx = 120.f, cy = 216.f;
-    float gx, gy;
-    panel_to_game(cx, cy, &gx, &gy);
-    view_zoom *= factor;
-    if (view_zoom < 0.75f) view_zoom = 0.75f;
-    if (view_zoom > 2.5f) view_zoom = 2.5f;
-    fe_scale = 0.75f * view_zoom;
-    fe_scale_y = 0.9f * view_zoom;
-    /* keep the panel centre on the same game point (emit_tri: px = off + fy*sx) */
-    fe_off_x = cx - (fe_fb_h - gy) * fe_scale;
-    fe_off_y = cy - gx * fe_scale_y;
-}
-
-void ab_pan_by(float dx, float dy) {
-    fe_off_x += dx;
-    fe_off_y += dy;
+    began = down && !fed[id].down;
+    moved = down && fed[id].down;
+    ended = !down && fed[id].down;
+    if (!began && !moved && !ended) return;
+    fed[id].id = id;
+    fed[id].x = px;
+    fed[id].y = py;
+    fed[id].gx = gx;
+    fed[id].gy = gy;
+    fed[id].down = down != 0;
+    send_touch(began, moved, ended, id, gx, gy);
 }
 
 void ab_frame_q(float dt, const ab_tsample *q, int n) {
@@ -267,7 +308,11 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
         if (info.dynamic_n > 0 && !info.phys_on)
             ab_phys_enable(1);
     }
-    for (i = 0; i < n; i++) ab_touch(0, q[i].down, q[i].x, q[i].y);
+    for (i = 0; i < n; i++) {
+        int id = q[i].id;
+        if (id < 0 || id >= AB_FINGERS) id = 0;
+        ab_touch(id, q[i].down, q[i].x, q[i].y);
+    }
     if (dt > 0.1f) dt = 0.1f;
     if (dt < 0.001f) dt = 0.001f;
     fe_stat_tris = 0;
@@ -296,6 +341,7 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
         }
     }
     be_frame_end();
+    ab_apply_pinch();
 }
 
 void ab_frame(float dt) { ab_frame_q(dt, 0, 0); }
@@ -315,6 +361,16 @@ void ab_load_level(const char *name) {
      * would otherwise leave bodies frozen (or, on device, we force it on). */
     ab_phys_enable(1);
     ab_phys_log(name);
+    {
+        ab_phys_info i;
+        extern int be_stat_tex_fail;
+        ab_phys_snapshot(&i);
+        rt_log("LEVEL %s scale=%.3f left=%.1f top=%.1f ctx=%dx%d obj=%d vis=%d/%d tex=%d fail=%d heap=%u",
+               name, (double)i.world_scale, (double)i.cam_left, (double)i.cam_top,
+               i.ctx_w, i.ctx_h, i.obj_n, i.vis_all, i.bodies,
+               fe_stat_tex_count, be_stat_tex_fail, (unsigned)rt_heap_used());
+        plat_log_flush();
+    }
 }
 
 /* lua::LuaObject::call(char const*): the menu's PLAY sprite is hit-tested at
@@ -410,6 +466,52 @@ static void ab_lua_set_number(const char *name, float v) {
     lua_table_set_num(glu, name, v);
 }
 
+/* GameApp::update writes App+636 = startZoom * (newDist/oldDist) when
+ * touches().size()==2, then GameLua::update copies that into lua zoomLevel.
+ * lua cameraFunction / setWorldScale then stores the play camera back into
+ * 636 and 640, so the pinch never sticks. Apply the same ratio here, after
+ * update, clamped like lua (minWorldScale .. camera sx). Fingers apart zooms
+ * out (smaller worldScale) so both birds and the castle fit. */
+static void ab_apply_pinch(void) {
+    uint32_t glu;
+    float d, scale, left, top, ns, minz, maxz;
+    if (finger_down_count() != 2 || !fed[0].down || !fed[1].down) {
+        pinch_on = 0;
+        return;
+    }
+    d = hypotf(fed[0].gx - fed[1].gx, fed[0].gy - fed[1].gy);
+    if (d < 4.f) return;
+    glu = game_lua();
+    if (!glu) return;
+    scale = U2F(gr32(glu + AB_CAM_SCALE));
+    if (!(scale > 1e-4f)) return;
+    left = U2F(gr32(glu + AB_CAM_LEFT));
+    top = U2F(gr32(glu + AB_CAM_TOP));
+    if (!pinch_on) {
+        pinch_on = 1;
+        pinch_d0 = d;
+        pinch_s0 = scale;
+        pinch_cx = left + 0.5f * AB_VIEW_W / scale;
+        pinch_cy = top + 0.5f * AB_VIEW_H / scale;
+        return;
+    }
+    ns = pinch_s0 * (pinch_d0 / d);
+    minz = 0.22f;
+    maxz = pinch_s0 * 1.6f;
+    if (maxz < pinch_s0) maxz = pinch_s0;
+    if (maxz > 1.05f) maxz = 1.05f;
+    if (ns < minz) ns = minz;
+    if (ns > maxz) ns = maxz;
+    left = pinch_cx - 0.5f * AB_VIEW_W / ns;
+    top = pinch_cy - 0.5f * AB_VIEW_H / ns;
+    rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(ns), 0, 0, 0, 0);
+    rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(left), F2U(top), 0, 0, 0);
+    ab_lua_set_number("worldScale", ns);
+    ab_lua_set_number("currentZoomedScale", ns);
+    ab_lua_set_number("zoomLevel", ns);
+    ab_lua_set_number("oldZoomLevel", ns);
+}
+
 static void ab_lua_set_string(const char *name, const char *val) {
     uint32_t glu = game_lua(), k, v;
     if (!glu || !name || !val) return;
@@ -487,6 +589,16 @@ void ab_load_lua_level(const char *name) {
     }
     ab_cam_fit_play();
     ab_phys_log(name);
+    {
+        ab_phys_info i;
+        extern int be_stat_tex_fail;
+        ab_phys_snapshot(&i);
+        rt_log("LEVEL %s scale=%.3f left=%.1f top=%.1f ctx=%dx%d obj=%d vis=%d/%d tex=%d fail=%d heap=%u",
+               name, (double)i.world_scale, (double)i.cam_left, (double)i.cam_top,
+               i.ctx_w, i.ctx_h, i.obj_n, i.vis_all, i.bodies,
+               fe_stat_tex_count, be_stat_tex_fail, (unsigned)rt_heap_used());
+        plat_log_flush();
+    }
 }
 
 void ab_phys_snapshot(ab_phys_info *o) {

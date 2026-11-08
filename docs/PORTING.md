@@ -190,9 +190,12 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   float so the loaded image stays about 2.2 MiB (ARM+VFP for everything was
   3.2 MiB text). Box2D in `recomp_14.c`/`recomp_15.c` is ARM+softfp+VFP like
   Fruit Ninja. Runtime, GL and `setjmp` stay ARM+VFP. On-device log:
-  `/Apps/Data/AngryBirds/log.txt` (body counts, ground, tex fails, free mem).
-  Guest.img maps only `__cstring` through DATA (~80 KB). Double-tap or Volume
-  Up/Down zooms; a drag on the top or bottom 28 px of the panel pans.
+  `/Apps/Data/AngryBirds/log.txt` (appended; each `LEVEL` line has name,
+  camera scale/bounds, textures loaded/failed; lua errors as `luaerr` / `game:`).
+  Guest.img maps only `__cstring` through DATA (~80 KB). The 240x432 picture
+  is fixed like Fruit Ninja (`fe_scale` 0.75/0.9, `fe_off` 0); only the game's
+  camera moves. Two fingers are ids 0 and 1 so native pinch zoom and double-tap
+  reset work. Volume keys are unused.
 - **Host harness** (`host/`): headless software raster, same 512 texture cap
   as the nano, the same 2 MB guest block (`BLOCK_MAX`), and the same
   home-on-right landscape dump as PvZ (`P6 432 240`, `px=239-gy, py=gx`).
@@ -209,7 +212,12 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   which is the slingshot-to-castle span, not exploding physics (`rest=1`);
   lua then logged `Camera target object outside level limits`. That zoom left
   black/white voids on device and a second `drawGame` painted the world over
-  the pause page. VCMP
+  the pause page. RECIPE 8 (device test 4) dropped the AABB and the extra
+  `drawGame`. RECIPE 9 (device test 5) dropped the whole-frame pan/zoom from
+  `62b2fb5` (`fe_off` / `view_zoom` moved HUD and pause with a drag) and
+  passes the second finger through so native pinch works. `AB_GESTURE_TEST=1`
+  checks a drag never moves the composited frame, a two-finger pinch changes
+  worldScale, and L1 then L2 then L3 load in one session. VCMP
   writes FPSCR only (APSR via FMSTAT), matching ARM; the old immediate `n_=`
   collapsed Box2D AABBs to a point. PLAY, TUTORIAL_OK, and a slingshot drag
   work through LBUTTON plus `mouseMove`.

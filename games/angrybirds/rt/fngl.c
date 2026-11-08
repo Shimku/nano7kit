@@ -392,7 +392,8 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
          * Fruit Ninja is already portrait in GL so it only scales fx,fy. An extra
          * (fb_h - fy) here put Angry Birds' top on portrait LEFT, which is a 180
          * turn vs PvZ/FN when held with Home on the right, and a horizontal mirror
-         * if the player instead holds Home on the left to make the sky upright. */
+         * if the player instead holds Home on the left to make the sky upright.
+         * fe_off is the origin of that map (always 0); it is not a user pan. */
         sv[i].x = fe_off_x + fy * fe_scale;
         sv[i].y = fe_off_y + fx * fe_scale_y;
         if (getenv("AB_DUMP_V")) {

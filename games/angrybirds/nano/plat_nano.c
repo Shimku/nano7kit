@@ -104,29 +104,70 @@ uint64_t plat_time_us(void) {
     return (uint64_t)t_high << 32 | now;
 }
 
-/* ---- log: kept in memory, written to log.txt after start-up, every so often and on a fatal - */
+/* ---- log: kept in memory, appended to log.txt after start-up, each level load, every so
+ * often and on a fatal. hb_fs_write truncates, so a flush that rewrote the whole buffer
+ * after rotation dropped earlier LEVEL lines; append the unflushed tail instead. */
 #define LOG_CAP 32768u
 /* the log and the archive chunk live in .bss, inside the app image the resident frees on
  * unload: an hb_os_alloc here would outlive the app (there is no quit callback) */
 static char log_store[LOG_CAP + SLACK] __attribute__((aligned(64)));
 static char *log_buf;
-static uint32_t log_len, log_dirty;
+static uint32_t log_len, log_dirty, log_disk;
 void plat_log_line(const char *line) {
-    if (!log_buf) { log_buf = log_store; log_len = 0; }
+    if (!log_buf) { log_buf = log_store; log_len = 0; log_disk = 0; }
     uint32_t n = (uint32_t)strlen(line);
     if (n > 200) n = 200;
-    if (log_len + n + 1 > LOG_CAP) {    /* keep the first half (start-up), drop the oldest of the rest */
-        uint32_t keep = LOG_CAP / 2, cut = log_len - keep < n + 1 + 1024 ? log_len - keep : n + 1 + 1024;
-        memmove(log_buf + keep, log_buf + keep + cut, log_len - keep - cut);
-        log_len -= cut;
+    if (log_len + n + 1 > LOG_CAP) {
+        /* keep what is already on disk; drop only unflushed bytes from the front of
+         * the unwritten tail so a 1-1, 1-2, 1-3 run still appends LEVEL lines. */
+        if (log_disk > 0 && log_disk <= log_len) {
+            memmove(log_buf, log_buf + log_disk, log_len - log_disk);
+            log_len -= log_disk;
+            log_disk = 0;
+        }
+        if (log_len + n + 1 > LOG_CAP) return;
     }
     memcpy(log_buf + log_len, line, n); log_len += n; log_buf[log_len++] = '\n';
     log_dirty = 1;
 }
 void plat_log_flush(void) {
+    uint32_t extra, oldn = 0;
+    uint8_t *old = NULL;
+    void *ptrs[2];
+    uint32_t lens[2];
+    int nparts = 0;
     if (!log_buf || !log_dirty) return;
+    if (log_disk > log_len) log_disk = 0;
+    extra = log_len - log_disk;
+    if (!extra) { log_dirty = 0; return; }
     hb_fs_mkdir(DATA_DIR);
-    hb_fs_write(DATA_DIR "/log.txt", log_buf, log_len);
+    if (hb_fs_exists(DATA_DIR "/log.txt")) {
+        oldn = hb_fs_size(DATA_DIR "/log.txt");
+        if (oldn > 96u * 1024u) {
+            uint8_t *full = malloc(oldn);
+            uint32_t keep = 64u * 1024u;
+            if (full) {
+                uint32_t got = hb_fs_read(DATA_DIR "/log.txt", full, oldn);
+                if (got > keep) {
+                    old = malloc(keep);
+                    if (old) { memcpy(old, full + got - keep, keep); oldn = keep; }
+                    else oldn = 0;
+                } else {
+                    old = full; full = NULL; oldn = got;
+                }
+                free(full);
+            } else oldn = 0;
+        } else if (oldn) {
+            old = malloc(oldn);
+            if (old) oldn = hb_fs_read(DATA_DIR "/log.txt", old, oldn);
+            else oldn = 0;
+        }
+    }
+    if (old && oldn) { ptrs[nparts] = old; lens[nparts] = oldn; nparts++; }
+    ptrs[nparts] = log_buf + log_disk; lens[nparts] = extra; nparts++;
+    hb_fs_write_parts(DATA_DIR "/log.txt", ptrs, lens, nparts);
+    free(old);
+    log_disk = log_len;
     log_dirty = 0;
 }
 void plat_trace(void) {}
@@ -180,4 +221,4 @@ uint32_t plat_load_image(void *dst, uint32_t size) {
     /* the guest block has the heap after the image, so the read may run past size by SLACK */
     return hb_fs_read(DATA_DIR "/guest.img", dst, size + SLACK) == size ? size : 0;
 }
-void plat_nano_reset(void) { host_in_guest = host_outside = host_outside_peak = host_outside_count = 0; t_last = t_high = 0; log_buf = NULL; log_len = log_dirty = 0; }
+void plat_nano_reset(void) { host_in_guest = host_outside = host_outside_peak = host_outside_count = 0; t_last = t_high = 0; log_buf = NULL; log_len = log_dirty = log_disk = 0; }

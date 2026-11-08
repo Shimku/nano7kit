@@ -2,10 +2,9 @@
  * The first frame (GL context current) allocates the guest block, loads guest.img and runs
  * the engine's start-up; then each frame feeds the touch and steps the engine. The game is
  * 480x320 landscape; on the 240x432 panel it fills the panel (0.75 across, 0.9 along), so
- * the iPod is held with Home on the right as the iPhone was. Double-tap zooms; a drag on
- * the top or bottom 28 px of the panel pans (slingshot is the rest of the screen).
- * Volume Up / Down also zoom, so a one-finger slingshot still has a zoom. */
-#include <math.h>
+ * the iPod is held with Home on the right as the iPhone was. That map is fixed (Fruit Ninja
+ * style): only lua cameraFunction pans/zooms the world. Two fingers go through as ids 0 and
+ * 1 so the game's own pinch and double-tap reset work. Volume keys do nothing in-game. */
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -43,11 +42,6 @@ static uint32_t frames, last_flush_ms;
 static uint64_t last_us;
 static int was_down;
 static float last_x, last_y;
-static uint64_t last_tap_us;
-static float last_tap_x, last_tap_y;
-static int zoom_dir = 1;
-static int gesture;                       /* 0 game, 1 pan, 2 swallow (double-tap zoom) */
-static int vol_up_was, vol_dn_was;
 
 /* ---- touch -----------------------------------------------------------------------------
  * An earlier build read the resident's mailbox once a frame. On hardware taps worked and swipes did not:
@@ -57,17 +51,21 @@ static int vol_up_was, vol_dn_was;
  * (olievans123/nano-templerun, nano_platform.c plat_poll) reads it the same way. The finger
  * is sampled at the start of the frame and between draw batches (be_nano.c), every change is
  * queued, and fn_frame_q gives the engine one sample per update step. */
-#define OS_TOUCH_HEAD ((volatile uint32_t *)0x089a5298u)
+#define OS_TOUCH_BASE 0x089a5298u
 #define TQ 8
 static ab_tsample tq[TQ];
 static int tq_n, t_report;
 static uint32_t t_presses, t_from_list, t_from_mb, t_stale, t_held, t_lifts, t_places;
+static uint32_t t_from_f1, t_from_snap;
 static uint32_t w_ms0, w_frames, w_down, w_dry, w_dry_run, w_dry_max, w_dt_min, w_dt_max;   /* 5 s touch window */
+static int was_f1;
+static float last_f1_x, last_f1_y;
 /* 1 with the finger's place if the list holds a touch that is down, 2 if all it holds have
  * lifted, 0 if it is empty or cannot be read. *newest_up: the newest node is a lift (a down
- * and its lift both waiting: the down is used, then the lift). Read only, never altered. */
-static int list_touch(int16_t *x, int16_t *y, int *newest_up) {
-    volatile uint32_t *head = OS_TOUCH_HEAD;
+ * and its lift both waiting: the down is used, then the lift). Read only, never altered.
+ * Queue q is the OS list at 0x089a5298 + q*0x18 (launcher 485bef2, eight fingers). */
+static int list_touch_q(int q, int16_t *x, int16_t *y, int *newest_up) {
+    volatile uint32_t *head = (volatile uint32_t *)(OS_TOUCH_BASE + (uint32_t)q * 0x18u);
     *newest_up = 0;
     if (head[5] == 0) return 0;
     uint32_t end = head[4], nodes = 0; int down = 0;
@@ -81,6 +79,9 @@ static int list_touch(int16_t *x, int16_t *y, int *newest_up) {
     }
     return down ? 1 : nodes ? 2 : 0;
 }
+static int list_touch(int16_t *x, int16_t *y, int *newest_up) {
+    return list_touch_q(0, x, y, newest_up);
+}
 /* touch-snapshot: the launcher copies the newest sample of every OS touch queue at each
  * touch event, before the OS drains them, into a block right after hb_shared
  * (nanoapps/system/silver_resident_na/touch_latch.h). Polling the queue races that drain:
@@ -88,11 +89,15 @@ static int list_touch(int16_t *x, int16_t *y, int *newest_up) {
  * it. Older launchers have no snapshot (the magic differs) and nothing changes. */
 #define FN_SNAP_MAGIC 0x504e5354u
 typedef struct { uint32_t magic; volatile uint32_t seq; volatile int32_t finger[8][4]; } fn_snap_t;
-static uint32_t snap_seq, t_from_snap;
-static int snap_touch(int16_t *x, int16_t *y) {
+static uint32_t snap_seq;
+static volatile fn_snap_t *snap_ptr(void) {
     if (!hb_shared) return 0;
     volatile fn_snap_t *sp = (volatile fn_snap_t *)((char *)hb_shared + sizeof(hb_shared_t));
-    if (sp->magic != FN_SNAP_MAGIC) return 0;
+    return sp->magic == FN_SNAP_MAGIC ? sp : 0;
+}
+static int snap_touch(int16_t *x, int16_t *y) {
+    volatile fn_snap_t *sp = snap_ptr();
+    if (!sp) return 0;
     uint32_t seq = sp->seq;
     if (seq == snap_seq) return 0;
     snap_seq = seq;
@@ -101,6 +106,33 @@ static int snap_touch(int16_t *x, int16_t *y) {
     if (st == 1u) return 2;                     /* status 1: lifted */
     *x = (int16_t)sp->finger[0][2]; *y = (int16_t)sp->finger[0][3];
     return 1;
+}
+/* Finger q's current snapshot, not edge-triggered on seq: a held second finger
+ * must stay down even when no new OS event arrives this poll. */
+static int snap_finger_now(int q, int16_t *x, int16_t *y) {
+    volatile fn_snap_t *sp = snap_ptr();
+    uint32_t st;
+    if (!sp || q < 0 || q > 7) return 0;
+    st = (uint32_t)sp->finger[q][1] & 0xffu;
+    if (st == 0xffu) return 0;
+    *x = (int16_t)sp->finger[q][2];
+    *y = (int16_t)sp->finger[q][3];
+    if (st == 1u) return 2;
+    return 1;
+}
+static void emit_touch(int id, int down, float x, float y) {
+    if (tq_n < TQ) {
+        tq[tq_n].id = id;
+        tq[tq_n].x = x;
+        tq[tq_n].y = y;
+        tq[tq_n].down = down;
+        tq_n++;
+    } else if (!down || tq[TQ - 1].down) {
+        tq[TQ - 1].id = id;
+        tq[TQ - 1].x = x;
+        tq[TQ - 1].y = y;
+        tq[TQ - 1].down = down;                 /* never lose a release */
+    }
 }
 static void logf_(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void fn_nano_poll(void) {
@@ -122,29 +154,30 @@ void fn_nano_poll(void) {
         default:            down = 0; break;
         }
         float x = down ? (float)f.x : last_x, y = down ? (float)f.y : last_y;   /* a touch ends where it was last seen */
-        if (down && !was_down) {
-            uint64_t now = plat_time_us();
-            if (y < 28.f || y > 404.f) gesture = 1;                             /* top/bottom strip: pan */
-            else if (last_tap_us && now - last_tap_us < 400000u
-                     && fabsf(x - last_tap_x) < 24.f && fabsf(y - last_tap_y) < 24.f) {
-                ab_zoom_by(zoom_dir > 0 ? 1.25f : 0.8f);
-                zoom_dir = -zoom_dir;
-                gesture = 2;                                                    /* swallow this tap */
-            } else gesture = 0;
-            last_tap_us = now; last_tap_x = x; last_tap_y = y;
-        }
-        if (gesture == 1 && down && was_down) ab_pan_by(x - last_x, y - last_y);
         if (down != was_down || (down && (x != last_x || y != last_y))) {
             if (down && !was_down && ++t_presses <= 3) t_report = 1;
-            if (!down && was_down) { t_lifts++; gesture = 0; }
+            if (!down && was_down) t_lifts++;
             was_down = down; last_x = x; last_y = y; t_places++;
-            if (gesture == 0) {
-                if (tq_n < TQ) { tq[tq_n].x = x; tq[tq_n].y = y; tq[tq_n].down = down; tq_n++; }
-                else if (!down || tq[TQ - 1].down) { tq[TQ - 1].x = x; tq[TQ - 1].y = y; tq[TQ - 1].down = down; }  /* never lose a release */
-            }
+            emit_touch(0, down, x, y);
         }
         if (listed != 1 || !newest_up) break;
         listed = 2;                     /* the list's newest node is the lift of what it held down */
+    }
+    /* Second finger: OS queue 1 plus the launcher snapshot. Stable id 1. */
+    {
+        int16_t x1 = 0, y1 = 0, sx = 0, sy = 0;
+        int up1 = 0, listed1 = list_touch_q(1, &x1, &y1, &up1);
+        int sn = snap_finger_now(1, &sx, &sy);
+        int down1 = 0;
+        float px = last_f1_x, py = last_f1_y;
+        if (listed1 == 1) { down1 = 1; px = (float)x1; py = (float)y1; t_from_f1++; }
+        else if (sn == 1) { down1 = 1; px = (float)sx; py = (float)sy; t_from_f1++; }
+        else if (listed1 == 2 || sn == 2 || was_f1) down1 = 0;
+        if (down1 != was_f1 || (down1 && (px != last_f1_x || py != last_f1_y))) {
+            if (!down1 && was_f1) t_lifts++;
+            was_f1 = down1; last_f1_x = px; last_f1_y = py; t_places++;
+            emit_touch(1, down1, px, py);
+        }
     }
 }
 
@@ -236,13 +269,6 @@ void fn_nano_frame(int w, int h, uint32_t n) {
     }
     if (fn_setjmp(unwind)) { in_engine = 0; state = 2; plat_log_flush(); return; }
     in_engine = 1;
-    if (state == 1) {
-        int up = hb_button_pressed(HB_BTN_VOL_UP), dn = hb_button_pressed(HB_BTN_VOL_DOWN);
-        if (up && !vol_up_was) ab_zoom_by(1.25f);
-        if (dn && !vol_dn_was) ab_zoom_by(0.8f);
-        vol_up_was = up;
-        vol_dn_was = dn;
-    }
     if (state == 0) {
         int r = start(w, h);
         if (r) { in_engine = 0; state = r == -3 ? 3 : 2; plat_log_flush(); gll_save(); return; }
@@ -281,11 +307,11 @@ void fn_nano_frame(int w, int h, uint32_t n) {
         if (w_down) {
             uint32_t span = ms - w_ms0;
             logf_("nano7kit touch %us: %u fps, frame %u-%u ms; down %u frames, %u with nothing new (run %u); "
-                  "press %u lift %u places %u; list %u snap %u mb %u stale %u held %u",
+                  "press %u lift %u places %u; list %u snap %u mb %u stale %u held %u f1 %u",
                   (unsigned)(ms / 1000u), (unsigned)(w_frames * 1000u / (span ? span : 1u)), (unsigned)w_dt_min, (unsigned)w_dt_max,
                   (unsigned)w_down, (unsigned)w_dry, (unsigned)w_dry_max, (unsigned)t_presses, (unsigned)t_lifts,
                   (unsigned)t_places, (unsigned)t_from_list, (unsigned)t_from_snap, (unsigned)t_from_mb,
-                  (unsigned)t_stale, (unsigned)t_held);
+                  (unsigned)t_stale, (unsigned)t_held, (unsigned)t_from_f1);
             plat_log_flush();
         }
         w_ms0 = ms; w_frames = w_down = w_dry = w_dry_max = w_dt_max = 0; w_dt_min = 0;
@@ -312,5 +338,4 @@ void fn_nano_reset(void) {
     plat_nano_reset();
     fngl_reset();
     notice_reset();
-    vol_up_was = vol_dn_was = 0;
 }
