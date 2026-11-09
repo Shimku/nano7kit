@@ -23,9 +23,25 @@ class FitTests(unittest.TestCase):
         self.assertLessEqual(ab.IMAGE_BYTES, 4_194_304 - ab.BLOCK_MIN - ab.SLOP)
         self.assertTrue(ab.BUDGET_MIN <= fit["budget"] <= ab.BUDGET_MAX)
 
-    def test_music_playing_refuses_like_the_app(self):
+    def test_too_small_a_hole_still_refuses(self):
         self.assertEqual(ab.heap_fit(6_000_000, 2_097_152)["verdict"], "NO_FIT")
         self.assertEqual(ab.heap_fit(5_000_000, 4_000_000)["verdict"], "NO_FIT")
+
+    def test_music_playing_1mb_leftover_still_starts(self):
+        """Device log with music on: OS free 1758568, largest 1048576 after the pool."""
+        leftover_free, leftover_big = 1_758_568, 1_048_576
+        self.assertLessEqual(ab.AFTER_MIN, leftover_free)
+        self.assertLessEqual(ab.GL_KEEP, leftover_big)
+        free0 = leftover_free + ab.BLOCK_MAX
+        largest = leftover_big + ab.BLOCK_MAX
+        size = ab.BLOCK_MAX if largest > ab.BLOCK_MAX + ab.SLOP else (largest - ab.SLOP) & ~0xFFFF
+        self.assertGreaterEqual(largest, ab.BLOCK_MIN + ab.SLOP)
+        self.assertGreaterEqual(size, ab.BLOCK_MIN)
+        self.assertGreaterEqual(free0, size + ab.AFTER_MIN)
+        fit = ab.heap_fit(6_710_886, 4_194_304)
+        self.assertIn(fit["verdict"], ("FITS", "FITS_REDUCED"))
+        self.assertEqual(fit["block"], ab.BLOCK_MAX)
+        self.assertGreaterEqual(fit["after_image"] - fit["block"], leftover_free - 4096)
 
     def test_constants_match_the_nano_source(self):
         src = (GAME / "nano" / "fn_nano.c").read_text()
@@ -319,7 +335,9 @@ class SourceTests(unittest.TestCase):
         self.assertIn("so constructor done", (GAME / "rt" / "so_load.c").read_text())
         self.assertIn("nativeInit returned", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("first tick: nativeUpdate", (GAME / "rt" / "ab_entry.c").read_text())
-        self.assertGreaterEqual(ab.RECIPE, 9)
+        self.assertGreaterEqual(ab.RECIPE, 10)
+        self.assertIn("do not stop music", (GAME / "nano" / "fn_nano.c").read_text())
+        self.assertIn("1 MB largest after a 3 MB pool", (GAME / "nano" / "fn_nano.c").read_text())
         self.assertIn("parseIndex skip missing", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("FileBundle10parseIndex", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("parseIndex hook on", (GAME / "rt" / "ab_entry.c").read_text())

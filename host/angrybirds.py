@@ -30,15 +30,15 @@ APK_SHA256 = "c80ed55b5a7e594653402217b61569049300358d2c2f6c4515c867608104c477"
 CMD = "./start nabase add 'Angry Birds' --payload /path/to/angrybirds-android-1.0.0.apk"
 FAT_EXE = "/Apps/Executables/Angry Birds.hbapp"
 FAT_DATA = "/Apps/Data/AngryBirds"
-RECIPE = 9  # lua_longjmp via setjmp; nop WMMX/d16-31; host loads so_to_obj .abso
+RECIPE = 10  # start with ~1.7 MB free / 1 MB largest (music on; RAM freer does not stop it)
 
 # Memory model. IMAGE_BYTES is the loaded .hbapp span (runtime + linked .so).
 # The v7a .so image is about 1.32 MB; runtime/GL/JNI stay ARM+VFP softfp.
 IMAGE_BYTES = 1_800_000 + 4096
 BLOCK_MAX = 0x300000
 BLOCK_MIN = 0x230000
-GL_KEEP = 0x180000
-AFTER_MIN = 0x1A0000
+GL_KEEP = 0x100000
+AFTER_MIN = 0x100000
 SLOP = 0x10000
 HEAP_PEAK = 2_800_000
 SMALL_BYTES = 40_000
@@ -303,7 +303,7 @@ def heap_lines(heap_free: Optional[int], largest: Optional[int]) -> List[str]:
     verdict = {
         "FITS": "FITS (every triangle of the busiest frame)",
         "FITS_REDUCED": f"FITS with a reduced triangle budget ({fit['budget']} of {TRIS_DRAWN_MAX})",
-        "NO_FIT": "DOES NOT FIT: the app will show NOT ENOUGH MEMORY (pause music, reopen)",
+        "NO_FIT": "DOES NOT FIT: the app will show NOT ENOUGH MEMORY",
     }[fit["verdict"]]
     out.append(f"    verdict   {verdict}")
     return out

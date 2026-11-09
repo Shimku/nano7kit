@@ -18,7 +18,7 @@
 #define SLACK 8192u
 
 #define AMAGIC 0x464e414cu
-#define GL_KEEP 0x180000u
+#define GL_KEEP 0x100000u   /* 1 MB leftover largest (music playing); GL uses plat_os_alloc */
 typedef struct { uint32_t size, magic, base, pad; } ahdr;
 uint32_t host_outside, host_outside_peak, host_outside_count, host_in_pool;
 

@@ -23,10 +23,10 @@
 
 #define BLOCK_MAX   0x300000u           /* 3.0 MB engine malloc pool; host peak is 2.78 MB. The .so is in the .hbapp */
 #define BLOCK_MIN   0x230000u           /* 2.29 MB: 4.0 MB largest minus 1.8 MB image still holds this */
-#define GL_KEEP     0x180000u
+#define GL_KEEP     0x100000u           /* leftover largest with music on (device log 1 MB after the pool) */
 #define DATA_DIR_GL "/Apps/Data/AngryBirds"
 #define BYTES_PER_TRIANGLE 3000u
-#define AFTER_MIN   0x1A0000u           /* textures at 512 + triangles after the malloc pool */
+#define AFTER_MIN   0x100000u           /* ~1.7 MB free / 1 MB largest after the pool is a supported start; do not stop music */
 extern int be_budget, be_panel_w, be_panel_h, be_stat_tris, be_stat_tiny, be_stat_over, be_stat_draws,
            be_stat_live_tex, be_stat_tex_fail;
 extern void plat_log_flush(void);
@@ -229,7 +229,9 @@ static int start(int w, int h) {
           w, h, (unsigned)free_a, (unsigned)largest_a, (unsigned)swept, (unsigned)free0, (unsigned)largest);
     uint32_t size = largest > BLOCK_MAX + 0x10000u ? BLOCK_MAX : (largest - 0x10000u) & ~0xFFFFu;
     /* pre-flight, before any big allocation: the OS's own allocator reboots the iPod when it
-     * runs dry, so the block and the GL driver's share must both be there up front */
+     * runs dry, so the block and the GL driver's share must both be there up front.
+     * Music playing leaves ~1.7 MB free / 1 MB largest after a 3 MB pool (device log);
+     * AFTER_MIN/GL_KEEP are 1 MB so that start still runs. The RAM freer does not stop music. */
     if (largest < BLOCK_MIN + 0x10000u || size < BLOCK_MIN || free0 < size + AFTER_MIN)
         return short_of_memory(free0, largest, BLOCK_MAX + AFTER_MIN, BLOCK_MIN + 0x10000u);
     ab_crumb("start: taking malloc pool", size);
