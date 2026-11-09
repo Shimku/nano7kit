@@ -48,8 +48,9 @@ static int open_named(const char *name, FILE **out, char *hit, size_t hitn) {
     const char *base = name ? name : "";
     const char *slash, *d, *leaf;
     if (base[0] == '/' && open_hit(base, out, hit, hitn)) return 0;
-    slash = strrchr(base, '/');
-    leaf = slash ? slash + 1 : base;
+    leaf = ab_persist_leaf(base);
+    /* docs/ and the parent folder are the same persist location.
+     * Packed data/ is never a persist fallback. */
     if (ab_persist_name(base)) {
         if (leaf[0]) {
             snprintf(p, sizeof p, "%s/%s", files_dir, leaf);
@@ -104,6 +105,7 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
     char hit[512], b[192];
     const char *req = name ? name : "";
     *out = 0; *len = 0;
+    ab_note_io(req);
     fe_note_texfile(name);
     snprintf(b, sizeof b, "readFile begin '%s'", req);
     plat_log_line(b);
@@ -124,7 +126,7 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
     snprintf(b, sizeof b, "readFile resolved '%s'", hit[0] ? hit : req);
     plat_log_line(b);
     plat_log_flush();
-    if (hit[0] && strstr(hit, "/../")) {
+    if (ab_persist_name(req) && hit[0] && !ab_persist_in_docs(hit)) {
         snprintf(b, sizeof b, "readFile leftover '%s' requested '%s'", hit, req);
         plat_log_line(b);
         plat_log_flush();
@@ -871,6 +873,7 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
                 base, pc >= base ? pc - base : pc, lr >= base ? lr - base : lr);
     s = (unsigned long *)sp;
     for (i = 0; i < 24; i++) fprintf(stderr, "  sp[%d]=%08lx\n", i, s[i]);
+    ab_throw_report();
     _exit(139);
 }
 
@@ -901,8 +904,106 @@ int main(int argc, char **argv) {
     mkdir(files_dir, 0755);
     fake_us = 1000000ull;
     fngl_reset();
-    if (ab_start()) return 1;
+    if (ab_start()) {
+        ab_throw_report();
+        return 1;
+    }
     fprintf(stderr, "init ok: heap %u peak %u\n", ab_heap_used(), ab_heap_peak());
+
+    if (getenv("AB_BOOT_SHOT_TEST")) {
+        int fail = 0, i, flying = 0, hit = 0, stretched = 0;
+        ab_phys_info a, b, mid, open;
+        float p0x = 0.f, p0y = 0.f, p1x = 0.f, p1y = 0.f, rlen = 0.f;
+        wait_frames(300);
+        dump_panel("panel-menu");
+        fprintf(stderr, "AB_BOOT_SHOT_TEST menu frames=300\n");
+        ab_call_lua("gotoFirstLevel");
+        wait_frames(20);
+        for (i = 0; i < 8; i++) { tap_at(49.f, 324.f); tap_at(55.f, 333.f); }
+        wait_frames(10);
+        ab_load_lua_level("Level1");
+        wait_frames(50);
+        ab_cam_fit_world();
+        wait_frames(2);
+        dump_panel("panel-l1");
+        ab_phys_snapshot(&open);
+        if (!hud_ok("boot-l1") || !framing_ok("boot-l1", &open)) fail++;
+        ab_phys_enable(1);
+        wait_frames(20);
+        ab_ready_slingshot();
+        for (i = 0; i < 120; i++) {
+            wait_frames(1);
+            if (bird_named_ready()) break;
+        }
+        fprintf(stderr, "AB_BOOT_SHOT_TEST seated frames=%d ready=%d\n",
+                i, ab_lua_get_bool("birdReady"));
+        if (!bird_named_ready()) ab_ready_slingshot();
+        ab_cam_fit_aim();
+        wait_frames(4);
+        ab_phys_snapshot(&a);
+        ab_phys_log("boot-before-shot");
+        {
+            float bx, by, tx, ty;
+            if (!ab_lua_xy("rubberBandPos", &bx, &by)) {
+                fprintf(stderr, "AB_BOOT_SHOT_TEST no rubberBandPos\n");
+                fail++;
+            } else if (!grab_rubber(&p0x, &p0y)) {
+                fprintf(stderr, "AB_BOOT_SHOT_TEST grab missed rbp=%.2f,%.2f\n",
+                        (double)bx, (double)by);
+                fail++;
+                ab_touch(0, 0, p0x, p0y);
+            } else {
+                ab_lua_xy("rubberBandPos", &bx, &by);
+                tx = bx - 4.30f;
+                ty = by + 2.50f;
+                ensure_selected(p0x, p0y);
+                pull_toward(&p0x, &p0y, tx, ty);
+                p1x = p0x;
+                p1y = p0y;
+                rlen = ab_lua_get_number("rubberBandLength");
+                stretched = rlen > 0.8f;
+                dump_panel("panel-aim");
+                fprintf(stderr, "AB_BOOT_SHOT_TEST aim rlen=%.3f\n", (double)rlen);
+                drag_up(p1x, p1y);
+            }
+        }
+        wait_frames(4);
+        ab_cam_fit_world();
+        wait_frames(2);
+        log_flyer("boot-fly", &a);
+        dump_panel("panel-fly-1");
+        wait_frames(10);
+        ab_phys_snapshot(&mid);
+        {
+            float maxd = body_travel2(&a, &mid);
+            flying = maxd > 16.f;
+            fprintf(stderr, "AB_BOOT_SHOT_TEST travel2=%.3f flying=%d\n",
+                    (double)maxd, flying);
+        }
+        for (i = 0; i < 90; i++) {
+            wait_frames(2);
+            ab_phys_snapshot(&b);
+            if (b.score > 0.5f) { hit = 1; break; }
+        }
+        ab_cam_fit_world();
+        wait_frames(2);
+        ab_phys_snapshot(&b);
+        dump_panel("panel-hit");
+        if (b.score > 0.5f) hit = 1;
+        fprintf(stderr, "AB_BOOT_SHOT_TEST hit score=%.0f flying=%d stretched=%d\n",
+                (double)b.score, flying, stretched);
+        ab_throw_report();
+        if (ab_cxa_throw_count()) fail++;
+        if (ab_malloc_failures()) fail++;
+        if (!flying) fail++;
+        if (!hit) fail++;
+        if (!stretched) fail++;
+        fprintf(stderr, "AB_BOOT_SHOT_TEST heap used %u peak %u cxa=%d lua=%d malloc_fail=%u\n",
+                ab_heap_used(), ab_heap_peak(), ab_cxa_throw_count(),
+                ab_lua_throw_count(), (unsigned)ab_malloc_failures());
+        fprintf(stderr, "AB_BOOT_SHOT_TEST %s\n", fail ? "FAIL" : "PASS");
+        return fail ? 1 : 0;
+    }
 
     if (getenv("AB_PLAY_TEST")) {
         int fail = 0, i, flying = 0, hit = 0, stretched = 0, cleared = 0;

@@ -69,9 +69,55 @@ void *ab_dso_handle;
 char __sF[3][BIONIC_FILE];
 
 static uint32_t heap_now, heap_peak, heap_fail;
+static int n_cxa_throw, n_lua_throw;
+static char last_io[96];
+#define AB_THROW_MAX 32
+static char throw_sites[AB_THROW_MAX][160];
+static int n_throw_sites;
 uint32_t ab_heap_used(void) { return heap_now; }
 uint32_t ab_heap_peak(void) { return heap_peak; }
 uint32_t ab_malloc_failures(void) { return heap_fail; }
+int ab_cxa_throw_count(void) { return n_cxa_throw; }
+int ab_lua_throw_count(void) { return n_lua_throw; }
+
+void ab_note_io(const char *name) {
+    const char *s = name ? name : "";
+    size_t n = strlen(s);
+    if (n >= sizeof last_io) n = sizeof last_io - 1;
+    memcpy(last_io, s, n);
+    last_io[n] = 0;
+}
+
+static void throw_site(const char *kind, const char *detail) {
+    char b[160];
+    snprintf(b, sizeof b, "THROW_SITE %s %s last='%s'", kind, detail ? detail : "-", last_io);
+    plat_log_line(b);
+    plat_log_flush();
+    if (n_throw_sites < AB_THROW_MAX) {
+        snprintf(throw_sites[n_throw_sites], sizeof throw_sites[0], "%s", b);
+        n_throw_sites++;
+    }
+}
+
+void ab_note_lua_throw(int err) {
+    char d[32];
+    n_lua_throw++;
+    snprintf(d, sizeof d, "err=%d", err);
+    throw_site("lua", d);
+}
+
+void ab_throw_report(void) {
+    char b[128];
+    int i;
+    snprintf(b, sizeof b, "THROW_REPORT cxa=%d lua=%d malloc_fail=%u sites=%d",
+             n_cxa_throw, n_lua_throw, (unsigned)heap_fail, n_throw_sites);
+    plat_log_line(b);
+    plat_log_flush();
+    for (i = 0; i < n_throw_sites; i++) {
+        plat_log_line(throw_sites[i]);
+        plat_log_flush();
+    }
+}
 
 typedef struct { uint32_t mag, n; } ahdr;
 #define AMAG 0x41424d48u
@@ -161,6 +207,7 @@ void *ab_malloc(size_t n) {
                      (unsigned)n, (unsigned)heap_now, (unsigned)heap_peak);
             plat_log_line(b);
             plat_log_flush();
+            throw_site("malloc", b);
             return 0;
         }
         heap_now += ((pchunk *)p - 1)->size;
@@ -174,6 +221,7 @@ void *ab_malloc(size_t n) {
         snprintf(b, sizeof b, "malloc FAIL libc %u", (unsigned)n);
         plat_log_line(b);
         plat_log_flush();
+        throw_site("malloc", b);
         return 0;
     }
     h->mag = AMAG; h->n = (uint32_t)n;
@@ -219,20 +267,46 @@ extern void fn_longjmp(void *b, int v) __attribute__((noreturn));
 int ab_persist_name(const char *name) {
     return name && strstr(name, "highscores") != 0;
 }
+const char *ab_persist_leaf(const char *name) {
+    const char *s;
+    if (!name || !name[0]) return "";
+    s = strrchr(name, '/');
+    return (s && s[1]) ? s + 1 : name;
+}
+int ab_persist_in_docs(const char *path) {
+    const char *files, *slash;
+    size_t n, fn;
+    if (!path || !path[0] || !ab_persist_name(path)) return 0;
+    files = plat_files_dir();
+    if (!files || !files[0]) return 0;
+    slash = strrchr(path, '/');
+    if (!slash) return 0;
+    n = (size_t)(slash - path);
+    fn = strlen(files);
+    return n == fn && memcmp(path, files, n) == 0;
+}
 
 int ab_persist_lua_ok(const char *name, const void *buf, uint32_t n) {
     const unsigned char *p = (const unsigned char *)buf;
     uint32_t i;
+    int level = 0, brace = 0;
     if (!ab_persist_name(name)) return 1;
-    /* Empty persist is Android's missing-save (pcall never runs). */
+    /* Empty persist is Android's missing-save (compile never runs). */
     if (n == 0) return 1;
     if (!p || n < 4) return 0;
     if (p[0] == 0x1b && p[1] == 'L' && p[2] == 'u' && p[3] == 'a') return 1;
-    for (i = 0; i + 5 <= n; i++) {
-        if (p[i] == 'L' && p[i + 1] == 'e' && p[i + 2] == 'v' && p[i + 3] == 'e' && p[i + 4] == 'l')
-            return 1;
+    /* Text persist must look like a finished table. The device leftover
+     * 277-byte file is "Level1 = { completed=true, score=1," plus filler:
+     * lua_load fails, then throwError<LuaException> (a device reboot).
+     * Missing '}' is enough to empty it instead. */
+    for (i = 0; i < n; i++) {
+        if (!level && i + 5 <= n &&
+            p[i] == 'L' && p[i + 1] == 'e' && p[i + 2] == 'v' &&
+            p[i + 3] == 'e' && p[i + 4] == 'l')
+            level = 1;
+        if (p[i] == '}') brace = 1;
     }
-    return 0;
+    return level && brace;
 }
 
 int ab_persist_empty(void **out, uint32_t *len) {
@@ -274,6 +348,12 @@ void ab_cxa_throw_log(void *obj, void *ti, void *dest) {
              n, obj, dest, off, ra_off);
     plat_log_line(buf);
     plat_log_flush();
+    n_cxa_throw++;
+    {
+        char d[96];
+        snprintf(d, sizeof d, "type=%s lr=0x%x", n, ra_off);
+        throw_site("cxa", d);
+    }
     /* IOException is the packed-index / persist miss; dump is a String layout. */
     if (n && strstr(n, "lua_longjmp"))
         plat_log_line("lua_longjmp via EHABI (setjmp missed)");
@@ -501,14 +581,22 @@ static const char *strip_data(const char *name) {
 static FILE *try_open(const char *path, const char *mode) {
     FILE *r;
     char p[512], p2[512];
-    const char *base, *slash, *leaf;
+    const char *base, *leaf;
     if (!path) return 0;
     /* Persist first: nativeInit fopen's plat_files_dir()/highscores.lua.
      * Never open the packed data/ template for persist: that hid a missing
-     * save on the host (device then died in AppDataInputStream IOException). */
-    slash = strrchr(path, '/');
-    leaf = slash ? slash + 1 : path;
-    if (path[0] == '/' && (r = fopen(path, mode))) return r;
+     * save on the host (device then died in AppDataInputStream IOException).
+     * docs/ and the parent folder are the same persist location. */
+    leaf = ab_persist_leaf(path);
+    if (path[0] == '/' && (r = fopen(path, mode))) {
+        if (ab_persist_name(path) && !ab_persist_in_docs(path)) {
+            char b[192];
+            snprintf(b, sizeof b, "readFile leftover '%s' requested '%s'", path, path);
+            plat_log_line(b);
+            plat_log_flush();
+        }
+        return r;
+    }
     if (ab_persist_name(path)) {
         snprintf(p, sizeof p, "%s/%s", plat_files_dir(), leaf[0] ? leaf : path);
         if ((r = fopen(p, mode))) return r;
@@ -564,6 +652,7 @@ static nfile *nf_of(void *p) {
 void *ab_fopen(const char *path, const char *mode) {
     nfile *w = 0; int i, wr;
     if (!path) return 0;
+    ab_note_io(path);
     fe_note_texfile(path);
     wr = mode && (strchr(mode, 'w') || strchr(mode, 'a') || strchr(mode, '+'));
     for (i = 0; i < MAXF; i++) if (NF[i].mag != NMAG) { w = &NF[i]; break; }
@@ -668,6 +757,7 @@ void *ab_freopen(const char *p, const char *m, void *fp) { (void)p; (void)m; ret
 void *ab_fopen(const char *path, const char *mode) {
     wrapf *w = 0; FILE *r; int i, wr;
     if (!path) return 0;
+    ab_note_io(path);
     fe_note_texfile(path);
     wr = mode && (strchr(mode, 'w') || strchr(mode, 'a') || strchr(mode, '+'));
     r = try_open(path, mode);
@@ -975,4 +1065,10 @@ void *ab_resolve(const char *name) {
     return hit ? hit->p : 0;
 }
 
-void ab_shims_reset(void) { heap_now = heap_peak = heap_fail = 0; memset(F, 0, sizeof F); memset(tls, 0, sizeof tls); }
+void ab_shims_reset(void) {
+    heap_now = heap_peak = heap_fail = 0;
+    n_cxa_throw = n_lua_throw = n_throw_sites = 0;
+    last_io[0] = 0;
+    memset(F, 0, sizeof F);
+    memset(tls, 0, sizeof tls);
+}

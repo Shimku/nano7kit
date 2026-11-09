@@ -616,6 +616,7 @@ static void hook_lua_throw(void *L, int err) {
         snprintf(b, sizeof b, "luaD_throw longjmp err=%d", err);
         plat_log_line(b);
         plat_log_flush();
+        ab_note_lua_throw(err);
         fn_longjmp(lua_lj_jb[slot], 1);
     }
     plat_log_line("luaD_throw no errorJmp, orig");

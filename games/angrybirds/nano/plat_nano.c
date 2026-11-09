@@ -167,20 +167,21 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
     int leftover = 0;
     uint32_t size;
     uint8_t *tmp;
+    ab_note_io(req);
     fe_note_texfile(name);
     snprintf(log, sizeof log, "readFile begin '%s'", req);
     plat_log_line(log);
     plat_log_flush();
     p[0] = 0;
     /* Persist (highscores.lua): Android files dir is FILES_DIR (.../docs).
-     * A leftover save from an older recipe sits at DATA_DIR/highscores.lua
-     * (parent of docs). Do not fall back to packed assets for persist: on
-     * the host that is the converted template and hides a missing save.
+     * docs/ and the parent folder are the same persist location. A leftover
+     * save from an older recipe sits at DATA_DIR/highscores.lua (parent of
+     * docs). Do not fall back to packed assets for persist: on the host that
+     * is the converted template and hides a missing save.
      * Missing/invalid persist is empty, not an IOException (AppDataInputStream
      * fopen NULL -> throwError, which is the device reboot after parseIndex). */
     if (ab_persist_name(req)) {
-        slash = strrchr(req, '/');
-        leaf = (slash && slash[1]) ? slash + 1 : req;
+        leaf = ab_persist_leaf(req);
         if (req[0] == '/' && hb_fs_exists(req)) {
             snprintf(p, sizeof p, "%s", req);
             goto have;
@@ -189,7 +190,7 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
             snprintf(p, sizeof p, FILES_DIR "/%s", leaf);
             if (hb_fs_exists(p)) goto have;
             snprintf(p, sizeof p, DATA_DIR "/%s", leaf);
-            if (hb_fs_exists(p)) { leftover = 1; goto have; }
+            if (hb_fs_exists(p)) goto have;
         }
         snprintf(log, sizeof log, "readFile miss '%s'", req);
         plat_log_line(log);
@@ -230,6 +231,7 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
         return stub == 1 ? 0 : -1;
     }
 have:
+    if (ab_persist_name(req) && p[0] && !ab_persist_in_docs(p)) leftover = 1;
     size = hb_fs_size(p);
     snprintf(log, sizeof log, "readFile resolved '%s' %u bytes (pool used %u fail %u, OS free %u largest %u)",
              p, (unsigned)size, (unsigned)ab_heap_used(), (unsigned)ab_malloc_failures(),

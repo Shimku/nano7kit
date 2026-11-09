@@ -16,6 +16,13 @@ void ab_free(void *p);
 void *ab_realloc(void *p, size_t n);
 void ab_shims_reset(void);
 int ab_persist_name(const char *name);
+const char *ab_persist_leaf(const char *name);
+int ab_persist_in_docs(const char *path);
 int ab_persist_lua_ok(const char *name, const void *buf, uint32_t n);
 int ab_persist_empty(void **out, uint32_t *len);
+void ab_note_io(const char *name);
+void ab_note_lua_throw(int err);
+void ab_throw_report(void);
+int ab_cxa_throw_count(void);
+int ab_lua_throw_count(void);
 #endif
