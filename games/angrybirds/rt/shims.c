@@ -236,12 +236,13 @@ void ab_cxa_throw_log(void *obj, void *ti, void *dest) {
     if (g_so.base && ab_throw_lr >= (uint32_t)(uintptr_t)g_so.base &&
         ab_throw_lr < (uint32_t)(uintptr_t)(g_so.base + g_so.map_size))
         ra_off = ab_throw_lr - (uint32_t)(uintptr_t)g_so.base;
-    /* bundleIndex.idx / persist files throw IOException that GameApp catches. */
-    if (n && n[0] == 'N' && strstr(n, "IOException"))
-        return;
     snprintf(buf, sizeof buf, "cxa_throw type=%s obj=%p dest=%p d_off=0x%x lr=0x%x",
              n, obj, dest, off, ra_off);
     plat_log_line(buf);
+    plat_log_flush();
+    /* IOException is the packed-index / persist miss; dump is a String layout. */
+    if (n && strstr(n, "IOException"))
+        return;
     if (w) {
         snprintf(buf, sizeof buf, "  obj %08x %08x %08x %08x %08x %08x",
                  w[0], w[1], w[2], w[3], w[4], w[5]);

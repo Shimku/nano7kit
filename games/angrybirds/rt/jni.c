@@ -176,9 +176,13 @@ static jobject read_file(jstring name) {
     uint32_t n = 0;
     jbyteArray a;
     char log[192];
+    snprintf(log, sizeof log, "readFile begin '%s'", s);
+    plat_log_line(log);
+    plat_log_flush();
     if (plat_read_file(s, &buf, &n)) {
         snprintf(log, sizeof log, "readFile miss '%s'", s);
         plat_log_line(log);
+        plat_log_flush();
         return 0;
     }
     {
@@ -192,6 +196,7 @@ static jobject read_file(jstring name) {
                      n > 2 ? ((unsigned char *)buf)[2] : 0,
                      n > 3 ? ((unsigned char *)buf)[3] : 0);
             plat_log_line(log);
+            plat_log_flush();
         }
     }
     a = J_NewByteArray(0, (jsize)n);

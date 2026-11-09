@@ -64,6 +64,8 @@ static app_get_fn app_get;
 static sheet_ctor_fn sheet_ctor;
 static spr_ctor_fn spr_ctor;
 static cstr_fn str_cstr;
+typedef void (*parse_index_fn)(void *, const void *, const void *);
+static parse_index_fn parse_index;
 static int started;
 static int cam_hold;
 static float hold_scale, hold_left, hold_top;
@@ -71,6 +73,7 @@ static float world_minx, world_maxx, world_miny, world_maxy;
 static int world_bounds_ok;
 static uint32_t scale_saved[2], topleft_saved[2];
 static uint32_t sheet_ctor_saved[2], spr_ctor_saved[2];
+static uint32_t parse_index_saved[2];
 static int cam_hooks_on;
 static int block_sheet_loading;
 static int spr_log_n;
@@ -142,6 +145,7 @@ static void hook_set_scale(void *lua, float s);
 static void hook_set_topleft(void *lua, float left, float top);
 static void hook_sheet_ctor(void *self, void *ctx, const void *name);
 static void hook_spr_ctor(void *self, void *sheet, int x, int y, int w, int h, int ox, int oy);
+static void hook_parse_index(void *self, const void *name, const void *extra);
 static void mk_string(void *slot, const char *s);
 static void install_jump(void *fn, void *hook, uint32_t saved[2]);
 static void restore_jump(void *fn, const uint32_t saved[2]);
@@ -204,6 +208,10 @@ int ab_start(void) {
         "_ZN4game11SpriteSheetC1EPN2gr7ContextERKN4lang6StringE");
     spr_ctor = (spr_ctor_fn)so_sym(&g_so,
         "_ZN4game6SpriteC1EPNS_11SpriteSheetEiiiiii");
+    parse_index = (parse_index_fn)so_sym(&g_so,
+        "_ZN2io10FileBundle10parseIndexERKN4lang6StringES4_");
+    if (!parse_index && g_so.base)
+        parse_index = (parse_index_fn)(g_so.base + 0xea36c);
     if (set_scale) install_jump((void *)set_scale, (void *)hook_set_scale, scale_saved);
     if (set_topleft) install_jump((void *)set_topleft, (void *)hook_set_topleft, topleft_saved);
     cam_hooks_on = 1;
@@ -215,6 +223,13 @@ int ab_start(void) {
      * rect and stay put. Draw stretches onto the restored body. */
     if (spr_ctor) install_jump((void *)spr_ctor, (void *)hook_spr_ctor, spr_ctor_saved);
     if (sheet_ctor) install_jump((void *)sheet_ctor, (void *)hook_sheet_ctor, sheet_ctor_saved);
+    if (parse_index) {
+        install_jump((void *)parse_index, (void *)hook_parse_index, parse_index_saved);
+        plat_log_line("ab_start: parseIndex hook on");
+    } else {
+        plat_log_line("ab_start: parseIndex hook missing");
+    }
+    plat_log_flush();
     env = ab_jni_env();
     files = ab_jni_new_utf(plat_files_dir());
     plat_log_line("ab_start: nativeInit 480x320");
@@ -481,6 +496,49 @@ static int is_block_sheet_name(const char *p) {
     memcpy(stem, p, n);
     stem[n] = 0;
     return strcmp(stem, "INGAME") == 0 || strcmp(stem, "INGAME_1") == 0;
+}
+/* Android packs data/bundleIndex.idx; convert_assets never ships it. parseIndex
+ * constructs FileInputStream, JNI readFile returns NULL, then throwError<IOException>
+ * (~2.5KB+756B frames, VFP copy, __cxa_throw). Host qemu unwinds; the nano dies
+ * in that throw with no further log line. Skipping a missing index matches the
+ * catch-and-continue GameApp path (empty FileBundle, loose files via JNI). */
+static int bundle_file_present(const char *name) {
+    void *buf = 0;
+    uint32_t n = 0;
+    size_t len;
+    if (!name || !name[0]) return 0;
+    len = strlen(name);
+    if (name[len - 1] == '/') return 0;
+    if (plat_read_file(name, &buf, &n) == 0 && buf) {
+        free(buf);
+        return 1;
+    }
+    if (buf) free(buf);
+    return 0;
+}
+static void hook_parse_index(void *self, const void *name, const void *extra) {
+    const char *p = (name && str_cstr) ? str_cstr(name) : 0;
+    const char *e = (extra && str_cstr) ? str_cstr(extra) : 0;
+    char b[192];
+    snprintf(b, sizeof b, "parseIndex enter '%s' extra='%s'",
+             p && p[0] ? p : "?", e && e[0] ? e : "?");
+    plat_log_line(b);
+    plat_log_flush();
+    if (!bundle_file_present(p) && !bundle_file_present(e) &&
+        !bundle_file_present("data/bundleIndex.idx") &&
+        !bundle_file_present("bundleIndex.idx")) {
+        plat_log_line("parseIndex skip missing bundleIndex.idx");
+        plat_log_flush();
+        return;
+    }
+    plat_log_line("parseIndex orig");
+    plat_log_flush();
+    if (!parse_index) return;
+    restore_jump((void *)parse_index, parse_index_saved);
+    parse_index(self, name, extra);
+    patch_arm_jump((void *)parse_index, (void *)hook_parse_index);
+    plat_log_line("parseIndex orig done");
+    plat_log_flush();
 }
 static void hook_sheet_ctor(void *self, void *ctx, const void *name) {
     const char *p = (name && str_cstr) ? str_cstr(name) : 0;
