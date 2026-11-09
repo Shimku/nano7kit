@@ -211,6 +211,14 @@ have:
         return -1;
     }
     if (hb_fs_read(p, tmp, size + SLACK) < size) { free(tmp); return -1; }
+    if (!ab_persist_lua_ok(name, tmp, size)) {
+        char log[80];
+        snprintf(log, sizeof log, "highscores.lua skip invalid %u bytes", (unsigned)size);
+        plat_log_line(log);
+        plat_log_flush();
+        free(tmp);
+        return -1;
+    }
     *out = tmp; *len = size;
     return 0;
 }

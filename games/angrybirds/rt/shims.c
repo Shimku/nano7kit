@@ -213,8 +213,22 @@ void *ab_realloc(void *p, size_t n) {
     return q;
 }
 
-extern int fn_setjmp(void *b);
-extern void fn_longjmp(void *b, int v);
+extern int fn_setjmp(void *b) __attribute__((returns_twice));
+extern void fn_longjmp(void *b, int v) __attribute__((noreturn));
+
+int ab_persist_lua_ok(const char *name, const void *buf, uint32_t n) {
+    const unsigned char *p = (const unsigned char *)buf;
+    uint32_t i;
+    if (!name || !strstr(name, "highscores")) return 1;
+    /* Missing or tiny persist is empty, not a Lua error (Android pcall-miss). */
+    if (!p || n < 4) return 0;
+    if (n >= 4 && p[0] == 0x1b && p[1] == 'L' && p[2] == 'u' && p[3] == 'a') return 1;
+    for (i = 0; i + 5 <= n; i++) {
+        if (p[i] == 'L' && p[i + 1] == 'e' && p[i + 2] == 'v' && p[i + 3] == 'e' && p[i + 4] == 'l')
+            return 1;
+    }
+    return 0;
+}
 
 int ab_inflateInit_(void *s, const char *ver, int n) { return inflateInit_(s, ver, n); }
 int ab_inflate(void *s, int f) { return inflate(s, f); }
@@ -451,6 +465,15 @@ void *ab_fopen(const char *path, const char *mode) {
     if (!wr) {
         void *buf = 0; uint32_t n = 0;
         if (plat_read_file(path, &buf, &n)) { w->mag = 0; return 0; }
+        if (!ab_persist_lua_ok(path, buf, n)) {
+            char b[80];
+            snprintf(b, sizeof b, "highscores.lua skip invalid %u bytes", (unsigned)n);
+            plat_log_line(b);
+            plat_log_flush();
+            free(buf);
+            w->mag = 0;
+            return 0;
+        }
         w->data = buf; w->len = n; w->cap = n;
     } else {
         w->write = 1;
@@ -536,11 +559,35 @@ int ab_setvbuf(void *fp, char *b, int m, size_t s) { (void)fp; (void)b; (void)m;
 void *ab_freopen(const char *p, const char *m, void *fp) { (void)p; (void)m; return fp; }
 #else
 void *ab_fopen(const char *path, const char *mode) {
-    wrapf *w = 0; FILE *r; int i;
+    wrapf *w = 0; FILE *r; int i, wr;
     if (!path) return 0;
     fe_note_texfile(path);
+    wr = mode && (strchr(mode, 'w') || strchr(mode, 'a') || strchr(mode, '+'));
     r = try_open(path, mode);
     if (!r) return 0;
+    if (!wr && strstr(path, "highscores")) {
+        long n;
+        void *buf;
+        fseek(r, 0, SEEK_END);
+        n = ftell(r);
+        fseek(r, 0, SEEK_SET);
+        if (n < 0) n = 0;
+        buf = malloc((size_t)n + 1);
+        if (!buf) { fclose(r); return 0; }
+        if (n && fread(buf, 1, (size_t)n, r) != (size_t)n) { free(buf); fclose(r); return 0; }
+        ((char *)buf)[n] = 0;
+        if (!ab_persist_lua_ok(path, buf, (uint32_t)n)) {
+            char b[80];
+            snprintf(b, sizeof b, "highscores.lua skip invalid %u bytes", (unsigned)n);
+            plat_log_line(b);
+            plat_log_flush();
+            free(buf);
+            fclose(r);
+            return 0;
+        }
+        free(buf);
+        fseek(r, 0, SEEK_SET);
+    }
     for (i = 0; i < MAXF; i++) if (F[i].mag != FMAG) { w = &F[i]; break; }
     if (!w) { fclose(r); return 0; }
     memset(w, 0, sizeof *w);

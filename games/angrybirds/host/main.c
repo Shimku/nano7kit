@@ -87,6 +87,14 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
     if (n && fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); fclose(f); return -1; }
     ((char *)buf)[n] = 0;
     fclose(f);
+    if (!ab_persist_lua_ok(name, buf, (uint32_t)n)) {
+        char b[80];
+        snprintf(b, sizeof b, "highscores.lua skip invalid %u bytes", (unsigned)n);
+        plat_log_line(b);
+        plat_log_flush();
+        free(buf);
+        return -1;
+    }
     *out = buf; *len = (uint32_t)n;
     return 0;
 }

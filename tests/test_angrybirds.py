@@ -335,9 +335,17 @@ class SourceTests(unittest.TestCase):
         self.assertIn("so constructor done", (GAME / "rt" / "so_load.c").read_text())
         self.assertIn("nativeInit returned", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("first tick: nativeUpdate", (GAME / "rt" / "ab_entry.c").read_text())
-        self.assertGreaterEqual(ab.RECIPE, 10)
+        self.assertGreaterEqual(ab.RECIPE, 11)
         self.assertIn("do not stop music", (GAME / "nano" / "fn_nano.c").read_text())
         self.assertIn("1 MB largest after a 3 MB pool", (GAME / "nano" / "fn_nano.c").read_text())
+        self.assertIn("lua_lj_jb", (GAME / "rt" / "ab_entry.c").read_text())
+        self.assertIn("8-byte aligned", (GAME / "rt" / "ab_entry.c").read_text())
+        self.assertIn("lj->slot", (GAME / "rt" / "ab_entry.c").read_text())
+        self.assertIn("highscores.lua skip invalid", (GAME / "rt" / "shims.c").read_text())
+        jmp = (GAME / "nano" / "fn_jmp.S").read_text()
+        self.assertIn("vmrs", jmp)
+        self.assertIn("vmsr", jmp)
+        self.assertIn("vstmia r0!, {d8-d15}", jmp)
         self.assertIn("parseIndex skip missing", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("FileBundle10parseIndex", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("parseIndex hook on", (GAME / "rt" / "ab_entry.c").read_text())
@@ -511,10 +519,10 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertTrue(abso.is_file())
         docs = out / "docs"
         docs.mkdir(parents=True, exist_ok=True)
-        (docs / "highscores.lua").write_text(
-            "-- leftover persist, not valid Lua 5.1\n"
-            "this is not { valid lua = ???\n",
-            encoding="utf-8")
+        body = "Level1 = { completed=true, score=1,\n"
+        body = body + ("x" * (277 - len(body)))
+        self.assertEqual(len(body), 277)
+        (docs / "highscores.lua").write_text(body, encoding="ascii")
         env = self._harness_env()
         r = subprocess.run(
             ["qemu-arm-static", "-cpu", "cortex-a8", str(ABHOST),
@@ -524,12 +532,23 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("so_load abso", err, err[-4000:])
         self.assertIn("parseIndex skip missing", err, err[-4000:])
         self.assertIn("lua setjmp hook on", err, err[-2000:])
-        self.assertIn("WMMX/VFP-d16-31 restore nop", err, err[-2000:])
-        self.assertIn("luaD_throw longjmp", err, err[-8000:])
+        self.assertIn("luaD_throw longjmp err=3", err, err[-8000:])
+        self.assertIn("luaD_throw longjmp status=3", err, err[-8000:])
         self.assertIn("nativeInit returned", err, err[-4000:])
         self.assertNotIn("CRASH ", err)
         self.assertNotIn("lua_longjmp via", err)
+        self.assertNotIn("skip invalid", err)
         self.assertEqual(r.returncode, 0, err[-4000:])
+        (docs / "highscores.lua").write_text("this is not { valid lua = ???\n", encoding="ascii")
+        r2 = subprocess.run(
+            ["qemu-arm-static", "-cpu", "cortex-a8", str(ABHOST),
+             str(ABDATA), str(abso), str(out), "0", "0"],
+            env=env, capture_output=True, text=True, timeout=180)
+        err2 = (r2.stderr or "") + (r2.stdout or "")
+        self.assertIn("highscores.lua skip invalid", err2, err2[-4000:])
+        self.assertNotIn("luaD_throw longjmp err=3", err2)
+        self.assertIn("nativeInit returned", err2, err2[-4000:])
+        self.assertEqual(r2.returncode, 0, err2[-4000:])
 
     def test_gesture_frame_fixed_pinch_and_l1_l2_l3(self):
         import subprocess

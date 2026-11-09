@@ -114,10 +114,11 @@ static float pinch_d0, pinch_s0, pinch_cx, pinch_cy;
 #define AB_OFF_WMMXC      0x11774cu
 #define AB_OFF_VFP_D16    0x1176b4u
 #define AB_LUA_ERRJMP     96
-#define AB_LJ_JB_WORDS    48
+#define AB_LJ_MAX         8
+typedef uint32_t ab_jmp_buf[28] __attribute__((aligned(8)));
 
 extern int fn_setjmp(void *b) __attribute__((returns_twice));
-extern void fn_longjmp(void *b, int v);
+extern void fn_longjmp(void *b, int v) __attribute__((noreturn));
 
 static uint32_t ru32(const void *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static float rf32(const void *p) { float v; memcpy(&v, p, 4); return v; }
@@ -165,8 +166,8 @@ static void hook_set_topleft(void *lua, float left, float top);
 static void hook_sheet_ctor(void *self, void *ctx, const void *name);
 static void hook_spr_ctor(void *self, void *sheet, int x, int y, int w, int h, int ox, int oy);
 static void hook_parse_index(void *self, const void *name, const void *extra);
-static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud);
-static void hook_lua_throw(void *L, int err);
+static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) __attribute__((noinline));
+static void hook_lua_throw(void *L, int err) __attribute__((noinline));
 static void patch_unwind_nops(void);
 static void mk_string(void *slot, const char *s);
 static void install_jump(void *fn, void *hook, uint32_t saved[2]);
@@ -543,25 +544,37 @@ static void patch_unwind_nops(void) {
 }
 
 /* Lua 5.1 was built as C++: LUAI_THROW is throw(lua_longjmp*), LUAI_TRY is
- * catch. Device __cxa_throw of that type dies in EHABI (no abort line). The
- * same pcall is setjmp/longjmp in C Lua; route it that way and never enter
- * the .so unwinder for script errors. */
+ * catch. Device __cxa_throw of that type dies in EHABI. Route pcall through
+ * fn_setjmp in THIS frame (the replacement for luaD_rawrunprotected; a
+ * wrapper that setjmp'd and returned would leave a dead jmp_buf). The
+ * jmp_buf lives in BSS, 8-byte aligned, like fn_nano's unwind buffer:
+ * putting it on the C stack after the 12-byte lua_longjmp header made
+ * vstmia/vldmia of d8-d15 unaligned (qemu ignores, the nano reboots and
+ * tears log.txt). */
 struct ab_lua_lj {
     struct ab_lua_lj *previous;
-    int dummy;
+    int slot;
     volatile int status;
-    uint32_t jb[AB_LJ_JB_WORDS];
 };
+static struct ab_lua_lj lua_lj_hdr[AB_LJ_MAX];
+static ab_jmp_buf lua_lj_jb[AB_LJ_MAX];
+static int lua_lj_n;
 static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
-    struct ab_lua_lj lj;
     uint8_t *ls = (uint8_t *)L;
+    struct ab_lua_lj *lj;
+    volatile int i;
     int st;
     static int nlog;
-    memset(&lj, 0, sizeof lj);
-    if (ls) memcpy(&lj.previous, ls + AB_LUA_ERRJMP, 4);
-    lj.status = 0;
+    i = lua_lj_n;
+    if (i < 0 || i >= AB_LJ_MAX) i = 0;
+    lua_lj_n = i + 1;
+    lj = &lua_lj_hdr[i];
+    lj->previous = 0;
+    lj->slot = i;
+    lj->status = 0;
+    if (ls) memcpy(&lj->previous, ls + AB_LUA_ERRJMP, 4);
     if (ls) {
-        void *p = &lj;
+        void *p = lj;
         memcpy(ls + AB_LUA_ERRJMP, &p, 4);
     }
     if (nlog < 3) {
@@ -569,30 +582,39 @@ static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
         plat_log_flush();
         nlog++;
     }
-    st = fn_setjmp(lj.jb);
+    /* After longjmp, only volatile locals and BSS are defined. Index the
+     * header through i; do not keep lj in a caller-saved register. */
+    st = fn_setjmp(lua_lj_jb[i]);
     if (st == 0) {
         if (f) f(L, ud);
+        asm volatile("" ::: "memory");
     } else {
         char b[80];
-        snprintf(b, sizeof b, "luaD_throw longjmp status=%d", lj.status);
+        snprintf(b, sizeof b, "luaD_throw longjmp status=%d", lua_lj_hdr[i].status);
         plat_log_line(b);
         plat_log_flush();
-        if (lj.status == 0) lj.status = -1;
+        if (lua_lj_hdr[i].status == 0) lua_lj_hdr[i].status = -1;
     }
-    if (ls) memcpy(ls + AB_LUA_ERRJMP, &lj.previous, 4);
-    return lj.status;
+    if (ls) memcpy(ls + AB_LUA_ERRJMP, &lua_lj_hdr[i].previous, 4);
+    lua_lj_n = i;
+    return lua_lj_hdr[i].status;
 }
 static void hook_lua_throw(void *L, int err) {
     uint8_t *ls = (uint8_t *)L;
     struct ab_lua_lj *lj = 0;
+    int slot;
     if (ls) memcpy(&lj, ls + AB_LUA_ERRJMP, 4);
-    if (lj) {
+    slot = lj ? lj->slot : -1;
+    /* Use the stored slot, not (lj - hdr) pointer math: nano -Os turned that
+     * subtract into asr #2 (div 4) against a 12-byte struct and longjmp'd a
+     * never-setjmp'd buffer. */
+    if (lj && slot >= 0 && slot < AB_LJ_MAX && &lua_lj_hdr[slot] == lj) {
         char b[80];
         lj->status = err;
         snprintf(b, sizeof b, "luaD_throw longjmp err=%d", err);
         plat_log_line(b);
         plat_log_flush();
-        fn_longjmp(lj->jb, 1);
+        fn_longjmp(lua_lj_jb[slot], 1);
     }
     plat_log_line("luaD_throw no errorJmp, orig");
     plat_log_flush();

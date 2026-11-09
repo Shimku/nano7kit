@@ -181,7 +181,7 @@ void fn_nano_poll(void) {
     }
 }
 
-typedef uint32_t fn_jmp_buf[26] __attribute__((aligned(8)));
+typedef uint32_t fn_jmp_buf[28] __attribute__((aligned(8)));
 extern int fn_setjmp(fn_jmp_buf b) __attribute__((returns_twice));
 extern void fn_longjmp(fn_jmp_buf b, int v) __attribute__((noreturn));
 static fn_jmp_buf unwind;

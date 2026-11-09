@@ -1,7 +1,9 @@
 @ fn_jmp.S: setjmp/longjmp for the nano (nano7kit, MIT). ARM mode;
 @ newlib's setjmp is Thumb and saves d0-d31; the loader refuses Thumb VFP.
 @ Ka3D SjLj (recomp C calling setjmp) and the frame-loop unwind share this.
-@ buffer: r4-r11, sp, lr (10 words), then d8-d15 (16 words). jmp_buf is 160 bytes.
+@ buffer (8-byte aligned): r4-r11, sp, lr (10 words), d8-d15 (16 words), FPSCR.
+@ 27 words used; callers allocate 28. vldmia of doubles faults if the address
+@ is not 8-byte aligned (qemu often ignores that; the nano does not).
     .syntax unified
     .arm
     .section .note.GNU-stack,"",%progbits
@@ -11,16 +13,21 @@
     .type fn_setjmp, %function
 fn_setjmp:
     stmia r0!, {r4-r11, sp, lr}
-    vstmia r0, {d8-d15}
+    vstmia r0!, {d8-d15}
+    vmrs r1, fpscr
+    str r1, [r0]
     mov r0, #0
     bx lr
     .size fn_setjmp, .-fn_setjmp
     .global fn_longjmp
     .type fn_longjmp, %function
 fn_longjmp:
+    mov r2, r1
     ldmia r0!, {r4-r11, sp, lr}
-    vldmia r0, {d8-d15}
-    movs r0, r1
+    vldmia r0!, {d8-d15}
+    ldr r1, [r0]
+    vmsr fpscr, r1
+    movs r0, r2
     moveq r0, #1
     bx lr
     .size fn_longjmp, .-fn_longjmp
