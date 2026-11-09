@@ -46,6 +46,10 @@ def load_so(data: bytes) -> dict:
         elif p_type == PT_DYNAMIC:
             dyn_off, dyn_sz = p_off, p_fs
         elif p_type == PT_ARM_EXIDX:
+            # Inside the RX PT_LOAD. PREL31 in .ARM.exidx / .ARM.extab is not
+            # in DT_REL (personality & landing pads stay relative to the
+            # entry). Compact pr0/pr1/pr2 literals at get_eit_entry are
+            # R_ARM_RELATIVE and become ABS32 vs __ab_so_base below.
             exidx_off, exidx_sz = p_v, p_ms
     size = (hi + 0xFFF) & ~0xFFF
     img = bytearray(size)

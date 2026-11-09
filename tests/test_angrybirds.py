@@ -319,15 +319,29 @@ class SourceTests(unittest.TestCase):
         self.assertIn("so constructor done", (GAME / "rt" / "so_load.c").read_text())
         self.assertIn("nativeInit returned", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("first tick: nativeUpdate", (GAME / "rt" / "ab_entry.c").read_text())
-        self.assertGreaterEqual(ab.RECIPE, 8)
+        self.assertGreaterEqual(ab.RECIPE, 9)
         self.assertIn("parseIndex skip missing", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("FileBundle10parseIndex", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("parseIndex hook on", (GAME / "rt" / "ab_entry.c").read_text())
+        entry = (GAME / "rt" / "ab_entry.c").read_text()
+        self.assertIn("luaD_throw longjmp", entry)
+        self.assertIn("lua pcall setjmp", entry)
+        self.assertIn("WMMX/VFP-d16-31 restore nop", entry)
+        self.assertIn("AB_OFF_LUA_THROW", entry)
+        self.assertIn("so_load abso", (GAME / "rt" / "so_load.c").read_text())
         self.assertIn("readFile begin", (GAME / "rt" / "jni.c").read_text())
         shims = (GAME / "rt" / "shims.c").read_text()
         self.assertIn("cxa_throw type=", shims)
         self.assertLess(shims.index("cxa_throw type="),
                         shims.index('strstr(n, "IOException")'))
+        self.assertIn("Find_exidx miss", shims)
+        self.assertIn("Find_exidx hit", shims)
+        self.assertIn("lua_longjmp via EHABI", shims)
+        self.assertIn("Persist first", shims)
+        self.assertIn("FILES_DIR", plat)
+        self.assertIn('FILES_DIR "/%s"', plat)
+        hostm = (GAME / "host" / "main.c").read_text()
+        self.assertIn("files_dir, leaf", hostm)
         self.assertIn("malloc FAIL", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("jni_drop", (GAME / "rt" / "jni.c").read_text())
         self.assertIn("ab_crumb", (GAME / "nano" / "fn_nano.c").read_text())
@@ -339,6 +353,7 @@ class SourceTests(unittest.TestCase):
         self.assertIn("init_array[", conv)
         self.assertIn("PvZ v32", conv)
         self.assertIn("DT_PLTGOT", conv)
+        self.assertIn("PREL31", conv)
         jmp = (GAME / "nano" / "fn_jmp.S").read_text()
         self.assertIn(".set setjmp, fn_setjmp", jmp)
 
@@ -463,6 +478,40 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertTrue((out / "panel-end.ppm").is_file(), err[-2000:])
         self.assertTrue((out / "panel-restart.ppm").is_file(), err[-2000:])
         self.assertTrue((out / "panel-next.ppm").is_file(), err[-2000:])
+
+    def test_abso_bad_highscores_lua_error_is_caught(self):
+        """Device-layout .abso + leftover highscores.lua: Lua error is caught."""
+        import subprocess
+        conv = GAME / "tools" / "so_to_obj.py"
+        out = ROOT / "build" / "angrybirds_rc" / "lua-catch-test"
+        out.mkdir(parents=True, exist_ok=True)
+        abso = out / "libangrybirds.abso"
+        rconv = subprocess.run(
+            ["python3", str(conv), str(ABSO), str(abso)],
+            capture_output=True, text=True, timeout=60)
+        self.assertEqual(rconv.returncode, 0, rconv.stderr + rconv.stdout)
+        self.assertTrue(abso.is_file())
+        docs = out / "docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        (docs / "highscores.lua").write_text(
+            "-- leftover persist, not valid Lua 5.1\n"
+            "this is not { valid lua = ???\n",
+            encoding="utf-8")
+        env = self._harness_env()
+        r = subprocess.run(
+            ["qemu-arm-static", "-cpu", "cortex-a8", str(ABHOST),
+             str(ABDATA), str(abso), str(out), "0", "0"],
+            env=env, capture_output=True, text=True, timeout=180)
+        err = (r.stderr or "") + (r.stdout or "")
+        self.assertIn("so_load abso", err, err[-4000:])
+        self.assertIn("parseIndex skip missing", err, err[-4000:])
+        self.assertIn("lua setjmp hook on", err, err[-2000:])
+        self.assertIn("WMMX/VFP-d16-31 restore nop", err, err[-2000:])
+        self.assertIn("luaD_throw longjmp", err, err[-8000:])
+        self.assertIn("nativeInit returned", err, err[-4000:])
+        self.assertNotIn("CRASH ", err)
+        self.assertNotIn("lua_longjmp via", err)
+        self.assertEqual(r.returncode, 0, err[-4000:])
 
     def test_gesture_frame_fixed_pinch_and_l1_l2_l3(self):
         import subprocess

@@ -241,6 +241,8 @@ void ab_cxa_throw_log(void *obj, void *ti, void *dest) {
     plat_log_line(buf);
     plat_log_flush();
     /* IOException is the packed-index / persist miss; dump is a String layout. */
+    if (n && strstr(n, "lua_longjmp"))
+        plat_log_line("lua_longjmp via EHABI (setjmp missed)");
     if (n && strstr(n, "IOException"))
         return;
     if (w) {
@@ -299,10 +301,31 @@ void ab_cxa_finalize(void *d) { (void)d; }
 
 typedef unsigned int _Unwind_Ptr;
 _Unwind_Ptr ab_gnu_Unwind_Find_exidx(_Unwind_Ptr pc, int *pcount) {
-    uint8_t *p = (uint8_t *)(uintptr_t)pc;
+    /* get_eit_entry passes PC-2. Tables live in the mapped .so / .abso at
+     * runtime base + trailer exidx_off (PREL31 in .ARM.exidx/.ARM.extab is
+     * not in DT_REL; relative offsets stay valid after rebase). A PC in a
+     * veneer or our install_jump stub is outside the blob. */
+    uint8_t *p = (uint8_t *)(uintptr_t)(pc & ~1u);
+    static int nlog;
+    char b[128];
     if (pcount) *pcount = 0;
     if (!g_so.base || !g_so.exidx_count) return 0;
-    if (p < g_so.base || p >= g_so.base + g_so.map_size) return 0;
+    if (p < g_so.base || p >= g_so.base + g_so.map_size) {
+        if (nlog < 8) {
+            snprintf(b, sizeof b, "Find_exidx miss pc=%p so=%p..+%u",
+                     (void *)p, (void *)g_so.base, (unsigned)g_so.map_size);
+            plat_log_line(b);
+            plat_log_flush();
+            nlog++;
+        }
+        return 0;
+    }
+    if (nlog < 3) {
+        snprintf(b, sizeof b, "Find_exidx hit pc_off=0x%x n=%u",
+                 (unsigned)(p - g_so.base), (unsigned)g_so.exidx_count);
+        plat_log_line(b);
+        nlog++;
+    }
     if (pcount) *pcount = (int)g_so.exidx_count;
     return (_Unwind_Ptr)(uintptr_t)(g_so.base + g_so.exidx_off);
 }
@@ -369,8 +392,12 @@ static const char *strip_data(const char *name) {
 static FILE *try_open(const char *path, const char *mode) {
     FILE *r;
     char p[512], p2[512];
-    const char *base, *slash;
+    const char *base, *slash, *leaf;
     if (!path) return 0;
+    /* Persist first: nativeInit fopen's plat_files_dir()/highscores.lua as
+     * an absolute path. Hitting data_dir/basename first loaded the packed
+     * template and hid Lua errors the device actually throws. */
+    if (path[0] == '/' && (r = fopen(path, mode))) return r;
     snprintf(p, sizeof p, "%s/%s", plat_files_dir(), path);
     if ((r = fopen(p, mode))) return r;
     snprintf(p, sizeof p, "%s/%s", plat_data_dir(), path);
@@ -381,11 +408,13 @@ static FILE *try_open(const char *path, const char *mode) {
         if ((r = fopen(p, mode))) return r;
     }
     slash = strrchr(path, '/');
-    if (slash) {
-        snprintf(p, sizeof p, "%s/%s", plat_data_dir(), slash + 1);
+    leaf = slash ? slash + 1 : path;
+    if (leaf[0]) {
+        snprintf(p, sizeof p, "%s/%s", plat_files_dir(), leaf);
+        if ((r = fopen(p, mode))) return r;
+        snprintf(p, sizeof p, "%s/%s", plat_data_dir(), leaf);
         if ((r = fopen(p, mode))) return r;
     }
-    if ((r = fopen(path, mode))) return r;
     /* Lua files are often named without the suffix in Ka3D logs. */
     if (!strchr(path, '.')) {
         snprintf(p2, sizeof p2, "%s.lua", path);

@@ -66,6 +66,10 @@ static spr_ctor_fn spr_ctor;
 static cstr_fn str_cstr;
 typedef void (*parse_index_fn)(void *, const void *, const void *);
 static parse_index_fn parse_index;
+typedef int (*lua_rawrun_fn)(void *, void (*)(void *, void *), void *);
+typedef void (*lua_throw_fn)(void *, int);
+static lua_rawrun_fn lua_rawrun;
+static lua_throw_fn lua_throw;
 static int started;
 static int cam_hold;
 static float hold_scale, hold_left, hold_top;
@@ -74,6 +78,8 @@ static int world_bounds_ok;
 static uint32_t scale_saved[2], topleft_saved[2];
 static uint32_t sheet_ctor_saved[2], spr_ctor_saved[2];
 static uint32_t parse_index_saved[2];
+static uint32_t lua_rawrun_saved[2], lua_throw_saved[2];
+static uint32_t wmmxd_saved[2], wmmxc_saved[2], vfpd16_saved[2];
 static int cam_hooks_on;
 static int block_sheet_loading;
 static int spr_log_n;
@@ -99,6 +105,19 @@ static float pinch_d0, pinch_s0, pinch_cx, pinch_cy;
 #define B2_JOINT_COUNT (B2_TAIL + 564u)
 #define B2_GRAV_X (B2_TAIL + 568u)
 #define B2_GRAV_Y (B2_TAIL + 572u)
+/* Local (t) Lua C++ EHABI sites in this .so. luaD_rawrunprotected builds a
+ * 12-byte lua_longjmp (prev, dummy, status) at L->errorJmp (offset 96) and
+ * catches via __cxa_begin_catch; luaD_throw __cxa_throw's that pointer. */
+#define AB_OFF_LUA_RAWRUN 0xa3114u
+#define AB_OFF_LUA_THROW  0xa3390u
+#define AB_OFF_WMMXD      0x1176c4u
+#define AB_OFF_WMMXC      0x11774cu
+#define AB_OFF_VFP_D16    0x1176b4u
+#define AB_LUA_ERRJMP     96
+#define AB_LJ_JB_WORDS    48
+
+extern int fn_setjmp(void *b) __attribute__((returns_twice));
+extern void fn_longjmp(void *b, int v);
 
 static uint32_t ru32(const void *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static float rf32(const void *p) { float v; memcpy(&v, p, 4); return v; }
@@ -146,6 +165,9 @@ static void hook_set_topleft(void *lua, float left, float top);
 static void hook_sheet_ctor(void *self, void *ctx, const void *name);
 static void hook_spr_ctor(void *self, void *sheet, int x, int y, int w, int h, int ox, int oy);
 static void hook_parse_index(void *self, const void *name, const void *extra);
+static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud);
+static void hook_lua_throw(void *L, int err);
+static void patch_unwind_nops(void);
 static void mk_string(void *slot, const char *s);
 static void install_jump(void *fn, void *hook, uint32_t saved[2]);
 static void restore_jump(void *fn, const uint32_t saved[2]);
@@ -168,6 +190,11 @@ int ab_start(void) {
         plat_log_line("so_load failed");
         return 1;
     }
+    /* Cortex-A8 is VFPv3-D16, no WMMX. libgcc restore_non_core_regs will
+     * vldmia d16-d31 / ldcl WMMX if a frame's unwind flags clear those skip
+     * bits (initial 0xFFFFFFFF skips; later frames may not). qemu often
+     * ignores the undef coprocessor ops; the nano reboots. */
+    patch_unwind_nops();
     so_run_init(&g_so);
     {
         char b[96];
@@ -228,6 +255,13 @@ int ab_start(void) {
         plat_log_line("ab_start: parseIndex hook on");
     } else {
         plat_log_line("ab_start: parseIndex hook missing");
+    }
+    if (g_so.base) {
+        lua_rawrun = (lua_rawrun_fn)(g_so.base + AB_OFF_LUA_RAWRUN);
+        lua_throw = (lua_throw_fn)(g_so.base + AB_OFF_LUA_THROW);
+        install_jump((void *)lua_rawrun, (void *)hook_lua_rawrun, lua_rawrun_saved);
+        install_jump((void *)lua_throw, (void *)hook_lua_throw, lua_throw_saved);
+        plat_log_line("ab_start: lua setjmp hook on");
     }
     plat_log_flush();
     env = ab_jni_env();
@@ -497,6 +531,77 @@ static int is_block_sheet_name(const char *p) {
     stem[n] = 0;
     return strcmp(stem, "INGAME") == 0 || strcmp(stem, "INGAME_1") == 0;
 }
+/* libgcc restore of VFPv3 d16-d31 and Wireless MMX: undefined on the nano. */
+static void unwind_copro_nop(void *p) { (void)p; }
+static void patch_unwind_nops(void) {
+    if (!g_so.base) return;
+    install_jump(g_so.base + AB_OFF_WMMXD, (void *)unwind_copro_nop, wmmxd_saved);
+    install_jump(g_so.base + AB_OFF_WMMXC, (void *)unwind_copro_nop, wmmxc_saved);
+    install_jump(g_so.base + AB_OFF_VFP_D16, (void *)unwind_copro_nop, vfpd16_saved);
+    plat_log_line("ab_start: WMMX/VFP-d16-31 restore nop");
+    plat_log_flush();
+}
+
+/* Lua 5.1 was built as C++: LUAI_THROW is throw(lua_longjmp*), LUAI_TRY is
+ * catch. Device __cxa_throw of that type dies in EHABI (no abort line). The
+ * same pcall is setjmp/longjmp in C Lua; route it that way and never enter
+ * the .so unwinder for script errors. */
+struct ab_lua_lj {
+    struct ab_lua_lj *previous;
+    int dummy;
+    volatile int status;
+    uint32_t jb[AB_LJ_JB_WORDS];
+};
+static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
+    struct ab_lua_lj lj;
+    uint8_t *ls = (uint8_t *)L;
+    int st;
+    static int nlog;
+    memset(&lj, 0, sizeof lj);
+    if (ls) memcpy(&lj.previous, ls + AB_LUA_ERRJMP, 4);
+    lj.status = 0;
+    if (ls) {
+        void *p = &lj;
+        memcpy(ls + AB_LUA_ERRJMP, &p, 4);
+    }
+    if (nlog < 3) {
+        plat_log_line("lua pcall setjmp");
+        plat_log_flush();
+        nlog++;
+    }
+    st = fn_setjmp(lj.jb);
+    if (st == 0) {
+        if (f) f(L, ud);
+    } else {
+        char b[80];
+        snprintf(b, sizeof b, "luaD_throw longjmp status=%d", lj.status);
+        plat_log_line(b);
+        plat_log_flush();
+        if (lj.status == 0) lj.status = -1;
+    }
+    if (ls) memcpy(ls + AB_LUA_ERRJMP, &lj.previous, 4);
+    return lj.status;
+}
+static void hook_lua_throw(void *L, int err) {
+    uint8_t *ls = (uint8_t *)L;
+    struct ab_lua_lj *lj = 0;
+    if (ls) memcpy(&lj, ls + AB_LUA_ERRJMP, 4);
+    if (lj) {
+        char b[80];
+        lj->status = err;
+        snprintf(b, sizeof b, "luaD_throw longjmp err=%d", err);
+        plat_log_line(b);
+        plat_log_flush();
+        fn_longjmp(lj->jb, 1);
+    }
+    plat_log_line("luaD_throw no errorJmp, orig");
+    plat_log_flush();
+    if (!lua_throw) return;
+    restore_jump((void *)lua_throw, lua_throw_saved);
+    lua_throw(L, err);
+    patch_arm_jump((void *)lua_throw, (void *)hook_lua_throw);
+}
+
 /* Android packs data/bundleIndex.idx; convert_assets never ships it. parseIndex
  * constructs FileInputStream, JNI readFile returns NULL, then throwError<IOException>
  * (~2.5KB+756B frames, VFP copy, __cxa_throw). Host qemu unwinds; the nano dies

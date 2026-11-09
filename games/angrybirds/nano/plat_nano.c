@@ -159,20 +159,41 @@ const char *plat_data_dir(void) { return DATA_DIR; }
 
 int plat_read_file(const char *name, void **out, uint32_t *len) {
     char p[96];
-    const char *base = name ? name : "";
+    const char *req = name ? name : "";
+    const char *base = req;
+    const char *slash;
+    const char *leaf;
     fe_note_texfile(name);
     uint32_t size;
     uint8_t *tmp;
-    if (!strncmp(base, "data/", 5)) base += 5;
-    snprintf(p, sizeof p, DATA_DIR "/%s", base);
-    if (!hb_fs_exists(p)) {
-        const char *slash = strrchr(base, '/');
-        if (slash) snprintf(p, sizeof p, DATA_DIR "/%s", slash + 1);
+    p[0] = 0;
+    /* nativeInit passes plat_files_dir()/highscores.lua as an absolute path.
+     * Prefer that persist file, then DATA_DIR, so a leftover save is not
+     * hidden behind the packed template (and a missing save 404s cleanly). */
+    if (req[0] == '/' && hb_fs_exists(req)) {
+        snprintf(p, sizeof p, "%s", req);
+        goto have;
     }
-    if (!hb_fs_exists(p)) {
+    if (!strncmp(base, "data/", 5)) base += 5;
+    if (!strchr(base, '/') && base[0]) {
+        snprintf(p, sizeof p, FILES_DIR "/%s", base);
+        if (hb_fs_exists(p)) goto have;
+    }
+    snprintf(p, sizeof p, DATA_DIR "/%s", base);
+    if (hb_fs_exists(p)) goto have;
+    slash = strrchr(base, '/');
+    leaf = (slash && slash[1]) ? slash + 1 : base;
+    if (leaf[0]) {
+        snprintf(p, sizeof p, FILES_DIR "/%s", leaf);
+        if (hb_fs_exists(p)) goto have;
+        snprintf(p, sizeof p, DATA_DIR "/%s", leaf);
+        if (hb_fs_exists(p)) goto have;
+    }
+    {
         int stub = ab_stub_audio(name, out, len);
         return stub == 1 ? 0 : -1;
     }
+have:
     size = hb_fs_size(p);
     {
         char log[192];

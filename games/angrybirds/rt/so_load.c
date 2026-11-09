@@ -16,8 +16,12 @@
 #endif
 
 #define EI_NIDENT 16
+#define ET_REL 1
 #define ET_DYN 3
 #define EM_ARM 40
+#define SHT_PROGBITS 1
+#define SHT_SYMTAB 2
+#define SHT_REL 9
 #define PT_LOAD 1
 #define PT_DYNAMIC 2
 #define PT_ARM_EXIDX 0x70000001
@@ -48,6 +52,10 @@ typedef struct {
 typedef struct {
     uint32_t p_type, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags, p_align;
 } Elf32_Phdr;
+typedef struct {
+    uint32_t sh_name, sh_type, sh_flags, sh_addr, sh_offset, sh_size;
+    uint32_t sh_link, sh_info, sh_addralign, sh_entsize;
+} Elf32_Shdr;
 typedef struct {
     uint32_t r_offset, r_info;
 } Elf32_Rel;
@@ -123,6 +131,98 @@ int so_load(const char *path, so_image *out) {
     return 0;
 }
 #else
+/* Load the ET_REL so_to_obj emits: one .abso blob plus ABS32 relocs, the same
+ * image the hbapp linker+loader uses. Trailer is exidx/init offsets. */
+static int so_load_abso(uint8_t *file, size_t file_n, so_image *out) {
+    Elf32_Ehdr *eh = (Elf32_Ehdr *)file;
+    Elf32_Shdr *sh;
+    Elf32_Shdr *abso = 0, *rel = 0, *symsh = 0, *strsh = 0;
+    int i;
+    uint8_t *img;
+    const char *str;
+    Elf32_Sym *sym;
+    int nsym, nrel;
+    if (eh->e_shentsize != sizeof(Elf32_Shdr) || !eh->e_shnum) return -1;
+    sh = (Elf32_Shdr *)(file + eh->e_shoff);
+    for (i = 0; i < eh->e_shnum; i++) {
+        if (sh[i].sh_type == SHT_PROGBITS && (sh[i].sh_flags & 7) == 7) abso = &sh[i];
+        else if (sh[i].sh_type == SHT_REL) rel = &sh[i];
+        else if (sh[i].sh_type == SHT_SYMTAB) {
+            symsh = &sh[i];
+            if (sh[i].sh_link < eh->e_shnum) strsh = &sh[sh[i].sh_link];
+        }
+    }
+    if (!abso || !rel || !symsh || !strsh) return -1;
+    if (abso->sh_offset + abso->sh_size > file_n || abso->sh_size < 16) return -1;
+    if (rel->sh_offset + rel->sh_size > file_n) return -1;
+    if (symsh->sh_offset + symsh->sh_size > file_n) return -1;
+    if (strsh->sh_offset + strsh->sh_size > file_n) return -1;
+    out->map_size = (abso->sh_size + 0xfffu) & ~0xfffu;
+    out->base = mmap(0, out->map_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (out->base == MAP_FAILED) return -1;
+    memset(out->base, 0, out->map_size);
+    memcpy(out->base, file + abso->sh_offset, abso->sh_size);
+    img = out->base;
+    str = (const char *)(file + strsh->sh_offset);
+    sym = (Elf32_Sym *)(file + symsh->sh_offset);
+    nsym = (int)(symsh->sh_size / 16);
+    nrel = (int)(rel->sh_size / 8);
+    for (i = 0; i < nrel; i++) {
+        Elf32_Rel *r = (Elf32_Rel *)(file + rel->sh_offset) + i;
+        unsigned si = ELF32_R_SYM(r->r_info);
+        uint32_t *loc;
+        if (r->r_offset + 4 > abso->sh_size) continue;
+        loc = (uint32_t *)(img + r->r_offset);
+        if (si == 0 || si >= (unsigned)nsym) {
+            *loc += (uint32_t)(uintptr_t)img;
+            continue;
+        }
+        if (sym[si].st_shndx == 0) {
+            const char *name = str + sym[si].st_name;
+            void *p = ab_resolve(name);
+            /* so_to_obj stores remapped UNDEF names (ab_malloc, ab_glFoo).
+             * ab_resolve is keyed on the original .so import. */
+            if (!p && name && !strncmp(name, "ab_", 3)) {
+                char orig[80];
+                p = ab_resolve(name + 3);
+                if (!p && strlen(name + 3) + 2 < sizeof orig) {
+                    orig[0] = orig[1] = '_';
+                    memcpy(orig + 2, name + 3, strlen(name + 3) + 1);
+                    p = ab_resolve(orig);
+                }
+            }
+            if (!p) {
+                char b[160];
+                snprintf(b, sizeof b, "so_load abso: unresolved import %s", name);
+                plat_log_line(b);
+                plat_fatal(b);
+            }
+            *loc += (uint32_t)(uintptr_t)p;
+        } else {
+            *loc += (uint32_t)(uintptr_t)img;
+        }
+    }
+    {
+        uint32_t *t = (uint32_t *)(img + abso->sh_size - 16);
+        out->exidx_off = t[0];
+        out->exidx_count = t[1];
+        out->init_off = t[2];
+        out->init_count = t[3];
+    }
+    {
+        char b[128];
+        snprintf(b, sizeof b, "so_load abso size %u exidx off=0x%x n=%u",
+                 (unsigned)abso->sh_size, out->exidx_off, out->exidx_count);
+        plat_log_line(b);
+    }
+    __builtin___clear_cache((char *)out->base, (char *)out->base + out->map_size);
+    out->loaded = 1;
+    g_so = *out;
+    ab_install_cxa_hook();
+    return 0;
+}
+
 int so_load(const char *path, so_image *out) {
     int fd;
     struct stat st;
@@ -140,7 +240,16 @@ int so_load(const char *path, so_image *out) {
     close(fd);
     if (file == MAP_FAILED) return -1;
     eh = (Elf32_Ehdr *)file;
-    if (memcmp(eh->e_ident, "\177ELF", 4) || eh->e_type != ET_DYN || eh->e_machine != EM_ARM) {
+    if (memcmp(eh->e_ident, "\177ELF", 4) || eh->e_machine != EM_ARM) {
+        munmap(file, (size_t)st.st_size);
+        return -1;
+    }
+    if (eh->e_type == ET_REL) {
+        int rc = so_load_abso(file, (size_t)st.st_size, out);
+        munmap(file, (size_t)st.st_size);
+        return rc;
+    }
+    if (eh->e_type != ET_DYN) {
         munmap(file, (size_t)st.st_size);
         return -1;
     }

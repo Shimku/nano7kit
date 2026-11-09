@@ -36,10 +36,15 @@ const char *plat_data_dir(void) { return data_dir; }
 static int open_named(const char *name, FILE **out) {
     char p[512];
     const char *base = name ? name : "";
-    const char *slash, *d;
+    const char *slash, *d, *leaf;
+    if (base[0] == '/' && (*out = fopen(base, "rb"))) return 0;
+    if (!strchr(base, '/')) {
+        snprintf(p, sizeof p, "%s/%s", files_dir, base);
+        if ((*out = fopen(p, "rb"))) return 0;
+    }
     snprintf(p, sizeof p, "%s/%s", data_dir, base);
     if ((*out = fopen(p, "rb"))) return 0;
-    snprintf(p, sizeof p, "%s/docs/%s", out_dir, base);
+    snprintf(p, sizeof p, "%s/%s", files_dir, base);
     if ((*out = fopen(p, "rb"))) return 0;
     if (!strncmp(base, "data/", 5)) {
         snprintf(p, sizeof p, "%s/%s", data_dir, base + 5);
@@ -52,8 +57,11 @@ static int open_named(const char *name, FILE **out) {
         if ((*out = fopen(p, "rb"))) return 0;
     }
     slash = strrchr(base, '/');
-    if (slash) {
-        snprintf(p, sizeof p, "%s/%s", data_dir, slash + 1);
+    leaf = slash ? slash + 1 : base;
+    if (leaf[0]) {
+        snprintf(p, sizeof p, "%s/%s", files_dir, leaf);
+        if ((*out = fopen(p, "rb"))) return 0;
+        snprintf(p, sizeof p, "%s/%s", data_dir, leaf);
         if ((*out = fopen(p, "rb"))) return 0;
     }
     if (!strchr(base, '.')) {
