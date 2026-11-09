@@ -789,7 +789,6 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
         plat_log_line("first tick: nativeUpdate returned");
         plat_log_flush();
         first_tick = 0;
-        plat_log_quiet();
     }
     if (cam_hold && hold_scale > 1e-4f) apply_cam(hold_scale, hold_left, hold_top);
     else if (ptr_in_ram((void *)(uintptr_t)lua_p)) ab_cam_fit_play();

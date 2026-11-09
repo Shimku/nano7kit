@@ -676,9 +676,10 @@ def print_volume_root_listing(listing: Optional[dict]) -> None:
 def apps_markers(nano: Nano) -> dict:
     """Read-only FAT signs of the /Apps copy and whether resident ran.
 
-    lasttrace.bin is a previous-boot hb_trace dump. Its presence means
-    silver_resident ran; absence does not prove it never ran (the ring is
-    RAM). Home icons are the on-device visual. Settings looks stock after
+    lasttrace.bin is a previous-boot hb_trace dump, written only if DRAM
+    still held a valid ring (kernel panic). A watchdog or hard reset wipes
+    DRAM, so absence after Home does not prove the resident skipped.
+    Home icons are the on-device visual. Settings looks stock after
     Helvetica. Never writes. Lists the real volume root (hidden, Apps/apps,
     iPod_Control/Device) so a missing /Apps is visible in the log.
     """
@@ -797,9 +798,9 @@ def print_apps_markers(apps: dict) -> None:
         print("               full dump: ./start apps lasttrace")
     else:
         print(
-            "               lasttrace.bin absent: does not prove resident skipped "
-            "(TRACE_RING is RAM; dump is previous-boot only). "
-            "After a Home reboot-loop, Disk Mode: ./start apps lasttrace"
+            "               lasttrace.bin absent: watchdog/hard reset wipes DRAM, "
+            "so the resident has nothing to dump even after Home. Kernel panic "
+            "leaves DRAM and writes the file. Per-app log: /Apps/Data/<App>/log.txt"
         )
     if apps.get("disabled"):
         print("               /Apps/Startup/disabled is present")

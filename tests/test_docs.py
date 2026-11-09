@@ -30,7 +30,8 @@ class ReleaseDocsTests(unittest.TestCase):
         self.assertLess(len(text.splitlines()), 250)
         self.assertIn("git clone https://github.com/shimku/nano7kit.git && cd nano7kit && ./install", text)
         for needle in ("NanoApps 1.0", "nfzerox", "olievans123", "Mid-2015", "Intel", "Apple silicon",
-                       "restore-tested", "CREDITS.md", "PocketJS", "6ca9f914", "LGPL-3.0", "OFL", "MIT"):
+                       "restore-tested", "CREDITS.md", "PocketJS", "6ca9f914", "LGPL-3.0", "OFL", "MIT",
+                       "log.txt", "watchdog"):
             self.assertIn(needle, text)
 
     def test_no_claims(self):

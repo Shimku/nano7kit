@@ -196,5 +196,8 @@ Follow how PvZ Portable is wired in (`rg "PvZ Portable" host`):
 
 `./start port families` and `./start port status` print the steps for each kind.
 
-If a game restarts the iPod: `./start apps lasttrace` reads the launcher's trace from
-the previous boot (Disk Mode, read-only), and `./start nabase remove NAME` takes it off Home.
+If a game restarts the iPod: copy `/Apps/Data/<App>/log.txt` and `sync.txt` in Disk
+Mode (read-only). `./start apps lasttrace` only has a previous-boot ring if DRAM
+survived (kernel panic). A watchdog or hard reset leaves no `lasttrace.bin` even
+after Home comes up; PvZ uses the same resident. `./start nabase remove NAME` takes
+the app off Home.

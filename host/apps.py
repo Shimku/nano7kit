@@ -1634,7 +1634,11 @@ def restore_tested_pack(
 
 
 def dump_lasttrace(nano, *, dest: Optional[Path] = None, ops=None, absent_hint: bool = True) -> dict:
-    """Read-only copy + decode of /Apps/Startup/lasttrace.bin. No NAND."""
+    """Read-only copy + decode of /Apps/Startup/lasttrace.bin. No NAND.
+
+    Written only if the resident found a previous-boot ring in DRAM (panic).
+    Watchdog/hard reset: file is absent even after Home. Use per-app log.txt.
+    """
     from .state import state_dir
 
     print("nano7kit apps lasttrace")
@@ -1661,10 +1665,11 @@ def dump_lasttrace(nano, *, dest: Optional[Path] = None, ops=None, absent_hint: 
         print("LASTTRACE_ABSENT")
         print(f"    {LASTTRACE_FAT} is not on this volume.")
         print(
-            "    The resident writes it only when RetailOS boots normally: "
-            "after the test, reboot with Sleep/Wake+Home, let it reach the Home "
-            "screen, then enter Disk Mode. Going straight to Disk Mode "
-            "leaves no file."
+            "    The resident writes it only if DRAM still holds the previous "
+            "boot's hb_trace ring (kernel panic). A watchdog or hard reset "
+            "wipes DRAM, so the file is absent even after Home comes up. "
+            "Going straight to Disk Mode also leaves no file. Per-app log: "
+            "/Apps/Data/<App>/log.txt (then sync.txt)."
         )
         if absent_hint:
             print_recovery_hint()

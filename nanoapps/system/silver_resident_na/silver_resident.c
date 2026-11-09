@@ -141,9 +141,9 @@ static uint8_t  s_prev_found;     /* s_prev_ring holds the previous boot's ring 
 
 static void save_last_trace(void)
 {
-    /* nano7kit: always write it. Earlier builds skipped the file whenever the
-     * C6/98 boot report page was live, and on a nano7kit iPod it always is
-     * (the publisher sets it), so lasttrace.bin was never written. */
+    /* Written only if payload_entry found a previous-boot ring in DRAM.
+     * Kernel panic leaves DRAM; watchdog/hard reset does not, so this file
+     * is absent after Home even though the resident ran. Same path for PvZ. */
     if (!s_prev_found)
         return;
     s_prev_found = 0;

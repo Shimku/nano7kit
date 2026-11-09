@@ -255,6 +255,12 @@ class LoopGuardTests(unittest.TestCase):
         with self.assertRaises(Refused):
             decode_lasttrace(b"nope")
 
+    def test_lasttrace_absent_notes_watchdog(self):
+        from pathlib import Path
+        src = (Path(__file__).resolve().parents[1] / "host" / "apps.py").read_text()
+        self.assertIn("watchdog or hard reset", src)
+        self.assertIn("/Apps/Data/<App>/log.txt", src)
+
     def test_recovery_hint_has_no_em_dash(self):
         self.assertNotIn("\u2014", RECOVERY_HINT)
         self.assertIn("restore-tested", RECOVERY_HINT)

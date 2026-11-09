@@ -908,8 +908,8 @@ def pocketjs_log(file: Optional[str] = None) -> int:
             sections.append(("lasttrace.bin (resident trace, previous normal boot)",
                              summarize_trace((e["tag"].rstrip(), e["v1"], e["v2"]) for e in decoded.get("entries") or [])))
         elif not rec.get("present"):
-            print("    (lasttrace.bin needs a normal Sleep/Wake+Home reboot to the Home screen before Disk Mode;"
-                  " the log files above do not)")
+            print("    (lasttrace.bin is written only after a panic reboot that leaves DRAM;"
+                  " a watchdog leaves no file even after Home. The log files above do not need it.)")
         if not files and not rec.get("ok"):
             print()
             print("PJLOG_ABSENT: no PocketJS log file and no lasttrace.bin on this iPod.")

@@ -44,8 +44,8 @@ void *payload_entry(int op, void *fb, int w, int h, hb_shared_t *sh) {
     (void)fb; (void)w; (void)h;
     if (op != 0 || !sh || sh->magic != HB_SHARED_MAGIC) return 0;
     /* Trace before BSS: hb_shared is in BSS, so restore it after the wipe.
-     * The DRAM ring lives in the resident; ./start apps lasttrace can then
-     * show ABENTRY even if the BSS loop never returns. */
+     * The DRAM ring is only dumped after a panic reboot; a watchdog leaves
+     * no lasttrace.bin. log.txt is the device log. */
     hb_shared = sh;
     hb_trace_log("ABENTRY ", (uint32_t)(uintptr_t)&payload_entry, hb_os_heap_largest());
     for (uint32_t *p = __bss_start__; p < __bss_end__; p++) *p = 0;

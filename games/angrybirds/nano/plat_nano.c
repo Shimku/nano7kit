@@ -108,7 +108,6 @@ uint64_t plat_time_us(void) {
 static char log_store[LOG_CAP + SLACK] __attribute__((aligned(64)));
 static char sync_store[256] __attribute__((aligned(64)));
 static uint32_t log_len, log_dirty;
-static int log_flush_every = 1;
 static void write_sync(void)
 {
     uint32_t e = log_len, b, k;
@@ -134,7 +133,9 @@ void plat_log_line(const char *line) {
     }
     memcpy(log_store + log_len, line, n); log_len += n; log_store[log_len++] = '\n';
     log_dirty = 1;
-    if (log_flush_every) plat_log_flush();
+    /* Every line: log.txt then sync.txt. lasttrace.bin is not written after a
+     * watchdog/hard reset (DRAM is gone); this FAT pair is the device log. */
+    plat_log_flush();
 }
 void plat_log_flush(void) {
     if (!log_dirty || !log_len) return;
@@ -144,7 +145,6 @@ void plat_log_flush(void) {
     log_dirty = 0;
     write_sync();
 }
-void plat_log_quiet(void) { log_flush_every = 0; }
 extern void fn_nano_fatal(void);
 void plat_fatal(const char *why) {
     char b[160];

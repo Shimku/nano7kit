@@ -3,8 +3,8 @@
  * attaches the FPU). Lines go through plat_log: the whole log lives in a static
  * buffer, log.txt is rewritten from that buffer, then sync.txt is written after
  * it (PvZ: the file written last before a reboot can come back torn, so sync.txt
- * is the one that may be lost). Also forwarded to hb_trace_log for
- * ./start apps lasttrace. */
+ * is the one that may be lost). lasttrace.bin is not used: a watchdog or hard
+ * reset wipes DRAM, so the resident has nothing to dump even after Home. */
 #include <stdint.h>
 #include "hb_sdk.h"
 #include "hb_heap.h"

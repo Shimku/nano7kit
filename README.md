@@ -204,15 +204,16 @@ Sync music in Disk Mode only: `./start sync`, then Finder or Music, never Restor
   got an empty line, usually from pasting a command with a newline after it. Paste the
   command alone, wait for the prompt and type the word yourself.
 - **`REFUSED:` line.** A check failed before anything was written. The message says which.
-- **An app restarts the iPod.** In Disk Mode, `./start nabase remove 'App Name'`. To see
-  where it died, restart normally to the Home screen, then Disk Mode and
-  `./start apps lasttrace`.
+- **An app restarts the iPod.** In Disk Mode, `./start nabase remove 'App Name'`. Copy
+  `/Apps/Data/<App>/log.txt` (and `sync.txt`). `lasttrace.bin` is only written if DRAM
+  survived a kernel panic; a watchdog or hard reset leaves no file even after Home.
 - **PocketJS app misbehaves.** `./start pocketjs log` in Disk Mode prints its log.
 - **Tools missing.** `./start doctor` lists what's missing.
 
 To report a bug, open an [issue](https://github.com/Shimku/nano7kit/issues) with your
 iPod model, Mac (Intel or Apple silicon, macOS version), the command you ran and its full
-output. For crashes, add `./start apps lasttrace` or `./start pocketjs log`.
+output. For crashes, add `/Apps/Data/<App>/log.txt` (and `sync.txt`). `lasttrace.bin`
+is optional and often absent after a watchdog.
 
 ## Credits
 
