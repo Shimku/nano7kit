@@ -15,5 +15,7 @@ void *ab_malloc(size_t n);
 void ab_free(void *p);
 void *ab_realloc(void *p, size_t n);
 void ab_shims_reset(void);
+int ab_persist_name(const char *name);
 int ab_persist_lua_ok(const char *name, const void *buf, uint32_t n);
+int ab_persist_empty(void **out, uint32_t *len);
 #endif

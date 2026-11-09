@@ -216,17 +216,35 @@ void *ab_realloc(void *p, size_t n) {
 extern int fn_setjmp(void *b) __attribute__((returns_twice));
 extern void fn_longjmp(void *b, int v) __attribute__((noreturn));
 
+int ab_persist_name(const char *name) {
+    return name && strstr(name, "highscores") != 0;
+}
+
 int ab_persist_lua_ok(const char *name, const void *buf, uint32_t n) {
     const unsigned char *p = (const unsigned char *)buf;
     uint32_t i;
-    if (!name || !strstr(name, "highscores")) return 1;
-    /* Missing or tiny persist is empty, not a Lua error (Android pcall-miss). */
+    if (!ab_persist_name(name)) return 1;
+    /* Empty persist is Android's missing-save (pcall never runs). */
+    if (n == 0) return 1;
     if (!p || n < 4) return 0;
-    if (n >= 4 && p[0] == 0x1b && p[1] == 'L' && p[2] == 'u' && p[3] == 'a') return 1;
+    if (p[0] == 0x1b && p[1] == 'L' && p[2] == 'u' && p[3] == 'a') return 1;
     for (i = 0; i + 5 <= n; i++) {
         if (p[i] == 'L' && p[i + 1] == 'e' && p[i + 2] == 'v' && p[i + 3] == 'e' && p[i + 4] == 'l')
             return 1;
     }
+    return 0;
+}
+
+int ab_persist_empty(void **out, uint32_t *len) {
+    char *p = (char *)malloc(1);
+    if (!p) {
+        if (out) *out = 0;
+        if (len) *len = 0;
+        return -1;
+    }
+    p[0] = 0;
+    if (out) *out = p;
+    if (len) *len = 0;
     return 0;
 }
 
@@ -241,6 +259,8 @@ void ab_cxa_throw_log(void *obj, void *ti, void *dest) {
     char buf[192];
     unsigned *w = (unsigned *)obj;
     unsigned off = 0, ra_off = 0;
+    plat_log_line("cxa_throw");
+    plat_log_flush();
     if (ti) {
         const char *s = *(const char **)((uint8_t *)ti + 4);
         if (s) n = s;
@@ -278,18 +298,91 @@ void ab_cxa_throw_log(void *obj, void *ti, void *dest) {
 
 void ab_cxa_throw_hook(void);
 
+static void patch_jump(void *fn, void *hook, uint32_t saved[2]) {
+    uint32_t *p = (uint32_t *)fn;
+    if (!p || !hook) return;
+    saved[0] = p[0];
+    saved[1] = p[1];
+    p[0] = 0xe51ff004u;
+    p[1] = (uint32_t)(uintptr_t)hook;
+    __builtin___clear_cache((char *)p, (char *)(p + 2));
+}
+static void unpatch_jump(void *fn, const uint32_t saved[2]) {
+    uint32_t *p = (uint32_t *)fn;
+    if (!p) return;
+    p[0] = saved[0];
+    p[1] = saved[1];
+    __builtin___clear_cache((char *)p, (char *)(p + 2));
+}
+
+static void *fn_begin_catch, *fn_unwind, *fn_alloc;
+static uint32_t saved_begin[2], saved_unwind[2], saved_alloc[2];
+
+static void *hook_begin_catch(void *e) __attribute__((noinline));
+static void *hook_alloc_exception(unsigned n) __attribute__((noinline));
+static int hook_unwind_raise(void *exc, void *ctx) __attribute__((noinline));
+
+static void *hook_begin_catch(void *e) {
+    void *r;
+    plat_log_line("cxa_begin_catch");
+    plat_log_flush();
+    unpatch_jump(fn_begin_catch, saved_begin);
+    r = ((void *(*)(void *))fn_begin_catch)(e);
+    patch_jump(fn_begin_catch, (void *)hook_begin_catch, saved_begin);
+    return r;
+}
+static void *hook_alloc_exception(unsigned n) {
+    void *r;
+    char b[64];
+    snprintf(b, sizeof b, "cxa_allocate %u", n);
+    plat_log_line(b);
+    plat_log_flush();
+    unpatch_jump(fn_alloc, saved_alloc);
+    r = ((void *(*)(unsigned))fn_alloc)(n);
+    patch_jump(fn_alloc, (void *)hook_alloc_exception, saved_alloc);
+    return r;
+}
+static int hook_unwind_raise(void *exc, void *ctx) {
+    int r;
+    plat_log_line("unwind raise");
+    plat_log_flush();
+    unpatch_jump(fn_unwind, saved_unwind);
+    r = ((int (*)(void *, void *))fn_unwind)(exc, ctx);
+    patch_jump(fn_unwind, (void *)hook_unwind_raise, saved_unwind);
+    return r;
+}
+
+static void *so_fn(const char *name, uint32_t off) {
+    void *p = so_sym(&g_so, name);
+    if (!p && g_so.base) p = g_so.base + off;
+    if (!p || (uint8_t *)p < g_so.base || (uint8_t *)p >= g_so.base + g_so.map_size)
+        return 0;
+    return p;
+}
+
 void ab_install_cxa_hook(void) {
     uint32_t *fn;
     if (!g_so.base) return;
-    fn = (uint32_t *)so_sym(&g_so, "__cxa_throw");
-    if (!fn) fn = (uint32_t *)(g_so.base + 0x110ea0);
-    if ((uint8_t *)fn < g_so.base || (uint8_t *)fn >= g_so.base + g_so.map_size) return;
-    /* First insn is ldr r3, [pc, #128]; literal at fn+0x88. */
-    cxa_throw_lit = fn[0x88 / 4];
-    cxa_throw_cont = (uint32_t)(uintptr_t)(fn + 2);
-    fn[0] = 0xe51ff004u; /* ldr pc, [pc, #-4] */
-    fn[1] = (uint32_t)(uintptr_t)ab_cxa_throw_hook;
-    __builtin___clear_cache((char *)fn, (char *)(fn + 2));
+    fn = (uint32_t *)so_fn("__cxa_throw", 0x110ea0);
+    if (fn) {
+        /* First insn is ldr r3, [pc, #128]; literal at fn+0x88. */
+        cxa_throw_lit = fn[0x88 / 4];
+        cxa_throw_cont = (uint32_t)(uintptr_t)(fn + 2);
+        fn[0] = 0xe51ff004u; /* ldr pc, [pc, #-4] */
+        fn[1] = (uint32_t)(uintptr_t)ab_cxa_throw_hook;
+        __builtin___clear_cache((char *)fn, (char *)(fn + 2));
+    }
+    fn_begin_catch = so_fn("__cxa_begin_catch", 0x110138);
+    if (fn_begin_catch)
+        patch_jump(fn_begin_catch, (void *)hook_begin_catch, saved_begin);
+    fn_alloc = so_fn("__cxa_allocate_exception", 0x10f864);
+    if (fn_alloc)
+        patch_jump(fn_alloc, (void *)hook_alloc_exception, saved_alloc);
+    fn_unwind = so_fn("__gnu_Unwind_RaiseException", 0x1171e4);
+    if (fn_unwind)
+        patch_jump(fn_unwind, (void *)hook_unwind_raise, saved_unwind);
+    plat_log_line("cxa/unwind hooks on");
+    plat_log_flush();
 }
 
 void ab_abort(void) {
@@ -322,6 +415,8 @@ _Unwind_Ptr ab_gnu_Unwind_Find_exidx(_Unwind_Ptr pc, int *pcount) {
     uint8_t *p = (uint8_t *)(uintptr_t)(pc & ~1u);
     static int nlog;
     char b[128];
+    plat_log_line("Find_exidx");
+    plat_log_flush();
     if (pcount) *pcount = 0;
     if (!g_so.base || !g_so.exidx_count) return 0;
     if (p < g_so.base || p >= g_so.base + g_so.map_size) {
@@ -408,10 +503,25 @@ static FILE *try_open(const char *path, const char *mode) {
     char p[512], p2[512];
     const char *base, *slash, *leaf;
     if (!path) return 0;
-    /* Persist first: nativeInit fopen's plat_files_dir()/highscores.lua as
-     * an absolute path. Hitting data_dir/basename first loaded the packed
-     * template and hid Lua errors the device actually throws. */
+    /* Persist first: nativeInit fopen's plat_files_dir()/highscores.lua.
+     * Never open the packed data/ template for persist: that hid a missing
+     * save on the host (device then died in AppDataInputStream IOException). */
+    slash = strrchr(path, '/');
+    leaf = slash ? slash + 1 : path;
     if (path[0] == '/' && (r = fopen(path, mode))) return r;
+    if (ab_persist_name(path)) {
+        snprintf(p, sizeof p, "%s/%s", plat_files_dir(), leaf[0] ? leaf : path);
+        if ((r = fopen(p, mode))) return r;
+        snprintf(p, sizeof p, "%s/../%s", plat_files_dir(), leaf[0] ? leaf : path);
+        if ((r = fopen(p, mode))) {
+            char b[192];
+            snprintf(b, sizeof b, "readFile leftover '%s' requested '%s'", p, path);
+            plat_log_line(b);
+            plat_log_flush();
+            return r;
+        }
+        return 0;
+    }
     snprintf(p, sizeof p, "%s/%s", plat_files_dir(), path);
     if ((r = fopen(p, mode))) return r;
     snprintf(p, sizeof p, "%s/%s", plat_data_dir(), path);
@@ -421,8 +531,6 @@ static FILE *try_open(const char *path, const char *mode) {
         snprintf(p, sizeof p, "%s/%s", plat_data_dir(), base);
         if ((r = fopen(p, mode))) return r;
     }
-    slash = strrchr(path, '/');
-    leaf = slash ? slash + 1 : path;
     if (leaf[0]) {
         snprintf(p, sizeof p, "%s/%s", plat_files_dir(), leaf);
         if ((r = fopen(p, mode))) return r;
@@ -464,17 +572,16 @@ void *ab_fopen(const char *path, const char *mode) {
     w->mag = NMAG;
     if (!wr) {
         void *buf = 0; uint32_t n = 0;
-        if (plat_read_file(path, &buf, &n)) { w->mag = 0; return 0; }
-        if (!ab_persist_lua_ok(path, buf, n)) {
-            char b[80];
-            snprintf(b, sizeof b, "highscores.lua skip invalid %u bytes", (unsigned)n);
-            plat_log_line(b);
-            plat_log_flush();
-            free(buf);
-            w->mag = 0;
-            return 0;
+        if (plat_read_file(path, &buf, &n)) {
+            if (ab_persist_name(path) && ab_persist_empty(&buf, &n) == 0) {
+                plat_log_line("highscores.lua empty (missing)");
+                plat_log_flush();
+            } else {
+                w->mag = 0;
+                return 0;
+            }
         }
-        w->data = buf; w->len = n; w->cap = n;
+        w->data = buf; w->len = n; w->cap = n ? n : 1;
     } else {
         w->write = 1;
         w->data = calloc(1, 256);
@@ -564,8 +671,13 @@ void *ab_fopen(const char *path, const char *mode) {
     fe_note_texfile(path);
     wr = mode && (strchr(mode, 'w') || strchr(mode, 'a') || strchr(mode, '+'));
     r = try_open(path, mode);
+    if (!r && !wr && ab_persist_name(path)) {
+        plat_log_line("highscores.lua empty (missing)");
+        plat_log_flush();
+        r = tmpfile();
+    }
     if (!r) return 0;
-    if (!wr && strstr(path, "highscores")) {
+    if (!wr && ab_persist_name(path) && r) {
         long n;
         void *buf;
         fseek(r, 0, SEEK_END);
@@ -581,12 +693,16 @@ void *ab_fopen(const char *path, const char *mode) {
             snprintf(b, sizeof b, "highscores.lua skip invalid %u bytes", (unsigned)n);
             plat_log_line(b);
             plat_log_flush();
+            plat_log_line("highscores.lua empty (invalid)");
+            plat_log_flush();
             free(buf);
             fclose(r);
-            return 0;
+            r = tmpfile();
+            if (!r) return 0;
+        } else {
+            free(buf);
+            fseek(r, 0, SEEK_SET);
         }
-        free(buf);
-        fseek(r, 0, SEEK_SET);
     }
     for (i = 0; i < MAXF; i++) if (F[i].mag != FMAG) { w = &F[i]; break; }
     if (!w) { fclose(r); return 0; }

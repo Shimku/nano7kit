@@ -2,6 +2,7 @@
  * About 20 slots are used: FindClass / GetMethodID / Call* / strings / byte arrays. */
 #include "jni.h"
 #include "rt_plat.h"
+#include "shims.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,6 +184,13 @@ static jobject read_file(jstring name) {
         snprintf(log, sizeof log, "readFile miss '%s'", s);
         plat_log_line(log);
         plat_log_flush();
+        /* FileInputStream throws IOException on NULL. Persist miss is empty
+         * on Android after the catch; do that here so EHABI never runs. */
+        if (ab_persist_name(s)) {
+            plat_log_line("highscores.lua empty (missing)");
+            plat_log_flush();
+            return J_NewByteArray(0, 0);
+        }
         return 0;
     }
     {

@@ -33,40 +33,67 @@ uint64_t plat_time_us(void) { return fake_us; }
 const char *plat_files_dir(void) { return files_dir; }
 const char *plat_data_dir(void) { return data_dir; }
 
-static int open_named(const char *name, FILE **out) {
+static int open_hit(const char *path, FILE **out, char *hit, size_t hitn) {
+    FILE *f;
+    if (!path || !path[0]) return 0;
+    f = fopen(path, "rb");
+    if (!f) return 0;
+    *out = f;
+    if (hit && hitn) snprintf(hit, hitn, "%s", path);
+    return 1;
+}
+
+static int open_named(const char *name, FILE **out, char *hit, size_t hitn) {
     char p[512];
     const char *base = name ? name : "";
     const char *slash, *d, *leaf;
-    if (base[0] == '/' && (*out = fopen(base, "rb"))) return 0;
+    if (base[0] == '/' && open_hit(base, out, hit, hitn)) return 0;
+    slash = strrchr(base, '/');
+    leaf = slash ? slash + 1 : base;
+    if (ab_persist_name(base)) {
+        if (leaf[0]) {
+            snprintf(p, sizeof p, "%s/%s", files_dir, leaf);
+            if (open_hit(p, out, hit, hitn)) return 0;
+            snprintf(p, sizeof p, "%s/../%s", files_dir, leaf);
+            if (open_hit(p, out, hit, hitn)) return 0;
+        }
+        return -1;
+    }
     if (!strchr(base, '/')) {
         snprintf(p, sizeof p, "%s/%s", files_dir, base);
-        if ((*out = fopen(p, "rb"))) return 0;
+        if (open_hit(p, out, hit, hitn)) return 0;
     }
     snprintf(p, sizeof p, "%s/%s", data_dir, base);
-    if ((*out = fopen(p, "rb"))) return 0;
+    if (open_hit(p, out, hit, hitn)) return 0;
     snprintf(p, sizeof p, "%s/%s", files_dir, base);
-    if ((*out = fopen(p, "rb"))) return 0;
+    if (open_hit(p, out, hit, hitn)) return 0;
     if (!strncmp(base, "data/", 5)) {
         snprintf(p, sizeof p, "%s/%s", data_dir, base + 5);
-        if ((*out = fopen(p, "rb"))) return 0;
+        if (open_hit(p, out, hit, hitn)) return 0;
     }
     d = base;
     while (strstr(d, "data/")) d = strstr(d, "data/") + 5;
     if (d != base) {
         snprintf(p, sizeof p, "%s/%s", data_dir, d);
-        if ((*out = fopen(p, "rb"))) return 0;
+        if (open_hit(p, out, hit, hitn)) return 0;
     }
     slash = strrchr(base, '/');
     leaf = slash ? slash + 1 : base;
     if (leaf[0]) {
         snprintf(p, sizeof p, "%s/%s", files_dir, leaf);
-        if ((*out = fopen(p, "rb"))) return 0;
-        snprintf(p, sizeof p, "%s/%s", data_dir, leaf);
-        if ((*out = fopen(p, "rb"))) return 0;
+        if (open_hit(p, out, hit, hitn)) return 0;
+        /* Leftover save next to docs/: device DATA_DIR/highscores.lua.
+         * Persist never opens the packed data/ template. */
+        snprintf(p, sizeof p, "%s/../%s", files_dir, leaf);
+        if (open_hit(p, out, hit, hitn)) return 0;
+        if (!ab_persist_name(base)) {
+            snprintf(p, sizeof p, "%s/%s", data_dir, leaf);
+            if (open_hit(p, out, hit, hitn)) return 0;
+        }
     }
     if (!strchr(base, '.')) {
         snprintf(p, sizeof p, "%s.lua", base);
-        return open_named(p, out);
+        return open_named(p, out, hit, hitn);
     }
     return -1;
 }
@@ -74,11 +101,33 @@ static int open_named(const char *name, FILE **out) {
 int plat_read_file(const char *name, void **out, uint32_t *len) {
     FILE *f; long n; void *buf;
     int stub;
+    char hit[512], b[192];
+    const char *req = name ? name : "";
     *out = 0; *len = 0;
     fe_note_texfile(name);
-    if (open_named(name, &f)) {
+    snprintf(b, sizeof b, "readFile begin '%s'", req);
+    plat_log_line(b);
+    plat_log_flush();
+    hit[0] = 0;
+    if (open_named(name, &f, hit, sizeof hit)) {
+        snprintf(b, sizeof b, "readFile miss '%s'", req);
+        plat_log_line(b);
+        plat_log_flush();
+        if (ab_persist_name(req)) {
+            plat_log_line("highscores.lua empty (missing)");
+            plat_log_flush();
+            return ab_persist_empty(out, len);
+        }
         stub = ab_stub_audio(name, out, len);
         return stub == 1 ? 0 : -1;
+    }
+    snprintf(b, sizeof b, "readFile resolved '%s'", hit[0] ? hit : req);
+    plat_log_line(b);
+    plat_log_flush();
+    if (hit[0] && strstr(hit, "/../")) {
+        snprintf(b, sizeof b, "readFile leftover '%s' requested '%s'", hit, req);
+        plat_log_line(b);
+        plat_log_flush();
     }
     fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
     if (n < 0) { fclose(f); return -1; }
@@ -88,12 +137,13 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
     ((char *)buf)[n] = 0;
     fclose(f);
     if (!ab_persist_lua_ok(name, buf, (uint32_t)n)) {
-        char b[80];
         snprintf(b, sizeof b, "highscores.lua skip invalid %u bytes", (unsigned)n);
         plat_log_line(b);
         plat_log_flush();
+        plat_log_line("highscores.lua empty (invalid)");
+        plat_log_flush();
         free(buf);
-        return -1;
+        return ab_persist_empty(out, len);
     }
     *out = buf; *len = (uint32_t)n;
     return 0;
@@ -1269,7 +1319,7 @@ int main(int argc, char **argv) {
             FILE *lf;
             snprintf(name, sizeof name, "Level%d", n);
             snprintf(file, sizeof file, "Level%d.lua", n);
-            if (open_named(file, &lf)) continue;
+            if (open_named(file, &lf, 0, 0)) continue;
             fclose(lf);
             ab_load_lua_level(name);
             wait_frames(2);

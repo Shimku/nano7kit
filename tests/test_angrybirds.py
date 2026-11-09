@@ -335,13 +335,20 @@ class SourceTests(unittest.TestCase):
         self.assertIn("so constructor done", (GAME / "rt" / "so_load.c").read_text())
         self.assertIn("nativeInit returned", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("first tick: nativeUpdate", (GAME / "rt" / "ab_entry.c").read_text())
-        self.assertGreaterEqual(ab.RECIPE, 11)
+        self.assertGreaterEqual(ab.RECIPE, 12)
         self.assertIn("do not stop music", (GAME / "nano" / "fn_nano.c").read_text())
         self.assertIn("1 MB largest after a 3 MB pool", (GAME / "nano" / "fn_nano.c").read_text())
         self.assertIn("lua_lj_jb", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("8-byte aligned", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("lj->slot", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("highscores.lua skip invalid", (GAME / "rt" / "shims.c").read_text())
+        self.assertIn("highscores.lua empty", (GAME / "rt" / "shims.c").read_text())
+        self.assertIn("cxa_begin_catch", (GAME / "rt" / "shims.c").read_text())
+        self.assertIn("unwind raise", (GAME / "rt" / "shims.c").read_text())
+        self.assertIn("cxa_allocate", (GAME / "rt" / "shims.c").read_text())
+        self.assertIn("readFile begin", (GAME / "nano" / "plat_nano.c").read_text())
+        self.assertIn("readFile leftover", (GAME / "nano" / "plat_nano.c").read_text())
+        self.assertIn("highscores.lua empty (missing)", (GAME / "nano" / "plat_nano.c").read_text())
         jmp = (GAME / "nano" / "fn_jmp.S").read_text()
         self.assertIn("vmrs", jmp)
         self.assertIn("vmsr", jmp)
@@ -355,6 +362,9 @@ class SourceTests(unittest.TestCase):
         self.assertIn("WMMX/VFP-d16-31 restore nop", entry)
         self.assertIn("AB_OFF_LUA_THROW", entry)
         self.assertIn("so_load abso", (GAME / "rt" / "so_load.c").read_text())
+        self.assertIn("cortex-a9", Path(__file__).read_text())
+        self.assertIn("-mcpu=cortex-a5", (GAME / "host" / "build.sh").read_text())
+        self.assertIn("vfpv3-d16", (GAME / "host" / "build.sh").read_text())
         self.assertIn("readFile begin", (GAME / "rt" / "jni.c").read_text())
         shims = (GAME / "rt" / "shims.c").read_text()
         self.assertIn("cxa_throw type=", shims)
@@ -368,6 +378,8 @@ class SourceTests(unittest.TestCase):
         self.assertIn('FILES_DIR "/%s"', plat)
         hostm = (GAME / "host" / "main.c").read_text()
         self.assertIn("files_dir, leaf", hostm)
+        self.assertIn("readFile leftover", hostm)
+        self.assertIn("highscores.lua empty (missing)", hostm)
         self.assertIn("malloc FAIL", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("jni_drop", (GAME / "rt" / "jni.c").read_text())
         self.assertIn("ab_crumb", (GAME / "nano" / "fn_nano.c").read_text())
@@ -411,6 +423,9 @@ ABHOST = Path(os.environ.get("NANO7KIT_ABHOST", "/tmp/ab-android/abhost"))
 ABDATA = Path(os.environ.get("NANO7KIT_ABDATA", "/tmp/ab-android/data"))
 ABSO = Path(os.environ.get(
     "NANO7KIT_ABSO", "/tmp/ab-apk/lib/armeabi-v7a/libangrybirds.so"))
+# Device is Cortex-A5 VFPv4-D16 (no WMMX, no d16-d31). This qemu has no A5;
+# A9 is the v7 VFP-D16 core we can actually run. Do not use A8 (D32/NEON).
+QEMU_DEV = ["qemu-arm-static", "-cpu", "cortex-a9"]
 
 
 @unittest.skipUnless(ABHOST.is_file() and (ABDATA / "Level1.lua").is_file() and ABSO.is_file(),
@@ -505,8 +520,16 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertTrue((out / "panel-restart.ppm").is_file(), err[-2000:])
         self.assertTrue((out / "panel-next.ppm").is_file(), err[-2000:])
 
+    def _run_abso_init(self, abso, out):
+        import subprocess
+        r = subprocess.run(
+            QEMU_DEV + [str(ABHOST), str(ABDATA), str(abso), str(out), "0", "0"],
+            env=self._harness_env(), capture_output=True, text=True, timeout=180)
+        err = (r.stderr or "") + (r.stdout or "")
+        return r.returncode, err
+
     def test_abso_bad_highscores_lua_error_is_caught(self):
-        """Device-layout .abso + leftover highscores.lua: Lua error is caught."""
+        """Device-layout .abso: no save is empty; 277-byte syntax error is caught."""
         import subprocess
         conv = GAME / "tools" / "so_to_obj.py"
         out = ROOT / "build" / "angrybirds_rc" / "lua-catch-test"
@@ -519,36 +542,51 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertTrue(abso.is_file())
         docs = out / "docs"
         docs.mkdir(parents=True, exist_ok=True)
-        body = "Level1 = { completed=true, score=1,\n"
-        body = body + ("x" * (277 - len(body)))
-        self.assertEqual(len(body), 277)
-        (docs / "highscores.lua").write_text(body, encoding="ascii")
-        env = self._harness_env()
-        r = subprocess.run(
-            ["qemu-arm-static", "-cpu", "cortex-a8", str(ABHOST),
-             str(ABDATA), str(abso), str(out), "0", "0"],
-            env=env, capture_output=True, text=True, timeout=180)
-        err = (r.stderr or "") + (r.stdout or "")
+        leftover = out / "highscores.lua"
+        hs = docs / "highscores.lua"
+        if hs.exists():
+            hs.unlink()
+        if leftover.exists():
+            leftover.unlink()
+        rc, err = self._run_abso_init(abso, out)
         self.assertIn("so_load abso", err, err[-4000:])
         self.assertIn("parseIndex skip missing", err, err[-4000:])
         self.assertIn("lua setjmp hook on", err, err[-2000:])
+        self.assertIn("cxa/unwind hooks on", err, err[-4000:])
+        self.assertIn("readFile begin", err, err[-8000:])
+        self.assertIn("highscores.lua empty (missing)", err, err[-8000:])
+        self.assertNotIn("cxa_throw type=", err)
+        self.assertNotIn("unwind raise", err)
+        self.assertIn("nativeInit returned", err, err[-4000:])
+        self.assertNotIn("CRASH ", err)
+        self.assertEqual(rc, 0, err[-4000:])
+        body = "Level1 = { completed=true, score=1,\n"
+        body = body + ("x" * (277 - len(body)))
+        self.assertEqual(len(body), 277)
+        hs.write_text(body, encoding="ascii")
+        rc, err = self._run_abso_init(abso, out)
         self.assertIn("luaD_throw longjmp err=3", err, err[-8000:])
         self.assertIn("luaD_throw longjmp status=3", err, err[-8000:])
         self.assertIn("nativeInit returned", err, err[-4000:])
         self.assertNotIn("CRASH ", err)
         self.assertNotIn("lua_longjmp via", err)
         self.assertNotIn("skip invalid", err)
-        self.assertEqual(r.returncode, 0, err[-4000:])
-        (docs / "highscores.lua").write_text("this is not { valid lua = ???\n", encoding="ascii")
-        r2 = subprocess.run(
-            ["qemu-arm-static", "-cpu", "cortex-a8", str(ABHOST),
-             str(ABDATA), str(abso), str(out), "0", "0"],
-            env=env, capture_output=True, text=True, timeout=180)
-        err2 = (r2.stderr or "") + (r2.stdout or "")
+        self.assertEqual(rc, 0, err[-4000:])
+        hs.write_text("this is not { valid lua = ???\n", encoding="ascii")
+        rc, err2 = self._run_abso_init(abso, out)
         self.assertIn("highscores.lua skip invalid", err2, err2[-4000:])
+        self.assertIn("highscores.lua empty (invalid)", err2, err2[-4000:])
         self.assertNotIn("luaD_throw longjmp err=3", err2)
+        self.assertNotIn("cxa_throw type=", err2)
         self.assertIn("nativeInit returned", err2, err2[-4000:])
-        self.assertEqual(r2.returncode, 0, err2[-4000:])
+        self.assertEqual(rc, 0, err2[-4000:])
+        hs.unlink()
+        leftover.write_text("this is not { valid lua = ???\n", encoding="ascii")
+        rc, err3 = self._run_abso_init(abso, out)
+        self.assertIn("readFile leftover", err3, err3[-4000:])
+        self.assertIn("highscores.lua skip invalid", err3, err3[-4000:])
+        self.assertIn("nativeInit returned", err3, err3[-4000:])
+        self.assertEqual(rc, 0, err3[-4000:])
 
     def test_gesture_frame_fixed_pinch_and_l1_l2_l3(self):
         import subprocess

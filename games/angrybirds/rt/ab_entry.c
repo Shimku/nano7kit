@@ -191,10 +191,10 @@ int ab_start(void) {
         plat_log_line("so_load failed");
         return 1;
     }
-    /* Cortex-A8 is VFPv3-D16, no WMMX. libgcc restore_non_core_regs will
-     * vldmia d16-d31 / ldcl WMMX if a frame's unwind flags clear those skip
-     * bits (initial 0xFFFFFFFF skips; later frames may not). qemu often
-     * ignores the undef coprocessor ops; the nano reboots. */
+    /* Nano Cortex-A5 is VFPv4-D16, no WMMX, no d16-d31. libgcc
+     * restore_non_core_regs will vldmia d16-d31 / ldcl WMMX if a frame's
+     * unwind flags clear those skip bits (initial 0xFFFFFFFF skips; later
+     * frames may not). qemu-a8 often ignores the undef; the nano reboots. */
     patch_unwind_nops();
     so_run_init(&g_so);
     {
@@ -565,6 +565,11 @@ static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
     volatile int i;
     int st;
     static int nlog;
+    if (nlog < 12) {
+        plat_log_line("lua pcall setjmp");
+        plat_log_flush();
+        nlog++;
+    }
     i = lua_lj_n;
     if (i < 0 || i >= AB_LJ_MAX) i = 0;
     lua_lj_n = i + 1;
@@ -576,11 +581,6 @@ static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
     if (ls) {
         void *p = lj;
         memcpy(ls + AB_LUA_ERRJMP, &p, 4);
-    }
-    if (nlog < 3) {
-        plat_log_line("lua pcall setjmp");
-        plat_log_flush();
-        nlog++;
     }
     /* After longjmp, only volatile locals and BSS are defined. Index the
      * header through i; do not keep lj in a caller-saved register. */
@@ -603,6 +603,8 @@ static void hook_lua_throw(void *L, int err) {
     uint8_t *ls = (uint8_t *)L;
     struct ab_lua_lj *lj = 0;
     int slot;
+    plat_log_line("luaD_throw");
+    plat_log_flush();
     if (ls) memcpy(&lj, ls + AB_LUA_ERRJMP, 4);
     slot = lj ? lj->slot : -1;
     /* Use the stored slot, not (lj - hdr) pointer math: nano -Os turned that
