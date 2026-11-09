@@ -217,8 +217,12 @@ def emit_rel(so: dict) -> bytes:
                     struct.pack_into("<I", img, r_off, 0)
                 rels.append(struct.pack("<II", r_off, (import_idx[name] << 8) | R_ABS32))
             else:
-                # internal ABS32: treat like relative to base
+                # internal JUMP_SLOT / GLOB_DAT: GOT addend is the symbol vaddr
+                if typ != R_ABS32:
+                    struct.pack_into("<I", img, r_off, val)
                 rels.append(struct.pack("<II", r_off, (base_idx << 8) | R_ABS32))
+        else:
+            raise SystemExit("unsupported reloc type %d at %#x (so_to_obj)" % (typ, r_off))
 
     strtab_b = b"".join(strtab)
     symtab_b = b"".join(syms)
@@ -246,7 +250,7 @@ def emit_rel(so: dict) -> bytes:
     # 0 null, 1 .abso, 7 .rel.abso, 16 .symtab, 24 .strtab, 32 .shstrtab
     shdrs = b"".join([
         shdr(0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
-        shdr(1, 1, 0x7, 0, abso_off, size, 0, 0, 16, 0),           # PROGBITS ALLOC WRITE EXEC
+        shdr(1, 1, 0x7, 0, abso_off, size, 0, 0, 4096, 0),         # PROGBITS ALLOC WRITE EXEC; p_align 0x1000
         shdr(7, 9, 0x40, 0, rel_off, len(rel_b), 3, 1, 4, 8),     # REL, link symtab, info .abso
         shdr(16, 2, 0, 0, sym_off, len(symtab_b), 4, 1, 4, 16),    # SYMTAB, link strtab
         shdr(24, 3, 0, 0, str_off_b, len(strtab_b), 0, 0, 1, 0),

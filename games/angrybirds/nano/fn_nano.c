@@ -31,6 +31,7 @@ extern int be_budget, be_panel_w, be_panel_h, be_stat_tris, be_stat_tiny, be_sta
            be_stat_live_tex, be_stat_tex_fail;
 extern void plat_log_flush(void);
 extern void plat_nano_reset(void);
+extern void ab_crumb(const char *what, uint32_t a);
 
 static int state;                       /* 0 start, 1 running, 2 failed, 3 short of memory */
 static char note[2][40];
@@ -217,11 +218,13 @@ extern uint32_t host_outside, host_outside_peak, host_outside_count;
 static int start(int w, int h) {
     be_panel_w = w; be_panel_h = h;
     uint32_t free_a = hb_os_heap_free(), largest_a = hb_os_heap_largest();
+    ab_crumb("start: before texture sweep", largest_a);
     /* first delete the textures an earlier nano7kit port (this one included) left in the
      * resident's shared GL context, then measure: see gl_left.c */
     gll_init(DATA_DIR_GL "/gl_names.txt");
     uint32_t swept = gll_sweep();
     uint32_t free0 = hb_os_heap_free(), largest = hb_os_heap_largest();
+    ab_crumb("start: after sweep", largest);
     logf_("nano7kit Angry Birds: panel %dx%d, heap free %u, largest %u; %u old texture names deleted, then free %u, largest %u",
           w, h, (unsigned)free_a, (unsigned)largest_a, (unsigned)swept, (unsigned)free0, (unsigned)largest);
     uint32_t size = largest > BLOCK_MAX + 0x10000u ? BLOCK_MAX : (largest - 0x10000u) & ~0xFFFFu;
@@ -229,10 +232,23 @@ static int start(int w, int h) {
      * runs dry, so the block and the GL driver's share must both be there up front */
     if (largest < BLOCK_MIN + 0x10000u || size < BLOCK_MIN || free0 < size + AFTER_MIN)
         return short_of_memory(free0, largest, BLOCK_MAX + AFTER_MIN, BLOCK_MIN + 0x10000u);
+    ab_crumb("start: taking malloc pool", size);
     block = hb_os_alloc(size);
     if (!block) { logf_("nano7kit malloc pool: %u bytes refused", (unsigned)size); return -1; }
     HB_APP_AUX_BLOCK = block;           /* the resident frees it when the app unloads */
     ab_heap_init(block, size);
+    {
+        /* The loader does not run .init_array; PvZ rebooted until these were
+         * rebased (--all-alloc) and invoked after FPU attach. */
+        extern void (*__init_array_start[])(void), (*__init_array_end[])(void);
+        void (**f)(void);
+        ab_crumb("elf constructors", (uint32_t)(__init_array_end - __init_array_start));
+        for (f = __init_array_start; f < __init_array_end; f++) {
+            ab_crumb("constructor", (uint32_t)(uintptr_t)*f);
+            (*f)();
+        }
+    }
+    ab_crumb("start: ab_start (so constructors + nativeInit)", 0);
     uint32_t after = hb_os_heap_free();
     /* less free memory: smaller textures, fewer triangles */
     /* textures were halved at convert time; a further runtime shift would miss the .dat coords */
@@ -241,7 +257,8 @@ static int start(int w, int h) {
     logf_("nano7kit malloc pool %u bytes; heap free after %u; texture shift %d/%d (pre-scaled)",
           (unsigned)size, (unsigned)after, fe_tex_shift, fe_tex_big_shift);
     uint64_t t0 = plat_time_us();
-    if (ab_start()) return -1;
+    if (ab_start()) { ab_crumb("ab_start FAILED", 0); return -1; }
+    ab_crumb("ab_start ok", 0);
     uint32_t left = hb_os_heap_free();
     int b = (int)(left / BYTES_PER_TRIANGLE);
     be_budget = b < 300 ? 300 : b > 1200 ? 1200 : b;
