@@ -108,6 +108,11 @@ static int guest_ok(void *p, uint32_t n) {
     if (!b || !a) return 0;
     return a >= b && a + n <= b + g_so.map_size;
 }
+#ifdef FN_NANO
+static int ptr_in_ram(void *p) { return (uint32_t)(uintptr_t)p >= 0x08000000u; }
+#else
+static int ptr_in_ram(void *p) { return p != 0; }
+#endif
 
 static void *app_ptr(void) { return app_get ? app_get() : 0; }
 
@@ -161,10 +166,11 @@ int ab_start(void) {
     }
     so_run_init(&g_so);
     {
-        char b[80];
+        char b[96];
         snprintf(b, sizeof b, "so base %p size %u init %u x %u",
                  (void *)g_so.base, (unsigned)g_so.map_size, g_so.init_off, g_so.init_count);
         plat_log_line(b);
+        plat_log_flush();
     }
     j_init = (jni_init_fn)must_sym("Java_com_rovio_ka3d_MyRenderer_nativeInit");
     j_update = (jni_void_fn)must_sym("Java_com_rovio_ka3d_MyRenderer_nativeUpdate");
@@ -212,8 +218,17 @@ int ab_start(void) {
     env = ab_jni_env();
     files = ab_jni_new_utf(plat_files_dir());
     plat_log_line("ab_start: nativeInit 480x320");
+    plat_log_flush();
     j_init(env, ab_jni_renderer(), ab_jni_renderer(), 480, 320, files);
-    if (j_resize) j_resize(env, ab_jni_renderer(), 480, 320);
+    plat_log_line("ab_start: nativeInit returned");
+    plat_log_flush();
+    if (j_resize) {
+        plat_log_line("ab_start: nativeResize 480x320");
+        plat_log_flush();
+        j_resize(env, ab_jni_renderer(), 480, 320);
+        plat_log_line("ab_start: nativeResize returned");
+        plat_log_flush();
+    }
     started = 1;
     plat_log_line("ab_start: ok");
     plat_log_flush();
@@ -718,28 +733,66 @@ void ab_cam_fit_play(void) {
 void ab_frame_q(float dt, const ab_tsample *q, int n) {
     int i;
     ab_phys_info info;
+    static int first_tick = 1;
+    uint32_t lua_p, app_p;
     /* dt is not passed into nativeUpdate. The .so samples gettimeofday and
      * clamps to 0.1s, then GameLua::update steps Box2D at a fixed 1/30.
      * The harness therefore advances plat_time_us by 33333 us per frame. */
     (void)dt;
     if (!started) return;
-    ab_phys_snapshot(&info);
-    if (info.dynamic_n > 0 && !info.phys_on) ab_phys_enable(1);
+    lua_p = (uint32_t)(uintptr_t)game_lua();
+    app_p = (uint32_t)(uintptr_t)app_ptr();
+    if (first_tick) {
+        char b[160];
+        snprintf(b, sizeof b, "first tick: app=%08x lua=%08x heap=%u peak=%u fail=%u",
+                 (unsigned)app_p, (unsigned)lua_p,
+                 (unsigned)ab_heap_used(), (unsigned)ab_heap_peak(),
+                 (unsigned)ab_malloc_failures());
+        plat_log_line(b);
+        plat_log_flush();
+    }
+    memset(&info, 0, sizeof info);
+    /* A lua pointer below firmware RAM (0x08) is unrelocated; walking it
+     * reboots. nativeUpdate may still create the world. */
+    if (ptr_in_ram((void *)(uintptr_t)lua_p)) {
+        ab_phys_snapshot(&info);
+        if (first_tick) {
+            char b[160];
+            snprintf(b, sizeof b, "first tick: world=%08x on=%d n=%d",
+                     (unsigned)info.world, info.phys_on, info.bodies);
+            plat_log_line(b);
+            plat_log_flush();
+        }
+        if (info.dynamic_n > 0 && !info.phys_on) ab_phys_enable(1);
+    } else if (first_tick) {
+        plat_log_line("first tick: lua pointer not in RAM, skip snapshot");
+        plat_log_flush();
+    }
     for (i = 0; i < n; i++) {
         int id = q[i].id;
         if (id < 0 || id >= AB_FINGERS) id = 0;
         ab_touch(id, q[i].down, q[i].x, q[i].y);
     }
     if (cam_hold && hold_scale > 1e-4f) apply_cam(hold_scale, hold_left, hold_top);
-    else ab_cam_fit_play();
+    else if (ptr_in_ram((void *)(uintptr_t)lua_p)) ab_cam_fit_play();
     /* Do not identity the stacks every frame: cam_hold holds a static view, so
      * Ka3D skips LoadMatrixf when the matrix is unchanged and the world would
      * draw with identity (empty panel). TEXTURE is reloaded by Primitive. */
     fe_stat_tris = 0; fe_stat_draws = 0;
     be_frame_begin();
+    if (first_tick) {
+        plat_log_line("first tick: nativeUpdate");
+        plat_log_flush();
+    }
     if (j_update) j_update(ab_jni_env(), ab_jni_renderer());
+    if (first_tick) {
+        plat_log_line("first tick: nativeUpdate returned");
+        plat_log_flush();
+        first_tick = 0;
+        plat_log_quiet();
+    }
     if (cam_hold && hold_scale > 1e-4f) apply_cam(hold_scale, hold_left, hold_top);
-    else ab_cam_fit_play();
+    else if (ptr_in_ram((void *)(uintptr_t)lua_p)) ab_cam_fit_play();
     be_frame_end();
     ab_apply_pinch();
 }
@@ -1058,7 +1111,7 @@ void ab_phys_snapshot(ab_phys_info *o) {
     o->world_scale = rf32(lua + AB_CAM_SCALE);
     memcpy(&world, lua + AB_WORLD_OFF, 4);
     o->world = (uint32_t)(uintptr_t)world;
-    if (!world) return;
+    if (!ptr_in_ram(world)) return;
     /* LuaTable::getNumber throws if the key is missing or not a number.
      * Splash frames have a world but no score yet. */
     if (score_readable) o->score = ab_lua_get_number("score");

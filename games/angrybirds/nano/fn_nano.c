@@ -214,7 +214,7 @@ static int short_of_memory(uint32_t free0, uint32_t largest, uint32_t need_free,
           (unsigned)free0, (unsigned)largest, (unsigned)need_free, (unsigned)need_largest);
     return -3;
 }
-extern uint32_t host_outside, host_outside_peak, host_outside_count;
+extern uint32_t host_outside, host_outside_peak, host_outside_count, host_in_pool;
 static int start(int w, int h) {
     be_panel_w = w; be_panel_h = h;
     uint32_t free_a = hb_os_heap_free(), largest_a = hb_os_heap_largest();
@@ -269,11 +269,11 @@ static int start(int w, int h) {
     int b = (int)(left / BYTES_PER_TRIANGLE);
     be_budget = b < 300 ? 300 : b > 1200 ? 1200 : b;
     logf_("nano7kit started in %u ms: heap free %u largest %u, engine malloc %u peak %u, "
-          "outside %u now (%u peak, %u allocations), textures %d (%d bytes), budget %d",
+          "outside %u now (%u peak, %u allocations), in-pool front %u, textures %d (%d bytes), budget %d",
           (unsigned)((plat_time_us() - t0) / 1000u), (unsigned)left, (unsigned)hb_os_heap_largest(),
           (unsigned)ab_heap_used(), (unsigned)ab_heap_peak(),
           (unsigned)host_outside, (unsigned)host_outside_peak, (unsigned)host_outside_count,
-          fe_stat_tex_count, fe_stat_tex_bytes, be_budget);
+          (unsigned)host_in_pool, fe_stat_tex_count, fe_stat_tex_bytes, be_budget);
     plat_log_flush();
     gll_save();
     return 0;
@@ -311,9 +311,14 @@ void fn_nano_frame(int w, int h, uint32_t n) {
     w_frames++;
     if (was_down || nq) w_down++;
     if (!nq && was_down) { w_dry++; if (++w_dry_run > w_dry_max) w_dry_max = w_dry_run; } else w_dry_run = 0;
+    if (frames == 0) ab_crumb("first frame: ab_frame_q", 0);
     ab_frame_q(dt, q, nq);
-    if (frames == 0 || frames % 90u == 0)
+    if (frames == 0) ab_crumb("first frame: ab_frame_q returned", 0);
+    if (frames == 0 || frames % 90u == 0) {
+        ab_crumb(frames == 0 ? "phys start" : "phys tick", frames);
         ab_phys_log(frames == 0 ? "start" : "tick");
+        ab_crumb("phys log flushed", frames);
+    }
     if (t_report) {
         t_report = 0;
         logf_("nano7kit press %u at %d,%d: %u samples from the OS list, %u from the mailbox, %u stale",

@@ -234,13 +234,15 @@ void *so_sym(const so_image *img, const char *name) {
 
 void so_run_init(const so_image *img) {
     uint32_t i, lo, hi;
+#ifdef FN_NANO
+    extern void ab_crumb(const char *what, uint32_t a);
+#endif
     if (!img || !img->init_off || !img->init_count) return;
     lo = (uint32_t)(uintptr_t)img->base;
     hi = lo + (uint32_t)img->map_size;
     for (i = 0; i < img->init_count; i++) {
         uint32_t fn = *(uint32_t *)(img->base + img->init_off + i * 4);
 #ifdef FN_NANO
-        extern void ab_crumb(const char *what, uint32_t a);
         ab_crumb("so constructor", fn);
 #endif
         if (!fn) continue;
@@ -253,5 +255,11 @@ void so_run_init(const so_image *img) {
             continue;
         }
         ((void (*)(void))(uintptr_t)fn)();
+#ifdef FN_NANO
+        ab_crumb("so constructor done", fn);
+#endif
     }
+#ifdef FN_NANO
+    ab_crumb("so constructors done", img->init_count);
+#endif
 }

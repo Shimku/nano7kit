@@ -4,6 +4,7 @@
 #include <stdint.h>
 void plat_log_line(const char *line);
 void plat_log_flush(void);
+void plat_log_quiet(void);
 void plat_fatal(const char *why);
 uint64_t plat_time_us(void);
 void *plat_os_alloc(uint32_t n);

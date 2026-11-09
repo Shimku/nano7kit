@@ -90,11 +90,13 @@ void ab_heap_init(void *p, uint32_t n) {
     pfree->size = n - (uint32_t)sizeof(pchunk);
     pfree->next = 0;
 }
+int ab_heap_ready(void) { return pool_lo != 0; }
 
 static int in_pool(void *p) {
     uint8_t *a = (uint8_t *)p;
     return pool_lo && a >= pool_lo && a < pool_hi;
 }
+int ab_heap_contains(const void *p) { return in_pool((void *)p); }
 
 static void *pool_alloc(uint32_t n) {
     pchunk **pp, *c, *rest;
@@ -152,13 +154,28 @@ void *ab_malloc(size_t n) {
     }
     if (pool_lo) {
         p = pool_alloc((uint32_t)n);
-        if (!p) { heap_fail++; return 0; }
+        if (!p) {
+            char b[96];
+            heap_fail++;
+            snprintf(b, sizeof b, "malloc FAIL pool %u used=%u peak=%u",
+                     (unsigned)n, (unsigned)heap_now, (unsigned)heap_peak);
+            plat_log_line(b);
+            plat_log_flush();
+            return 0;
+        }
         heap_now += ((pchunk *)p - 1)->size;
         if (heap_now > heap_peak) heap_peak = heap_now;
         return p;
     }
     h = malloc(n + sizeof *h);
-    if (!h) { heap_fail++; return 0; }
+    if (!h) {
+        char b[80];
+        heap_fail++;
+        snprintf(b, sizeof b, "malloc FAIL libc %u", (unsigned)n);
+        plat_log_line(b);
+        plat_log_flush();
+        return 0;
+    }
     h->mag = AMAG; h->n = (uint32_t)n;
     memset(h + 1, 0, n);
     heap_now += (uint32_t)n;

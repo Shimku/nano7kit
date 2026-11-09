@@ -11,29 +11,59 @@
 #include "../rt/audio_stub.h"
 #include "../rt/rt_plat.h"
 #include "../rt/fngl.h"
+#include "../rt/shims.h"
 
 #define DATA_DIR "/Apps/Data/AngryBirds"
 #define FILES_DIR "/Apps/Data/AngryBirds/docs"
 #define SLACK 8192u
 
 #define AMAGIC 0x464e414cu
+#define GL_KEEP 0x180000u
 typedef struct { uint32_t size, magic, base, pad; } ahdr;
-uint32_t host_outside, host_outside_peak, host_outside_count;
+uint32_t host_outside, host_outside_peak, host_outside_count, host_in_pool;
 
 void *malloc(size_t n) {
-    uint32_t want = (uint32_t)n + sizeof(ahdr) + 15u;
-    uint8_t *raw = hb_os_alloc(want);
+    uint32_t want;
+    uint8_t *raw;
     ahdr *h;
-    if (!raw) return NULL;
+    char b[96];
+    if (ab_heap_ready()) {
+        void *p = ab_malloc(n);
+        if (p) { host_in_pool += (uint32_t)n; return p; }
+        /* pool empty: only the OS heap is left, and it must keep GL's share */
+    }
+    want = (uint32_t)n + sizeof(ahdr) + 15u;
+    if (hb_os_heap_largest() < GL_KEEP + want + 0x10000u) {
+        snprintf(b, sizeof b, "malloc %u refused (largest %u, keep GL)",
+                 (unsigned)n, (unsigned)hb_os_heap_largest());
+        plat_log_line(b);
+        plat_log_flush();
+        return NULL;
+    }
+    raw = hb_os_alloc(want);
+    if (!raw) {
+        snprintf(b, sizeof b, "malloc %u OS NULL (free %u largest %u)",
+                 (unsigned)n, (unsigned)hb_os_heap_free(), (unsigned)hb_os_heap_largest());
+        plat_log_line(b);
+        plat_log_flush();
+        return NULL;
+    }
     h = (ahdr *)(((uintptr_t)raw + sizeof(ahdr) + 15u) & ~(uintptr_t)15u) - 1;
     h->size = (uint32_t)n; h->magic = AMAGIC; h->base = (uint32_t)(uintptr_t)raw;
     host_outside += (uint32_t)n; host_outside_count++;
     if (host_outside > host_outside_peak) host_outside_peak = host_outside;
+    if (n >= 4096u) {
+        snprintf(b, sizeof b, "malloc OS %u free=%u largest=%u",
+                 (unsigned)n, (unsigned)hb_os_heap_free(), (unsigned)hb_os_heap_largest());
+        plat_log_line(b);
+        plat_log_flush();
+    }
     return h + 1;
 }
 void free(void *p) {
     ahdr *h;
     if (!p) return;
+    if (ab_heap_contains(p)) { ab_free(p); return; }
     h = (ahdr *)p - 1;
     if (h->magic != AMAGIC) return;
     h->magic = 0;
@@ -42,10 +72,13 @@ void free(void *p) {
 }
 void *calloc(size_t a, size_t b) { size_t n = a * b; void *p = malloc(n); if (p) memset(p, 0, n); return p; }
 void *realloc(void *p, size_t n) {
-    ahdr *h; void *q;
+    ahdr *h; void *q; uint32_t old = 0;
     if (!p) return malloc(n);
-    h = (ahdr *)p - 1; q = malloc(n);
-    if (q) { memcpy(q, p, h->size < n ? h->size : n); free(p); }
+    if (ab_heap_contains(p)) return ab_realloc(p, n);
+    h = (ahdr *)p - 1;
+    old = h->magic == AMAGIC ? h->size : 0;
+    q = malloc(n);
+    if (q) { memcpy(q, p, old < n ? old : n); free(p); }
     return q;
 }
 void *_malloc_r(struct _reent *r, size_t n) { (void)r; return malloc(n); }
@@ -73,50 +106,45 @@ uint64_t plat_time_us(void) {
 
 #define LOG_CAP 32768u
 static char log_store[LOG_CAP + SLACK] __attribute__((aligned(64)));
-static char *log_buf;
-static uint32_t log_len, log_dirty, log_disk;
+static char sync_store[256] __attribute__((aligned(64)));
+static uint32_t log_len, log_dirty;
+static int log_flush_every = 1;
+static void write_sync(void)
+{
+    uint32_t e = log_len, b, k;
+    while (e && log_store[e - 1] == '\n') e--;
+    b = e;
+    while (b && log_store[b - 1] != '\n') b--;
+    k = e - b;
+    if (k > 240) k = 240;
+    memcpy(sync_store, log_store + b, k);
+    sync_store[k++] = '\n';
+    hb_fs_write(DATA_DIR "/sync.txt", sync_store, k);
+}
 void plat_log_line(const char *line) {
     uint32_t n;
-    if (!log_buf) { log_buf = log_store; log_len = 0; log_disk = 0; }
+    if (!line) return;
     n = (uint32_t)strlen(line);
     if (n > 200) n = 200;
     if (log_len + n + 1 > LOG_CAP) {
-        if (log_disk > 0 && log_disk <= log_len) {
-            memmove(log_buf, log_buf + log_disk, log_len - log_disk);
-            log_len -= log_disk;
-            log_disk = 0;
-        }
-        if (log_len + n + 1 > LOG_CAP) return;
+        uint32_t keep = LOG_CAP / 2, cut;
+        cut = log_len - keep < n + 1 + 1024 ? log_len - keep : n + 1 + 1024;
+        memmove(log_store + keep, log_store + keep + cut, log_len - keep - cut);
+        log_len -= cut;
     }
-    memcpy(log_buf + log_len, line, n); log_len += n; log_buf[log_len++] = '\n';
+    memcpy(log_store + log_len, line, n); log_len += n; log_store[log_len++] = '\n';
     log_dirty = 1;
+    if (log_flush_every) plat_log_flush();
 }
 void plat_log_flush(void) {
-    uint32_t extra, oldn = 0;
-    uint8_t *old = NULL;
-    void *ptrs[2];
-    uint32_t lens[2];
-    int nparts = 0;
-    if (!log_buf || !log_dirty) return;
-    if (log_disk > log_len) log_disk = 0;
-    extra = log_len - log_disk;
-    if (!extra) { log_dirty = 0; return; }
+    if (!log_dirty || !log_len) return;
+    hb_fs_mkdir("/Apps/Data");
     hb_fs_mkdir(DATA_DIR);
-    if (hb_fs_exists(DATA_DIR "/log.txt")) {
-        oldn = hb_fs_size(DATA_DIR "/log.txt");
-        if (oldn) {
-            old = malloc(oldn);
-            if (old) oldn = hb_fs_read(DATA_DIR "/log.txt", old, oldn);
-            else oldn = 0;
-        }
-    }
-    if (old && oldn) { ptrs[nparts] = old; lens[nparts] = oldn; nparts++; }
-    ptrs[nparts] = log_buf + log_disk; lens[nparts] = extra; nparts++;
-    hb_fs_write_parts(DATA_DIR "/log.txt", ptrs, lens, nparts);
-    free(old);
-    log_disk = log_len;
+    hb_fs_write(DATA_DIR "/log.txt", log_store, log_len);
     log_dirty = 0;
+    write_sync();
 }
+void plat_log_quiet(void) { log_flush_every = 0; }
 extern void fn_nano_fatal(void);
 void plat_fatal(const char *why) {
     char b[160];
@@ -146,8 +174,21 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
         return stub == 1 ? 0 : -1;
     }
     size = hb_fs_size(p);
+    {
+        char log[192];
+        snprintf(log, sizeof log, "readFile '%s' %u bytes (pool used %u fail %u, OS free %u largest %u)",
+                 base, (unsigned)size, (unsigned)ab_heap_used(), (unsigned)ab_malloc_failures(),
+                 (unsigned)hb_os_heap_free(), (unsigned)hb_os_heap_largest());
+        plat_log_line(log);
+    }
     tmp = malloc(size + SLACK);
-    if (!tmp) return -1;
+    if (!tmp) {
+        char log[160];
+        snprintf(log, sizeof log, "readFile '%s' %u bytes: malloc NULL", base, (unsigned)size);
+        plat_log_line(log);
+        plat_log_flush();
+        return -1;
+    }
     if (hb_fs_read(p, tmp, size + SLACK) < size) { free(tmp); return -1; }
     *out = tmp; *len = size;
     return 0;
@@ -157,6 +198,7 @@ void *plat_os_alloc(uint32_t n) { return hb_os_alloc(n ? n : 1u); }
 void plat_os_free(void *p) { if (p) hb_os_free(p); }
 uint32_t plat_os_largest(void) { return hb_os_heap_largest(); }
 void plat_nano_reset(void) {
-    host_outside = host_outside_peak = host_outside_count = 0;
-    t_last = t_high = 0; log_buf = NULL; log_len = log_dirty = log_disk = 0;
+    host_outside = host_outside_peak = host_outside_count = host_in_pool = 0;
+    t_last = t_high = 0;
+    /* Keep log_store: payload_entry crumbs must survive this reset. */
 }

@@ -1,18 +1,18 @@
 /* ab_crumb.c: start-up breadcrumbs (nano7kit, MIT). Thumb, no floating point and no
  * printf (newlib's printf saves VFP registers, which traps before payload_entry
- * attaches the FPU). Every step is written to log.txt, then sync.txt after it, so a
- * reboot right after a step loses sync.txt rather than log.txt. Also forwarded to
- * hb_trace_log for ./start apps lasttrace. */
+ * attaches the FPU). Lines go through plat_log: the whole log lives in a static
+ * buffer, log.txt is rewritten from that buffer, then sync.txt is written after
+ * it (PvZ: the file written last before a reboot can come back torn, so sync.txt
+ * is the one that may be lost). Also forwarded to hb_trace_log for
+ * ./start apps lasttrace. */
 #include <stdint.h>
 #include "hb_sdk.h"
 #include "hb_heap.h"
 #include "ab_crumb.h"
+extern void plat_log_line(const char *line);
+extern void plat_log_flush(void);
 
-#define DATA_DIR "/Apps/Data/AngryBirds"
-#define CAP 4096u
-static char store[CAP] __attribute__((aligned(8)));
-static char sync_line[192] __attribute__((aligned(8)));
-static uint32_t len, t0, step, minsp;
+static uint32_t t0, step, minsp;
 
 static char *put_s(char *o, char *end, const char *s)
 {
@@ -36,7 +36,6 @@ static char *put_x(char *o, char *end, uint32_t v)
 }
 void ab_crumb_reset(void)
 {
-    len = 0;
     step = 0;
     minsp = 0;
     t0 = hb_time_uptime_us();
@@ -44,7 +43,7 @@ void ab_crumb_reset(void)
 void ab_crumb(const char *what, uint32_t a)
 {
     char line[192], *o = line, *end = line + sizeof line - 1;
-    uint32_t sp, n;
+    uint32_t sp;
     __asm__ volatile("mov %0, sp" : "=r"(sp));
     if (!minsp || sp < minsp) minsp = sp;
     if (!t0) t0 = hb_time_uptime_us();
@@ -65,18 +64,7 @@ void ab_crumb(const char *what, uint32_t a)
     o = put_s(o, end, " largest=");
     o = put_u(o, end, hb_os_heap_largest());
     *o = 0;
-    n = (uint32_t)(o - line);
-    if (len + n + 1 > CAP) return;
-    {
-        uint32_t i;
-        for (i = 0; i < n; i++) store[len++] = line[i];
-        store[len++] = '\n';
-        hb_fs_mkdir("/Apps/Data");
-        hb_fs_mkdir(DATA_DIR);
-        hb_fs_write(DATA_DIR "/log.txt", store, len);
-        for (i = 0; i < n && i < 190; i++) sync_line[i] = line[i];
-        sync_line[i] = '\n';
-        hb_fs_write(DATA_DIR "/sync.txt", sync_line, i + 1);
-    }
+    plat_log_line(line);
+    plat_log_flush();
     hb_trace_log("ABCRUMB ", step, a);
 }

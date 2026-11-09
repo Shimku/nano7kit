@@ -52,8 +52,18 @@ static void J_FatalError(JNIEnv *e, const char *m) { (void)e; plat_fatal(m ? m :
 static jint J_PushLocalFrame(JNIEnv *e, jint n) { (void)e; (void)n; return JNI_OK; }
 static jobject J_PopLocalFrame(JNIEnv *e, jobject r) { (void)e; return r; }
 static jobject J_NewGlobalRef(JNIEnv *e, jobject o) { (void)e; return o; }
-static void J_DeleteGlobalRef(JNIEnv *e, jobject o) { (void)e; (void)o; }
-static void J_DeleteLocalRef(JNIEnv *e, jobject o) { (void)e; (void)o; }
+static void jni_drop(jobject o) {
+    uint32_t mag;
+    if (!o) return;
+    if (o == (jobject)&renderer_obj || o == (jobject)&app_obj || o == (jobject)&dummy_class)
+        return;
+    mag = *(uint32_t *)o;
+    if (mag != MAG_ARR && mag != MAG_STR && mag != MAG_OBJ) return;
+    *(uint32_t *)o = 0;
+    free(o);
+}
+static void J_DeleteGlobalRef(JNIEnv *e, jobject o) { (void)e; jni_drop(o); }
+static void J_DeleteLocalRef(JNIEnv *e, jobject o) { (void)e; jni_drop(o); }
 static jboolean J_IsSameObject(JNIEnv *e, jobject a, jobject b) { (void)e; return a == b; }
 static jobject J_NewLocalRef(JNIEnv *e, jobject o) { (void)e; return o; }
 static jint J_EnsureLocalCapacity(JNIEnv *e, jint n) { (void)e; (void)n; return JNI_OK; }
@@ -185,7 +195,13 @@ static jobject read_file(jstring name) {
         }
     }
     a = J_NewByteArray(0, (jsize)n);
-    if (!a) { free(buf); return 0; }
+    if (!a) {
+        snprintf(log, sizeof log, "readFile '%s' %u bytes: NewByteArray NULL", s, n);
+        plat_log_line(log);
+        plat_log_flush();
+        free(buf);
+        return 0;
+    }
     if (n) memcpy(((jarr *)a)->data, buf, n);
     free(buf);
     return a;

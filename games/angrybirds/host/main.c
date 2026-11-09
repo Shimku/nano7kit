@@ -25,6 +25,7 @@ static uint64_t fake_us;
 
 void plat_log_line(const char *l) { fprintf(stderr, "%s\n", l); }
 void plat_log_flush(void) { fflush(stderr); }
+void plat_log_quiet(void) {}
 void plat_fatal(const char *why) { fprintf(stderr, "FATAL: %s\n", why); exit(3); }
 void *plat_os_alloc(uint32_t n) { return calloc(1, n ? n : 1); }
 void plat_os_free(void *p) { free(p); }

@@ -9,5 +9,10 @@ uint32_t ab_heap_used(void);
 uint32_t ab_heap_peak(void);
 uint32_t ab_malloc_failures(void);
 void ab_heap_init(void *p, uint32_t n);
+int ab_heap_ready(void);
+int ab_heap_contains(const void *p);
+void *ab_malloc(size_t n);
+void ab_free(void *p);
+void *ab_realloc(void *p, size_t n);
 void ab_shims_reset(void);
 #endif
