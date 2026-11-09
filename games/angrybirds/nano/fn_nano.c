@@ -244,7 +244,13 @@ static int start(int w, int h) {
         void (**f)(void);
         ab_crumb("elf constructors", (uint32_t)(__init_array_end - __init_array_start));
         for (f = __init_array_start; f < __init_array_end; f++) {
-            ab_crumb("constructor", (uint32_t)(uintptr_t)*f);
+            uint32_t addr = (uint32_t)(uintptr_t)*f;
+            ab_crumb("constructor", addr);
+            /* PvZ v32: a base-0 pointer jumped nowhere. Heap is at 0x08+. */
+            if (addr < 0x08000000u) {
+                ab_crumb("constructor OUTSIDE image", addr);
+                continue;
+            }
             (*f)();
         }
     }

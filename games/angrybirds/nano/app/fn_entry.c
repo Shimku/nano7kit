@@ -43,11 +43,13 @@ void *payload_entry(int op, void *fb, int w, int h, hb_shared_t *sh) {
     extern uint32_t __bss_start__[], __bss_end__[];
     (void)fb; (void)w; (void)h;
     if (op != 0 || !sh || sh->magic != HB_SHARED_MAGIC) return 0;
+    /* Trace before BSS: hb_shared is in BSS, so restore it after the wipe.
+     * The DRAM ring lives in the resident; ./start apps lasttrace can then
+     * show ABENTRY even if the BSS loop never returns. */
+    hb_shared = sh;
+    hb_trace_log("ABENTRY ", (uint32_t)(uintptr_t)&payload_entry, hb_os_heap_largest());
     for (uint32_t *p = __bss_start__; p < __bss_end__; p++) *p = 0;
     hb_shared = sh;
-    /* lasttrace only forwards after hb_shared is set. Log before aux/FS so a
-     * panic still leaves ABENTRY in the DRAM ring. */
-    hb_trace_log("ABENTRY ", (uint32_t)(uintptr_t)&payload_entry, hb_os_heap_largest());
     if (HB_APP_AUX_BLOCK) { hb_os_free(HB_APP_AUX_BLOCK); HB_APP_AUX_BLOCK = 0; }
     ab_crumb_reset();
     s_attached = 0;

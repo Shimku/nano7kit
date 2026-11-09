@@ -16,7 +16,7 @@ from pathlib import Path
 ET_REL, ET_DYN, EM_ARM = 1, 3, 40
 PT_LOAD, PT_DYNAMIC, PT_ARM_EXIDX = 1, 2, 0x70000001
 DT_STRTAB, DT_SYMTAB, DT_REL, DT_RELSZ = 5, 6, 17, 18
-DT_JMPREL, DT_PLTRELSZ, DT_SYMENT = 23, 2, 11
+DT_JMPREL, DT_PLTRELSZ, DT_SYMENT, DT_PLTGOT = 23, 2, 11, 3
 DT_INIT_ARRAY, DT_INIT_ARRAYSZ = 25, 27
 R_ABS32, R_GLOB_DAT, R_JUMP_SLOT, R_RELATIVE = 2, 21, 22, 23
 STB_GLOBAL, STT_FUNC, STT_OBJECT, SHN_UNDEF = 1, 2, 1, 0
@@ -101,6 +101,7 @@ def load_so(data: bytes) -> dict:
         "img": img, "syms": syms, "relocs": relocs, "size": size,
         "exidx_off": exidx_off, "exidx_count": exidx_sz // 8,
         "init_off": dynv(DT_INIT_ARRAY), "init_count": dynv(DT_INIT_ARRAYSZ) // 4,
+        "got": dynv(DT_PLTGOT),
         "strings": strings, "strtab": strtab,
     }
 
@@ -205,11 +206,13 @@ def emit_rel(so: dict) -> bytes:
         syms.append(struct.pack("<IIIBBH", add_str(n), v, 4, (STB_GLOBAL << 4) | STT_OBJECT, 0, 1))
 
     rels = []
+    covered = set()
     for r_off, r_info in so["relocs"]:
         typ, si = r_info & 0xFF, r_info >> 8
         if typ == R_RELATIVE:
             # *loc is vaddr; ABS32 against __ab_so_base uses that as addend
             rels.append(struct.pack("<II", r_off, (base_idx << 8) | R_ABS32))
+            covered.add(r_off)
         elif typ in (R_JUMP_SLOT, R_GLOB_DAT, R_ABS32):
             name, val, sz, bind, st, sh = so["syms"][si] if si < len(so["syms"]) else ("", 0, 0, 0, 0, 0)
             if sh == 0 and name in import_idx:
@@ -221,8 +224,20 @@ def emit_rel(so: dict) -> bytes:
                 if typ != R_ABS32:
                     struct.pack_into("<I", img, r_off, val)
                 rels.append(struct.pack("<II", r_off, (base_idx << 8) | R_ABS32))
+            covered.add(r_off)
         else:
             raise SystemExit("unsupported reloc type %d at %#x (so_to_obj)" % (typ, r_off))
+    # PvZ v32: .init_array pointers that the loader never rebased jumped nowhere.
+    # Every DT_INIT_ARRAY slot must be an ABS32 against __ab_so_base (from RELATIVE).
+    for i in range(so["init_count"]):
+        slot = so["init_off"] + 4 * i
+        if slot not in covered:
+            raise SystemExit("init_array[%d] at %#x has no reloc (PvZ v32 class)" % (i, slot))
+    # GOT[0] is _DYNAMIC; Android leaves it without a reloc. Rebase it like RELATIVE.
+    got = so["got"]
+    if got and got not in covered:
+        rels.append(struct.pack("<II", got, (base_idx << 8) | R_ABS32))
+        covered.add(got)
 
     strtab_b = b"".join(strtab)
     symtab_b = b"".join(syms)

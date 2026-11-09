@@ -12,7 +12,7 @@
 #define CAP 4096u
 static char store[CAP] __attribute__((aligned(8)));
 static char sync_line[192] __attribute__((aligned(8)));
-static uint32_t len, t0, step;
+static uint32_t len, t0, step, minsp;
 
 static char *put_s(char *o, char *end, const char *s)
 {
@@ -38,6 +38,7 @@ void ab_crumb_reset(void)
 {
     len = 0;
     step = 0;
+    minsp = 0;
     t0 = hb_time_uptime_us();
 }
 void ab_crumb(const char *what, uint32_t a)
@@ -45,6 +46,7 @@ void ab_crumb(const char *what, uint32_t a)
     char line[192], *o = line, *end = line + sizeof line - 1;
     uint32_t sp, n;
     __asm__ volatile("mov %0, sp" : "=r"(sp));
+    if (!minsp || sp < minsp) minsp = sp;
     if (!t0) t0 = hb_time_uptime_us();
     o = put_s(o, end, "nano7kit step ");
     o = put_u(o, end, ++step);
@@ -56,6 +58,8 @@ void ab_crumb(const char *what, uint32_t a)
     o = put_u(o, end, (hb_time_uptime_us() - t0) / 1000u);
     o = put_s(o, end, " sp=");
     o = put_x(o, end, sp);
+    o = put_s(o, end, " minsp=");
+    o = put_x(o, end, minsp);
     o = put_s(o, end, " free=");
     o = put_u(o, end, hb_os_heap_free());
     o = put_s(o, end, " largest=");

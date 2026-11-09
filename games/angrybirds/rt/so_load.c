@@ -233,10 +233,25 @@ void *so_sym(const so_image *img, const char *name) {
 }
 
 void so_run_init(const so_image *img) {
-    uint32_t i;
+    uint32_t i, lo, hi;
     if (!img || !img->init_off || !img->init_count) return;
+    lo = (uint32_t)(uintptr_t)img->base;
+    hi = lo + (uint32_t)img->map_size;
     for (i = 0; i < img->init_count; i++) {
         uint32_t fn = *(uint32_t *)(img->base + img->init_off + i * 4);
-        if (fn) ((void (*)(void))(uintptr_t)fn)();
+#ifdef FN_NANO
+        extern void ab_crumb(const char *what, uint32_t a);
+        ab_crumb("so constructor", fn);
+#endif
+        if (!fn) continue;
+        /* PvZ v32: an unrelocated .init_array word jumped into nowhere. */
+        if (fn < lo || fn >= hi) {
+#ifdef FN_NANO
+            ab_crumb("so constructor OUTSIDE image", fn);
+#endif
+            plat_log_line("so_run_init: constructor outside image");
+            continue;
+        }
+        ((void (*)(void))(uintptr_t)fn)();
     }
 }
