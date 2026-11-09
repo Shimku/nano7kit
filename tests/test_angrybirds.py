@@ -284,11 +284,16 @@ class SourceTests(unittest.TestCase):
         self.assertIn("print-file-name=libgcc.a", app_mk)
         self.assertIn("ab_crumb.c", app_mk)
         fn_entry = (GAME / "nano" / "app" / "fn_entry.c").read_text()
+        pe = fn_entry[fn_entry.index("void *payload_entry"):]
+        self.assertNotIn("fn_nano_reset()", pe)
+        self.assertNotIn("hb_fpu_attach_current_task", pe)
+        self.assertIn("ABENTRY", pe)
+        self.assertLess(pe.index("hb_shared = sh"), pe.index("ABENTRY"))
         self.assertIn("hb_fpu_attach_current_task", fn_entry)
         self.assertLess(fn_entry.index("hb_fpu_attach_current_task"),
                         fn_entry.index("fn_nano_reset()"))
         self.assertIn("ab_crumb", fn_entry)
-        self.assertIn("ABENTRY", fn_entry)
+        self.assertIn("push_screen", fn_entry)
         crumb = (GAME / "nano" / "app" / "ab_crumb.c").read_text()
         self.assertIn("sync.txt", crumb)
         self.assertIn("log.txt", crumb)
