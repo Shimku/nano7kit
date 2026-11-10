@@ -187,7 +187,9 @@ static jobject read_file(jstring name) {
         /* FileInputStream throws IOException on NULL. Persist miss is empty
          * on Android after the catch; do that here so EHABI never runs. */
         if (ab_persist_name(s)) {
-            plat_log_line("highscores.lua empty (missing)");
+            char b[80];
+            snprintf(b, sizeof b, "%s empty (missing)", ab_persist_leaf(s));
+            plat_log_line(b);
             plat_log_flush();
             return J_NewByteArray(0, 0);
         }

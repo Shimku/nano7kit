@@ -1,6 +1,7 @@
 """Angry Birds Android 1.0.0 .so loader: memory plan, payload checks, CLI, source hygiene."""
 import io
 import os
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -336,13 +337,13 @@ class SourceTests(unittest.TestCase):
         self.assertIn("so constructor done", (GAME / "rt" / "so_load.c").read_text())
         self.assertIn("nativeInit returned", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("first tick: nativeUpdate", (GAME / "rt" / "ab_entry.c").read_text())
-        self.assertGreaterEqual(ab.RECIPE, 13)
+        self.assertGreaterEqual(ab.RECIPE, 14)
         self.assertIn("THROW_REPORT", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("THROW_SITE", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("wait_frames(300)", (GAME / "host" / "main.c").read_text())
-        self.assertIn("docs/ and the parent folder", plat)
-        self.assertIn("docs/ and the parent folder", (GAME / "host" / "main.c").read_text())
-        self.assertIn("docs/ and the parent folder", (GAME / "rt" / "shims.c").read_text())
+        self.assertIn("Persist is docs/ only", plat)
+        self.assertIn("Persist is docs/ only", (GAME / "host" / "main.c").read_text())
+        self.assertIn("ab_persist_prepare", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("do not stop music", (GAME / "nano" / "fn_nano.c").read_text())
         self.assertIn("1 MB largest after a 3 MB pool", (GAME / "nano" / "fn_nano.c").read_text())
         self.assertIn("lua_lj_jb", (GAME / "rt" / "ab_entry.c").read_text())
@@ -354,8 +355,9 @@ class SourceTests(unittest.TestCase):
         self.assertIn("unwind raise", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("cxa_allocate", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("readFile begin", (GAME / "nano" / "plat_nano.c").read_text())
-        self.assertIn("readFile leftover", (GAME / "nano" / "plat_nano.c").read_text())
-        self.assertIn("highscores.lua empty (missing)", (GAME / "nano" / "plat_nano.c").read_text())
+        self.assertIn("plat_read_abs", (GAME / "nano" / "plat_nano.c").read_text())
+        self.assertIn("Never use that", (GAME / "nano" / "plat_nano.c").read_text())
+        self.assertIn("empty (missing)", (GAME / "nano" / "plat_nano.c").read_text())
         jmp = (GAME / "nano" / "fn_jmp.S").read_text()
         self.assertIn("vmrs", jmp)
         self.assertIn("vmsr", jmp)
@@ -380,13 +382,18 @@ class SourceTests(unittest.TestCase):
         self.assertIn("Find_exidx miss", shims)
         self.assertIn("Find_exidx hit", shims)
         self.assertIn("lua_longjmp via EHABI", shims)
-        self.assertIn("Persist first", shims)
+        self.assertIn("nfile open", shims)
+        self.assertIn("BIONIC_FILE", shims)
+        self.assertIn("persist migrate leftover", shims)
         self.assertIn("FILES_DIR", plat)
         self.assertIn('FILES_DIR "/%s"', plat)
         hostm = (GAME / "host" / "main.c").read_text()
         self.assertIn("files_dir, leaf", hostm)
-        self.assertIn("readFile leftover", hostm)
-        self.assertIn("highscores.lua empty (missing)", hostm)
+        self.assertIn("plat_read_abs", hostm)
+        self.assertIn("empty (missing)", hostm)
+        self.assertIn("AB_OFF_HANDLE_LOAD", entry)
+        self.assertIn("lua recovery leftover-slack", entry)
+        self.assertIn("no LuaException", entry)
         self.assertIn("malloc FAIL", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("jni_drop", (GAME / "rt" / "jni.c").read_text())
         self.assertIn("ab_crumb", (GAME / "nano" / "fn_nano.c").read_text())
@@ -413,6 +420,8 @@ class SourceTests(unittest.TestCase):
         self.assertIn("scale_sheet_dat", src)
         self.assertIn('block_dat = {"INGAME", "INGAME_1"}', src)
         self.assertIn("empty sheet name", src)
+        self.assertIn("settings.lua", src)
+        self.assertIn("highscores.lua", src)
 
 
 @unittest.skipUnless(APK, "set NANO7KIT_ANGRY_APK to the Angry Birds 1.0.0 apk/zip to run")
@@ -527,6 +536,22 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertTrue((out / "panel-restart.ppm").is_file(), err[-2000:])
         self.assertTrue((out / "panel-next.ppm").is_file(), err[-2000:])
 
+    # Device leftover /Apps/Data/AngryBirds/settings.lua (186 bytes, 7 Nov).
+    SETTINGS_186 = (
+        'currentLanguage = "en_EN"\n'
+        'tutorials = {\n'
+        '    BIRD_RED = {\n'
+        '        sprite = "TUTORIAL_1",\n'
+        '\n'
+        '    },\n'
+        '\n'
+        '}\n'
+        'audioEnabled = true\n'
+        'lastOpenLevel = 4\n'
+        'currentLevelSelectionPage = 1\n'
+        'gameStarted = true\n'
+    )
+
     def _run_abso_init(self, abso, out):
         import subprocess
         r = subprocess.run(
@@ -534,6 +559,22 @@ class PhysicsHarnessTests(unittest.TestCase):
             env=self._harness_env(), capture_output=True, text=True, timeout=180)
         err = (r.stderr or "") + (r.stdout or "")
         return r.returncode, err
+
+    def _plant_leftover_settings(self, out, docs_junk=False):
+        self.assertEqual(len(self.SETTINGS_186.encode("ascii")), 186)
+        docs = out / "docs"
+        if docs.exists():
+            shutil.rmtree(docs)
+        (out / "settings.lua").write_bytes(self.SETTINGS_186.encode("ascii"))
+        (out / "highscores.lua.bak").write_bytes(b"x" * 277)
+        (out / "._settings.lua").write_bytes(b"\x00\x05\x16\x07junk")
+        leftover_hs = out / "highscores.lua"
+        if leftover_hs.exists():
+            leftover_hs.unlink()
+        if docs_junk:
+            docs.mkdir(parents=True, exist_ok=True)
+            (docs / "junk.lua").write_text("-- junk in docs, not persist\n", encoding="ascii")
+        return out / "settings.lua"
 
     def test_abso_bad_highscores_lua_error_is_caught(self):
         """Device-layout .abso: no save is empty; truncated 277-byte leftover is empty."""
@@ -564,6 +605,8 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("highscores.lua empty (missing)", err, err[-8000:])
         self.assertNotIn("cxa_throw type=", err)
         self.assertNotIn("unwind raise", err)
+        self.assertIn("lua recovery syntax err=3", err, err[-4000:])
+        self.assertIn("lua recovery runtime err=2", err, err[-4000:])
         self.assertIn("nativeInit returned", err, err[-4000:])
         self.assertNotIn("CRASH ", err)
         self.assertEqual(rc, 0, err[-4000:])
@@ -574,7 +617,6 @@ class PhysicsHarnessTests(unittest.TestCase):
         rc, err = self._run_abso_init(abso, out)
         self.assertIn("highscores.lua skip invalid", err, err[-8000:])
         self.assertIn("highscores.lua empty (invalid)", err, err[-8000:])
-        self.assertNotIn("luaD_throw longjmp err=3", err)
         self.assertNotIn("cxa_throw type=", err)
         self.assertNotIn("LuaException", err)
         self.assertIn("nativeInit returned", err, err[-4000:])
@@ -584,8 +626,8 @@ class PhysicsHarnessTests(unittest.TestCase):
         rc, err2 = self._run_abso_init(abso, out)
         self.assertIn("highscores.lua skip invalid", err2, err2[-4000:])
         self.assertIn("highscores.lua empty (invalid)", err2, err2[-4000:])
-        self.assertNotIn("luaD_throw longjmp err=3", err2)
         self.assertNotIn("cxa_throw type=", err2)
+        self.assertNotIn("LuaException", err2)
         self.assertIn("nativeInit returned", err2, err2[-4000:])
         self.assertEqual(rc, 0, err2[-4000:])
         hs.unlink()
@@ -594,7 +636,28 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("readFile leftover", err3, err3[-4000:])
         self.assertIn("highscores.lua skip invalid", err3, err3[-4000:])
         self.assertIn("nativeInit returned", err3, err3[-4000:])
+        self.assertIn("lua recovery syntax err=3", err3, err3[-4000:])
+        self.assertIn("lua recovery runtime err=2", err3, err3[-4000:])
+        self.assertNotIn("LuaException", err3)
+        self.assertNotIn("cxa_throw type=", err3)
         self.assertEqual(rc, 0, err3[-4000:])
+        leftover.unlink()
+        self._plant_leftover_settings(out, docs_junk=True)
+        rc, err4 = self._run_abso_init(abso, out)
+        self.assertIn("persist migrate leftover", err4, err4[-8000:])
+        self.assertIn("persist settings lastOpenLevel=4", err4, err4[-8000:])
+        self.assertIn("lua recovery leftover-slack err=3", err4, err4[-8000:])
+        self.assertIn("lua recovery leftover-exact err=0", err4, err4[-8000:])
+        self.assertIn("lua recovery syntax err=3", err4, err4[-8000:])
+        self.assertIn("lua recovery runtime err=2", err4, err4[-8000:])
+        self.assertRegex(err4, r"nfile open '.*settings\.lua' len=186")
+        self.assertNotIn("LuaException", err4)
+        self.assertNotIn("cxa_throw type=", err4)
+        self.assertIn("nativeInit returned", err4, err4[-4000:])
+        self.assertEqual(rc, 0, err4[-4000:])
+        migrated = (out / "docs" / "settings.lua").read_bytes()
+        self.assertEqual(len(migrated), 186)
+        self.assertIn(b"lastOpenLevel = 4", migrated)
 
     def _boot_shot(self, abso, out):
         import subprocess
@@ -622,28 +685,29 @@ class PhysicsHarnessTests(unittest.TestCase):
             ["python3", str(conv), str(ABSO), str(abso)],
             capture_output=True, text=True, timeout=60)
         self.assertEqual(rconv.returncode, 0, rconv.stderr + rconv.stdout)
+        leftover_hs = out / "highscores.lua"
         docs = out / "docs"
-        docs.mkdir(parents=True, exist_ok=True)
-        leftover = out / "highscores.lua"
         hs = docs / "highscores.lua"
-        packed = ABDATA / "highscores.lua"
-        self.assertTrue(packed.is_file())
-        if hs.exists():
-            hs.unlink()
-        if leftover.exists():
-            leftover.unlink()
+        self._plant_leftover_settings(out, docs_junk=False)
         rc, err = self._boot_shot(abso, out)
         self.assertIn("so_load abso", err, err[-4000:])
         self.assertIn("nativeInit returned", err, err[-4000:])
         self.assertIn("AB_BOOT_SHOT_TEST menu frames=300", err, err[-8000:])
         self.assertIn("THROW_REPORT", err, err[-8000:])
-        self.assertRegex(err, r"THROW_REPORT cxa=0 lua=0 malloc_fail=0")
+        self.assertRegex(err, r"THROW_REPORT cxa=0 lua=3 malloc_fail=0")
         self.assertNotIn("cxa_throw type=", err)
         self.assertNotIn("THROW_SITE cxa ", err)
         self.assertNotIn("THROW_SITE malloc ", err)
         self.assertNotIn("malloc FAIL", err)
+        self.assertNotIn("LuaException", err)
+        self.assertIn("persist migrate leftover", err)
+        self.assertIn("persist settings lastOpenLevel=4", err)
+        self.assertIn("lua recovery leftover-slack err=3", err)
+        self.assertIn("lua recovery leftover-exact err=0", err)
+        self.assertIn("lua recovery syntax err=3", err)
+        self.assertIn("lua recovery runtime err=2", err)
+        self.assertRegex(err, r"nfile open '.*settings\.lua' len=186")
         self.assertIn("highscores.lua empty (missing)", err)
-        self.assertNotIn("readFile leftover", err)
         self.assertIn("AB_BOOT_SHOT_TEST PASS", err, err[-8000:])
         self.assertEqual(rc, 0, err[-8000:])
         self.assertIn("flying=1", err)
@@ -651,29 +715,30 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertNotIn("CRASH ", err)
         self.assertTrue((out / "panel-menu.ppm").is_file())
         self.assertTrue((out / "panel-hit.ppm").is_file())
+        migrated = (docs / "settings.lua").read_bytes()
+        self.assertIn(b"lastOpenLevel = 4", migrated)
         body = self._hs277()
         self.assertEqual(len(body), 277)
         hs.write_text(body, encoding="ascii")
-        if leftover.exists():
-            leftover.unlink()
+        if leftover_hs.exists():
+            leftover_hs.unlink()
         rc, err = self._boot_shot(abso, out)
         self.assertIn("highscores.lua skip invalid", err, err[-8000:])
         self.assertIn("highscores.lua empty (invalid)", err, err[-8000:])
-        self.assertRegex(err, r"THROW_REPORT cxa=0 lua=0 malloc_fail=0")
+        self.assertRegex(err, r"THROW_REPORT cxa=0 lua=3 malloc_fail=0")
         self.assertNotIn("cxa_throw type=", err)
         self.assertNotIn("THROW_SITE cxa ", err)
-        self.assertNotIn("THROW_SITE lua ", err)
         self.assertNotIn("LuaException", err)
         self.assertNotIn("malloc FAIL", err)
         self.assertIn("AB_BOOT_SHOT_TEST PASS", err, err[-8000:])
         self.assertEqual(rc, 0, err[-8000:])
         self.assertNotIn("CRASH ", err)
         hs.unlink()
-        leftover.write_text(body, encoding="ascii")
+        leftover_hs.write_text(body, encoding="ascii")
         rc, err = self._boot_shot(abso, out)
         self.assertIn("readFile leftover", err, err[-8000:])
         self.assertIn("highscores.lua skip invalid", err, err[-8000:])
-        self.assertRegex(err, r"THROW_REPORT cxa=0 lua=0 malloc_fail=0")
+        self.assertRegex(err, r"THROW_REPORT cxa=0 lua=3 malloc_fail=0")
         self.assertNotIn("cxa_throw type=", err)
         self.assertIn("AB_BOOT_SHOT_TEST PASS", err, err[-8000:])
         self.assertEqual(rc, 0, err[-8000:])

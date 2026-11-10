@@ -264,15 +264,22 @@ void *ab_realloc(void *p, size_t n) {
 extern int fn_setjmp(void *b) __attribute__((returns_twice));
 extern void fn_longjmp(void *b, int v) __attribute__((noreturn));
 
-int ab_persist_name(const char *name) {
-    return name && strstr(name, "highscores") != 0;
-}
+const char *ab_last_io(void) { return last_io; }
+
 const char *ab_persist_leaf(const char *name) {
     const char *s;
     if (!name || !name[0]) return "";
     s = strrchr(name, '/');
     return (s && s[1]) ? s + 1 : name;
 }
+
+int ab_persist_name(const char *name) {
+    const char *leaf = ab_persist_leaf(name);
+    /* Leaf only: highscores.lua.bak is leftover junk, not a save.
+     * highscores.lua skip invalid leftover; highscores.lua empty (missing). */
+    return !strcmp(leaf, "settings.lua") || !strcmp(leaf, "highscores.lua");
+}
+
 int ab_persist_in_docs(const char *path) {
     const char *files, *slash;
     size_t n, fn;
@@ -286,27 +293,39 @@ int ab_persist_in_docs(const char *path) {
     return n == fn && memcmp(path, files, n) == 0;
 }
 
+static int persist_has(const unsigned char *p, uint32_t n, const char *s) {
+    uint32_t k, i;
+    if (!p || !s || !s[0]) return 0;
+    k = (uint32_t)strlen(s);
+    if (n < k) return 0;
+    for (i = 0; i + k <= n; i++) if (memcmp(p + i, s, k) == 0) return 1;
+    return 0;
+}
+
 int ab_persist_lua_ok(const char *name, const void *buf, uint32_t n) {
     const unsigned char *p = (const unsigned char *)buf;
+    const char *leaf = ab_persist_leaf(name);
     uint32_t i;
-    int level = 0, brace = 0;
+    int brace = 0;
     if (!ab_persist_name(name)) return 1;
     /* Empty persist is Android's missing-save (compile never runs). */
     if (n == 0) return 1;
     if (!p || n < 4) return 0;
     if (p[0] == 0x1b && p[1] == 'L' && p[2] == 'u' && p[3] == 'a') return 1;
-    /* Text persist must look like a finished table. The device leftover
-     * 277-byte file is "Level1 = { completed=true, score=1," plus filler:
-     * lua_load fails, then throwError<LuaException> (a device reboot).
-     * Missing '}' is enough to empty it instead. */
+    /* Interior NUL: leftover FAT slack / pool reuse, not Lua text. */
     for (i = 0; i < n; i++) {
-        if (!level && i + 5 <= n &&
-            p[i] == 'L' && p[i + 1] == 'e' && p[i + 2] == 'v' &&
-            p[i + 3] == 'e' && p[i + 4] == 'l')
-            level = 1;
-        if (p[i] == '}') brace = 1;
+        if (p[i] == 0) return 0;
+        if (p[i] == '{') brace++;
+        else if (p[i] == '}') {
+            brace--;
+            if (brace < 0) return 0;
+        }
     }
-    return level && brace;
+    if (brace != 0) return 0;
+    if (!strcmp(leaf, "highscores.lua"))
+        return persist_has(p, n, "Level");
+    return persist_has(p, n, "lastOpenLevel") || persist_has(p, n, "currentLanguage")
+        || persist_has(p, n, "audioEnabled") || persist_has(p, n, "gameStarted");
 }
 
 int ab_persist_empty(void **out, uint32_t *len) {
@@ -320,6 +339,81 @@ int ab_persist_empty(void **out, uint32_t *len) {
     if (out) *out = p;
     if (len) *len = 0;
     return 0;
+}
+
+static void persist_parent_dir(const char *files, char *out, size_t n) {
+    const char *s;
+    size_t k;
+    if (!out || n < 2) return;
+    out[0] = 0;
+    if (!files || !files[0]) return;
+    s = strrchr(files, '/');
+    k = s ? (size_t)(s - files) : 0;
+    if (!k) return;
+    if (k >= n) k = n - 1;
+    memcpy(out, files, k);
+    out[k] = 0;
+}
+
+void ab_persist_prepare(void) {
+    static const char *const names[] = { "settings.lua", "highscores.lua" };
+    const char *files = plat_files_dir();
+    char parent[192], src[192], dst[192], b[192];
+    unsigned i;
+    if (!files || !files[0]) return;
+    plat_mkdir_abs(files);
+    persist_parent_dir(files, parent, sizeof parent);
+    for (i = 0; i < sizeof names / sizeof names[0]; i++) {
+        void *buf = 0;
+        uint32_t n = 0;
+        snprintf(dst, sizeof dst, "%s/%s", files, names[i]);
+        if (plat_exists_abs(dst)) continue;
+        if (!parent[0]) continue;
+        snprintf(src, sizeof src, "%s/%s", parent, names[i]);
+        if (!plat_exists_abs(src)) continue;
+        if (plat_read_abs(src, &buf, &n) || !buf) {
+            if (buf) free(buf);
+            continue;
+        }
+        snprintf(b, sizeof b, "readFile leftover '%s' %u bytes", src, (unsigned)n);
+        plat_log_line(b);
+        plat_log_flush();
+        if (!ab_persist_lua_ok(names[i], buf, n)) {
+            snprintf(b, sizeof b, "%s skip invalid leftover %u bytes", names[i], (unsigned)n);
+            plat_log_line(b);
+            plat_log_flush();
+            plat_log_line("persist leftover not migrated (invalid)");
+            plat_log_flush();
+            free(buf);
+            continue;
+        }
+        if (plat_write_abs(dst, buf, n)) {
+            snprintf(b, sizeof b, "persist migrate write fail '%s'", dst);
+            plat_log_line(b);
+            plat_log_flush();
+            free(buf);
+            continue;
+        }
+        snprintf(b, sizeof b, "persist migrate leftover '%s' %u bytes", src, (unsigned)n);
+        plat_log_line(b);
+        plat_log_flush();
+        snprintf(b, sizeof b, "readFile leftover '%s' requested '%s'", src, dst);
+        plat_log_line(b);
+        plat_log_flush();
+        if (!strcmp(names[i], "settings.lua") && persist_has(buf, n, "lastOpenLevel = 4")) {
+            plat_log_line("persist settings lastOpenLevel=4");
+            plat_log_flush();
+        }
+        snprintf(b, sizeof b, "persist %s %u bytes %02x %02x %02x %02x",
+                 names[i], (unsigned)n,
+                 n > 0 ? ((unsigned char *)buf)[0] : 0,
+                 n > 1 ? ((unsigned char *)buf)[1] : 0,
+                 n > 2 ? ((unsigned char *)buf)[2] : 0,
+                 n > 3 ? ((unsigned char *)buf)[3] : 0);
+        plat_log_line(b);
+        plat_log_flush();
+        free(buf);
+    }
 }
 
 int ab_inflateInit_(void *s, const char *ver, int n) { return inflateInit_(s, ver, n); }
@@ -548,109 +642,39 @@ static void ctype_init(void) {
     _toupper_tab_ = ab_toupper_tab;
 }
 
-/* ---- FILE: PLT fopen/fread never touch bionic layout; __sF is stdin/out/err. */
+/* FILE handed to the .so is an 84-byte zeroed bionic FILE so
+ * AppDataInputStream::available/read ldrh [FILE,#12] is _flags (not nfile
+ * pos). Payload sits after. Host and nano share this: leftover I/O is the
+ * same plat_read_file + nfile path. Persist writes flush on fclose. */
 #define MAXF 64
-#define FMAG 0x41424649u
-typedef struct { uint32_t mag; FILE *real; char b[96]; } wrapf;
-static wrapf F[MAXF];
-
-static wrapf *wf_of(void *p) {
-    int i;
-    if (!p) return 0;
-    for (i = 0; i < MAXF; i++) if (F[i].mag == FMAG && (p == (void *)F[i].b || p == (void *)&F[i])) return &F[i];
-    return 0;
-}
-static FILE *real_fp(void *p) {
-    wrapf *w = wf_of(p);
-    if (w) return w->real;
-    if (p == (void *)__sF[0] || p == (void *)__sF) return stdin;
-    if (p == (void *)__sF[1] || p == (void *)((char *)__sF + BIONIC_FILE)) return stdout;
-    if (p == (void *)__sF[2] || p == (void *)((char *)__sF + 2 * BIONIC_FILE)) return stderr;
-    return (FILE *)p;
-}
-
-static const char *strip_data(const char *name) {
-    const char *base = name, *d, *slash;
-    while ((d = strstr(base, "data/"))) base = d + 5;
-    slash = strrchr(name, '/');
-    (void)slash;
-    return base;
-}
-
-#ifndef FN_NANO
-static FILE *try_open(const char *path, const char *mode) {
-    FILE *r;
-    char p[512], p2[512];
-    const char *base, *leaf;
-    if (!path) return 0;
-    /* Persist first: nativeInit fopen's plat_files_dir()/highscores.lua.
-     * Never open the packed data/ template for persist: that hid a missing
-     * save on the host (device then died in AppDataInputStream IOException).
-     * docs/ and the parent folder are the same persist location. */
-    leaf = ab_persist_leaf(path);
-    if (path[0] == '/' && (r = fopen(path, mode))) {
-        if (ab_persist_name(path) && !ab_persist_in_docs(path)) {
-            char b[192];
-            snprintf(b, sizeof b, "readFile leftover '%s' requested '%s'", path, path);
-            plat_log_line(b);
-            plat_log_flush();
-        }
-        return r;
-    }
-    if (ab_persist_name(path)) {
-        snprintf(p, sizeof p, "%s/%s", plat_files_dir(), leaf[0] ? leaf : path);
-        if ((r = fopen(p, mode))) return r;
-        snprintf(p, sizeof p, "%s/../%s", plat_files_dir(), leaf[0] ? leaf : path);
-        if ((r = fopen(p, mode))) {
-            char b[192];
-            snprintf(b, sizeof b, "readFile leftover '%s' requested '%s'", p, path);
-            plat_log_line(b);
-            plat_log_flush();
-            return r;
-        }
-        return 0;
-    }
-    snprintf(p, sizeof p, "%s/%s", plat_files_dir(), path);
-    if ((r = fopen(p, mode))) return r;
-    snprintf(p, sizeof p, "%s/%s", plat_data_dir(), path);
-    if ((r = fopen(p, mode))) return r;
-    base = strip_data(path);
-    if (base != path) {
-        snprintf(p, sizeof p, "%s/%s", plat_data_dir(), base);
-        if ((r = fopen(p, mode))) return r;
-    }
-    if (leaf[0]) {
-        snprintf(p, sizeof p, "%s/%s", plat_files_dir(), leaf);
-        if ((r = fopen(p, mode))) return r;
-        snprintf(p, sizeof p, "%s/%s", plat_data_dir(), leaf);
-        if ((r = fopen(p, mode))) return r;
-    }
-    /* Lua files are often named without the suffix in Ka3D logs. */
-    if (!strchr(path, '.')) {
-        snprintf(p2, sizeof p2, "%s.lua", path);
-        if ((r = try_open(p2, mode))) return r;
-    }
-    return 0;
-}
-#endif
-
-#ifdef FN_NANO
+#define NMAG 0x41424e46u
 typedef struct {
+    char file[BIONIC_FILE];
     uint32_t mag;
     uint8_t *data;
     uint32_t len, pos, cap;
     int write;
+    char path[96];
 } nfile;
-#define NMAG 0x41424e46u
 static nfile NF[MAXF];
 static nfile *nf_of(void *p) {
     int i;
     if (!p) return 0;
-    for (i = 0; i < MAXF; i++) if (NF[i].mag == NMAG && p == (void *)&NF[i]) return &NF[i];
+    for (i = 0; i < MAXF; i++)
+        if (NF[i].mag == NMAG && (p == (void *)NF[i].file || p == (void *)&NF[i]))
+            return &NF[i];
     return 0;
+}
+static void persist_miss_log(const char *path) {
+    const char *leaf = ab_persist_leaf(path);
+    char b[80];
+    snprintf(b, sizeof b, "%s empty (missing)", leaf[0] ? leaf : "persist");
+    plat_log_line(b);
+    plat_log_flush();
 }
 void *ab_fopen(const char *path, const char *mode) {
     nfile *w = 0; int i, wr;
+    const char *leaf;
     if (!path) return 0;
     ab_note_io(path);
     fe_note_texfile(path);
@@ -659,28 +683,51 @@ void *ab_fopen(const char *path, const char *mode) {
     if (!w) return 0;
     memset(w, 0, sizeof *w);
     w->mag = NMAG;
+    leaf = ab_persist_leaf(path);
+    if (ab_persist_name(path) && leaf[0])
+        snprintf(w->path, sizeof w->path, "%s/%s", plat_files_dir(), leaf);
+    else {
+        size_t n = strlen(path);
+        if (n >= sizeof w->path) n = sizeof w->path - 1;
+        memcpy(w->path, path, n);
+        w->path[n] = 0;
+    }
     if (!wr) {
         void *buf = 0; uint32_t n = 0;
+        char hb[96];
         if (plat_read_file(path, &buf, &n)) {
-            if (ab_persist_name(path) && ab_persist_empty(&buf, &n) == 0) {
-                plat_log_line("highscores.lua empty (missing)");
-                plat_log_flush();
-            } else {
+            if (ab_persist_name(path) && ab_persist_empty(&buf, &n) == 0)
+                persist_miss_log(path);
+            else {
                 w->mag = 0;
                 return 0;
             }
         }
         w->data = buf; w->len = n; w->cap = n ? n : 1;
+        if (ab_persist_name(path) || strstr(path, "settings.lua")) {
+            unsigned fl = (unsigned char)w->file[12] | ((unsigned)(unsigned char)w->file[13] << 8);
+            snprintf(hb, sizeof hb, "nfile open '%s' len=%u flags=%u %02x %02x %02x %02x",
+                     path, (unsigned)n, fl,
+                     n > 0 && buf ? ((unsigned char *)buf)[0] : 0,
+                     n > 1 && buf ? ((unsigned char *)buf)[1] : 0,
+                     n > 2 && buf ? ((unsigned char *)buf)[2] : 0,
+                     n > 3 && buf ? ((unsigned char *)buf)[3] : 0);
+            plat_log_line(hb);
+            plat_log_flush();
+        }
     } else {
         w->write = 1;
         w->data = calloc(1, 256);
         w->cap = 256;
+        if (ab_persist_name(path)) plat_mkdir_abs(plat_files_dir());
     }
-    return w;
+    return w->file;
 }
 int ab_fclose(void *fp) {
     nfile *w = nf_of(fp);
     if (!w) return -1;
+    if (w->write && w->path[0] && w->data)
+        plat_write_abs(w->path, w->data, w->len);
     free(w->data);
     w->mag = 0; w->data = 0;
     return 0;
@@ -726,7 +773,12 @@ int ab_fseek(void *fp, long off, int wh) {
     return 0;
 }
 long ab_ftell(void *fp) { nfile *w = nf_of(fp); return w ? (long)w->pos : -1L; }
-int ab_fflush(void *fp) { (void)fp; return 0; }
+int ab_fflush(void *fp) {
+    nfile *w = nf_of(fp);
+    if (w && w->write && w->path[0] && w->data)
+        plat_write_abs(w->path, w->data, w->len);
+    return 0;
+}
 char *ab_fgets(char *s, int n, void *fp) {
     int i = 0;
     if (!s || n <= 0) return 0;
@@ -753,102 +805,23 @@ int ab_ungetc(int c, void *fp) {
 }
 int ab_setvbuf(void *fp, char *b, int m, size_t s) { (void)fp; (void)b; (void)m; (void)s; return 0; }
 void *ab_freopen(const char *p, const char *m, void *fp) { (void)p; (void)m; return fp; }
-#else
-void *ab_fopen(const char *path, const char *mode) {
-    wrapf *w = 0; FILE *r; int i, wr;
-    if (!path) return 0;
-    ab_note_io(path);
-    fe_note_texfile(path);
-    wr = mode && (strchr(mode, 'w') || strchr(mode, 'a') || strchr(mode, '+'));
-    r = try_open(path, mode);
-    if (!r && !wr && ab_persist_name(path)) {
-        plat_log_line("highscores.lua empty (missing)");
-        plat_log_flush();
-        r = tmpfile();
-    }
-    if (!r) return 0;
-    if (!wr && ab_persist_name(path) && r) {
-        long n;
-        void *buf;
-        fseek(r, 0, SEEK_END);
-        n = ftell(r);
-        fseek(r, 0, SEEK_SET);
-        if (n < 0) n = 0;
-        buf = malloc((size_t)n + 1);
-        if (!buf) { fclose(r); return 0; }
-        if (n && fread(buf, 1, (size_t)n, r) != (size_t)n) { free(buf); fclose(r); return 0; }
-        ((char *)buf)[n] = 0;
-        if (!ab_persist_lua_ok(path, buf, (uint32_t)n)) {
-            char b[80];
-            snprintf(b, sizeof b, "highscores.lua skip invalid %u bytes", (unsigned)n);
-            plat_log_line(b);
-            plat_log_flush();
-            plat_log_line("highscores.lua empty (invalid)");
-            plat_log_flush();
-            free(buf);
-            fclose(r);
-            r = tmpfile();
-            if (!r) return 0;
-        } else {
-            free(buf);
-            fseek(r, 0, SEEK_SET);
-        }
-    }
-    for (i = 0; i < MAXF; i++) if (F[i].mag != FMAG) { w = &F[i]; break; }
-    if (!w) { fclose(r); return 0; }
-    memset(w, 0, sizeof *w);
-    w->mag = FMAG; w->real = r;
-    return w->b;
-}
-int ab_fclose(void *fp) {
-    wrapf *w = wf_of(fp);
-    int rc;
-    if (!w) return fclose(real_fp(fp));
-    rc = fclose(w->real);
-    w->mag = 0; w->real = 0;
-    return rc;
-}
-size_t ab_fread(void *ptr, size_t s, size_t n, void *fp) { return fread(ptr, s, n, real_fp(fp)); }
-size_t ab_fwrite(const void *ptr, size_t s, size_t n, void *fp) { return fwrite(ptr, s, n, real_fp(fp)); }
-int ab_fseek(void *fp, long off, int wh) { return fseek(real_fp(fp), off, wh); }
-long ab_ftell(void *fp) { return ftell(real_fp(fp)); }
-int ab_fflush(void *fp) { return fflush(real_fp(fp)); }
-char *ab_fgets(char *s, int n, void *fp) { return fgets(s, n, real_fp(fp)); }
-int ab_fputc(int c, void *fp) { return fputc(c, real_fp(fp)); }
-int ab_fputs(const char *s, void *fp) { return fputs(s, real_fp(fp)); }
-int ab_ungetc(int c, void *fp) { return ungetc(c, real_fp(fp)); }
-int ab_setvbuf(void *fp, char *b, int m, size_t s) { return setvbuf(real_fp(fp), b, m, s); }
-void *ab_freopen(const char *p, const char *m, void *fp) { (void)p; (void)m; return fp; }
-#endif
+
 
 int ab_fprintf(void *fp, const char *fmt, ...) {
     char buf[512]; va_list ap;
     va_start(ap, fmt); vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
-#ifdef FN_NANO
     plat_log_line(buf);
     if (fp) ab_fputs(buf, fp);
     return (int)strlen(buf);
-#else
-    {
-        FILE *r = real_fp(fp);
-        if (r == stderr || r == stdout) { plat_log_line(buf); return (int)strlen(buf); }
-        return fputs(buf, r);
-    }
-#endif
 }
 int ab_fscanf(void *fp, const char *fmt, ...) {
     va_list ap; int n;
-#ifdef FN_NANO
     nfile *w = nf_of(fp);
     if (!w || !w->data) return EOF;
     va_start(ap, fmt);
     n = vsscanf((char *)w->data + w->pos, fmt, ap);
     va_end(ap);
     return n;
-#else
-    va_start(ap, fmt); n = vfscanf(real_fp(fp), fmt, ap); va_end(ap);
-    return n;
-#endif
 }
 
 int ab_printf(const char *fmt, ...) {
@@ -882,22 +855,8 @@ void *ab_tmpfile(void) { return ab_fopen("abtmp", "wb+"); }
 char *ab_tmpnam(char *s) { static char b[20]; snprintf(s ? s : b, 20, "abtmp"); return s ? s : b; }
 
 int ab_open(const char *path, int flags, ...) {
-#ifdef FN_NANO
     (void)flags;
     return ab_fopen(path, (flags & 1) ? "wb+" : "rb") ? 3 : -1;
-#else
-    {
-        FILE *r;
-        int fd;
-        if (!path) return -1;
-        fe_note_texfile(path);
-        r = try_open(path, "rb");
-        if (!r) return -1;
-        fd = dup(fileno(r));
-        fclose(r);
-        return fd;
-    }
-#endif
 }
 int ab_close(int fd) {
 #ifdef FN_NANO
@@ -1069,6 +1028,6 @@ void ab_shims_reset(void) {
     heap_now = heap_peak = heap_fail = 0;
     n_cxa_throw = n_lua_throw = n_throw_sites = 0;
     last_io[0] = 0;
-    memset(F, 0, sizeof F);
+    memset(NF, 0, sizeof NF);
     memset(tls, 0, sizeof tls);
 }

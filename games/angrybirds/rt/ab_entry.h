@@ -3,6 +3,7 @@
 #define AB_ENTRY_H
 #include <stdint.h>
 int ab_start(void);
+void ab_lua_prove_recovery(void);
 void ab_frame(float dt);
 typedef struct { float x, y; int down; int id; } ab_tsample;
 #define AB_MAX_STEPS 4

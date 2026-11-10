@@ -157,6 +157,49 @@ void plat_fatal(const char *why) {
 const char *plat_files_dir(void) { return FILES_DIR; }
 const char *plat_data_dir(void) { return DATA_DIR; }
 
+int plat_exists_abs(const char *path) {
+    return path && path[0] && hb_fs_exists(path) ? 1 : 0;
+}
+int plat_mkdir_abs(const char *path) {
+    if (!path || !path[0]) return -1;
+    hb_fs_mkdir("/Apps/Data");
+    hb_fs_mkdir(DATA_DIR);
+    return hb_fs_mkdir(path) ? 0 : -1;
+}
+int plat_write_abs(const char *path, const void *buf, uint32_t n) {
+    if (!path || !path[0]) return -1;
+    return hb_fs_write(path, buf, n) ? 0 : -1;
+}
+int plat_read_abs(const char *path, void **out, uint32_t *len) {
+    uint32_t size, got;
+    uint8_t *raw, *tmp;
+    if (out) *out = 0;
+    if (len) *len = 0;
+    if (!path || !path[0] || !hb_fs_exists(path)) return -1;
+    size = hb_fs_size(path);
+    raw = malloc(size + SLACK + 64 + 1);
+    if (!raw) return -1;
+    tmp = (uint8_t *)(((uintptr_t)raw + 63u) & ~(uintptr_t)63u);
+    memset(tmp, 0, size + 1);
+    /* FAT may fill whole sectors past EOF into slack. Never use that
+     * count as lua_load's length: leftover valid Lua + 0xA5 junk is
+     * LUA_ERRSYNTAX=3. Always expose hb_fs_size bytes, NUL-terminated. */
+    got = hb_fs_read(path, tmp, size + SLACK);
+    if (got < size) { free(raw); return -1; }
+    if (got != size) {
+        char b[160];
+        snprintf(b, sizeof b, "plat_read_abs '%s' size=%u got=%u (FAT slack ignored)",
+                 path, (unsigned)size, (unsigned)got);
+        plat_log_line(b);
+        plat_log_flush();
+    }
+    if (tmp != raw) memmove(raw, tmp, size);
+    raw[size] = 0;
+    if (out) *out = raw;
+    if (len) *len = size; /* never slack: leftover+junk is lua err=3 */
+    return 0;
+}
+
 int plat_read_file(const char *name, void **out, uint32_t *len) {
     char p[96];
     char log[192];
@@ -164,103 +207,74 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
     const char *base = req;
     const char *slash;
     const char *leaf;
-    int leftover = 0;
     uint32_t size;
-    uint8_t *tmp;
+    void *buf = 0;
     ab_note_io(req);
     fe_note_texfile(name);
     snprintf(log, sizeof log, "readFile begin '%s'", req);
     plat_log_line(log);
     plat_log_flush();
     p[0] = 0;
-    /* Persist (highscores.lua): Android files dir is FILES_DIR (.../docs).
-     * docs/ and the parent folder are the same persist location. A leftover
-     * save from an older recipe sits at DATA_DIR/highscores.lua (parent of
-     * docs). Do not fall back to packed assets for persist: on the host that
-     * is the converted template and hides a missing save.
-     * Missing/invalid persist is empty, not an IOException (AppDataInputStream
-     * fopen NULL -> throwError, which is the device reboot after parseIndex). */
+    /* Persist is docs/ only. Leftover parent saves are copied once by
+     * ab_persist_prepare. Packed data/ is never a persist fallback. */
     if (ab_persist_name(req)) {
         leaf = ab_persist_leaf(req);
-        if (req[0] == '/' && hb_fs_exists(req)) {
-            snprintf(p, sizeof p, "%s", req);
-            goto have;
+        if (leaf[0]) snprintf(p, sizeof p, FILES_DIR "/%s", leaf);
+        if (!p[0] || !hb_fs_exists(p) || !ab_persist_in_docs(p)) {
+            snprintf(log, sizeof log, "readFile miss '%s'", req);
+            plat_log_line(log);
+            plat_log_flush();
+            snprintf(log, sizeof log, "%s empty (missing)", leaf[0] ? leaf : "persist");
+            plat_log_line(log);
+            plat_log_flush();
+            return ab_persist_empty(out, len);
         }
-        if (leaf[0]) {
-            snprintf(p, sizeof p, FILES_DIR "/%s", leaf);
-            if (hb_fs_exists(p)) goto have;
-            snprintf(p, sizeof p, DATA_DIR "/%s", leaf);
-            if (hb_fs_exists(p)) goto have;
-        }
-        snprintf(log, sizeof log, "readFile miss '%s'", req);
-        plat_log_line(log);
-        plat_log_flush();
-        plat_log_line("highscores.lua empty (missing)");
-        plat_log_flush();
-        return ab_persist_empty(out, len);
+        goto have;
     }
     if (req[0] == '/' && hb_fs_exists(req)) {
         snprintf(p, sizeof p, "%s", req);
         goto have;
     }
     if (!strncmp(base, "data/", 5)) base += 5;
-    if (!strchr(base, '/') && base[0]) {
-        snprintf(p, sizeof p, FILES_DIR "/%s", base);
-        if (hb_fs_exists(p)) goto have;
-    }
     snprintf(p, sizeof p, DATA_DIR "/%s", base);
     if (hb_fs_exists(p)) goto have;
     slash = strrchr(base, '/');
     leaf = (slash && slash[1]) ? slash + 1 : base;
-    if (leaf[0]) {
-        snprintf(p, sizeof p, FILES_DIR "/%s", leaf);
-        if (hb_fs_exists(p)) goto have;
+    if (leaf[0] && !ab_persist_name(leaf)) {
         snprintf(p, sizeof p, DATA_DIR "/%s", leaf);
-        if (hb_fs_exists(p)) { leftover = 1; goto have; }
+        if (hb_fs_exists(p)) goto have;
     }
     snprintf(log, sizeof log, "readFile miss '%s'", req);
     plat_log_line(log);
     plat_log_flush();
-    if (ab_persist_name(req)) {
-        plat_log_line("highscores.lua empty (missing)");
-        plat_log_flush();
-        return ab_persist_empty(out, len);
-    }
     {
         int stub = ab_stub_audio(name, out, len);
         return stub == 1 ? 0 : -1;
     }
 have:
-    if (ab_persist_name(req) && p[0] && !ab_persist_in_docs(p)) leftover = 1;
-    size = hb_fs_size(p);
+    if (plat_read_abs(p, &buf, &size)) {
+        snprintf(log, sizeof log, "readFile '%s' read fail", p);
+        plat_log_line(log);
+        plat_log_flush();
+        return -1;
+    }
     snprintf(log, sizeof log, "readFile resolved '%s' %u bytes (pool used %u fail %u, OS free %u largest %u)",
              p, (unsigned)size, (unsigned)ab_heap_used(), (unsigned)ab_malloc_failures(),
              (unsigned)hb_os_heap_free(), (unsigned)hb_os_heap_largest());
     plat_log_line(log);
     plat_log_flush();
-    if (leftover) {
-        snprintf(log, sizeof log, "readFile leftover '%s' requested '%s'", p, req);
+    if (!ab_persist_lua_ok(name, buf, size)) {
+        snprintf(log, sizeof log, "%s skip invalid %u bytes",
+                 ab_persist_leaf(name), (unsigned)size);
         plat_log_line(log);
         plat_log_flush();
-    }
-    tmp = malloc(size + SLACK);
-    if (!tmp) {
-        snprintf(log, sizeof log, "readFile '%s' %u bytes: malloc NULL", p, (unsigned)size);
+        free(buf);
+        snprintf(log, sizeof log, "%s empty (invalid)", ab_persist_leaf(name));
         plat_log_line(log);
-        plat_log_flush();
-        return -1;
-    }
-    if (hb_fs_read(p, tmp, size + SLACK) < size) { free(tmp); return -1; }
-    if (!ab_persist_lua_ok(name, tmp, size)) {
-        snprintf(log, sizeof log, "highscores.lua skip invalid %u bytes", (unsigned)size);
-        plat_log_line(log);
-        plat_log_flush();
-        free(tmp);
-        plat_log_line("highscores.lua empty (invalid)");
         plat_log_flush();
         return ab_persist_empty(out, len);
     }
-    *out = tmp; *len = size;
+    *out = buf; *len = size;
     return 0;
 }
 

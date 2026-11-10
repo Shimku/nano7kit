@@ -47,26 +47,18 @@ static int open_named(const char *name, FILE **out, char *hit, size_t hitn) {
     char p[512];
     const char *base = name ? name : "";
     const char *slash, *d, *leaf;
-    if (base[0] == '/' && open_hit(base, out, hit, hitn)) return 0;
     leaf = ab_persist_leaf(base);
-    /* docs/ and the parent folder are the same persist location.
-     * Packed data/ is never a persist fallback. */
+    /* Persist is docs/ only. Leftover parent saves are copied once by
+     * ab_persist_prepare. Packed data/ is never a persist fallback. */
     if (ab_persist_name(base)) {
         if (leaf[0]) {
             snprintf(p, sizeof p, "%s/%s", files_dir, leaf);
             if (open_hit(p, out, hit, hitn)) return 0;
-            snprintf(p, sizeof p, "%s/../%s", files_dir, leaf);
-            if (open_hit(p, out, hit, hitn)) return 0;
         }
         return -1;
     }
-    if (!strchr(base, '/')) {
-        snprintf(p, sizeof p, "%s/%s", files_dir, base);
-        if (open_hit(p, out, hit, hitn)) return 0;
-    }
+    if (base[0] == '/' && open_hit(base, out, hit, hitn)) return 0;
     snprintf(p, sizeof p, "%s/%s", data_dir, base);
-    if (open_hit(p, out, hit, hitn)) return 0;
-    snprintf(p, sizeof p, "%s/%s", files_dir, base);
     if (open_hit(p, out, hit, hitn)) return 0;
     if (!strncmp(base, "data/", 5)) {
         snprintf(p, sizeof p, "%s/%s", data_dir, base + 5);
@@ -80,23 +72,53 @@ static int open_named(const char *name, FILE **out, char *hit, size_t hitn) {
     }
     slash = strrchr(base, '/');
     leaf = slash ? slash + 1 : base;
-    if (leaf[0]) {
-        snprintf(p, sizeof p, "%s/%s", files_dir, leaf);
+    if (leaf[0] && !ab_persist_name(leaf)) {
+        snprintf(p, sizeof p, "%s/%s", data_dir, leaf);
         if (open_hit(p, out, hit, hitn)) return 0;
-        /* Leftover save next to docs/: device DATA_DIR/highscores.lua.
-         * Persist never opens the packed data/ template. */
-        snprintf(p, sizeof p, "%s/../%s", files_dir, leaf);
-        if (open_hit(p, out, hit, hitn)) return 0;
-        if (!ab_persist_name(base)) {
-            snprintf(p, sizeof p, "%s/%s", data_dir, leaf);
-            if (open_hit(p, out, hit, hitn)) return 0;
-        }
     }
     if (!strchr(base, '.')) {
         snprintf(p, sizeof p, "%s.lua", base);
         return open_named(p, out, hit, hitn);
     }
     return -1;
+}
+
+int plat_exists_abs(const char *path) {
+    struct stat st;
+    return path && path[0] && stat(path, &st) == 0;
+}
+int plat_mkdir_abs(const char *path) {
+    if (!path || !path[0]) return -1;
+    mkdir(path, 0755);
+    return 0;
+}
+int plat_write_abs(const char *path, const void *buf, uint32_t n) {
+    FILE *f;
+    size_t w;
+    if (!path || !path[0]) return -1;
+    f = fopen(path, "wb");
+    if (!f) return -1;
+    w = n ? fwrite(buf, 1, n, f) : 0;
+    fclose(f);
+    return w == n ? 0 : -1;
+}
+int plat_read_abs(const char *path, void **out, uint32_t *len) {
+    FILE *f; long n; void *buf;
+    if (out) *out = 0;
+    if (len) *len = 0;
+    if (!path || !path[0]) return -1;
+    f = fopen(path, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
+    if (n < 0) { fclose(f); return -1; }
+    buf = malloc((size_t)n + 1);
+    if (!buf) { fclose(f); return -1; }
+    if (n && fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); fclose(f); return -1; }
+    ((char *)buf)[n] = 0;
+    fclose(f);
+    if (out) *out = buf;
+    if (len) *len = (uint32_t)n;
+    return 0;
 }
 
 int plat_read_file(const char *name, void **out, uint32_t *len) {
@@ -116,7 +138,8 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
         plat_log_line(b);
         plat_log_flush();
         if (ab_persist_name(req)) {
-            plat_log_line("highscores.lua empty (missing)");
+            snprintf(b, sizeof b, "%s empty (missing)", ab_persist_leaf(req));
+            plat_log_line(b);
             plat_log_flush();
             return ab_persist_empty(out, len);
         }
@@ -126,11 +149,6 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
     snprintf(b, sizeof b, "readFile resolved '%s'", hit[0] ? hit : req);
     plat_log_line(b);
     plat_log_flush();
-    if (ab_persist_name(req) && hit[0] && !ab_persist_in_docs(hit)) {
-        snprintf(b, sizeof b, "readFile leftover '%s' requested '%s'", hit, req);
-        plat_log_line(b);
-        plat_log_flush();
-    }
     fseek(f, 0, SEEK_END); n = ftell(f); fseek(f, 0, SEEK_SET);
     if (n < 0) { fclose(f); return -1; }
     buf = malloc((size_t)n + 1);
@@ -139,10 +157,12 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
     ((char *)buf)[n] = 0;
     fclose(f);
     if (!ab_persist_lua_ok(name, buf, (uint32_t)n)) {
-        snprintf(b, sizeof b, "highscores.lua skip invalid %u bytes", (unsigned)n);
+        snprintf(b, sizeof b, "%s skip invalid %u bytes",
+                 ab_persist_leaf(name), (unsigned)n);
         plat_log_line(b);
         plat_log_flush();
-        plat_log_line("highscores.lua empty (invalid)");
+        snprintf(b, sizeof b, "%s empty (invalid)", ab_persist_leaf(name));
+        plat_log_line(b);
         plat_log_flush();
         free(buf);
         return ab_persist_empty(out, len);
@@ -901,7 +921,7 @@ int main(int argc, char **argv) {
     script = argc > 6 ? argv[6] : "";
     snprintf(files_dir, sizeof files_dir, "%s/docs", out_dir);
     mkdir(out_dir, 0755);
-    mkdir(files_dir, 0755);
+    /* docs/ is created by ab_persist_prepare (device: docs/ may be missing). */
     fake_us = 1000000ull;
     fngl_reset();
     if (ab_start()) {

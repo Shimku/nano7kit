@@ -70,6 +70,8 @@ typedef int (*lua_rawrun_fn)(void *, void (*)(void *, void *), void *);
 typedef void (*lua_throw_fn)(void *, int);
 static lua_rawrun_fn lua_rawrun;
 static lua_throw_fn lua_throw;
+typedef void (*handle_load_fn)(void *, int, void *, void *);
+static handle_load_fn handle_load;
 static int started;
 static int cam_hold;
 static float hold_scale, hold_left, hold_top;
@@ -78,7 +80,7 @@ static int world_bounds_ok;
 static uint32_t scale_saved[2], topleft_saved[2];
 static uint32_t sheet_ctor_saved[2], spr_ctor_saved[2];
 static uint32_t parse_index_saved[2];
-static uint32_t lua_rawrun_saved[2], lua_throw_saved[2];
+static uint32_t lua_rawrun_saved[2], lua_throw_saved[2], handle_load_saved[2];
 static uint32_t wmmxd_saved[2], wmmxc_saved[2], vfpd16_saved[2];
 static int cam_hooks_on;
 static int block_sheet_loading;
@@ -110,6 +112,11 @@ static float pinch_d0, pinch_s0, pinch_cx, pinch_cy;
  * catches via __cxa_begin_catch; luaD_throw __cxa_throw's that pointer. */
 #define AB_OFF_LUA_RAWRUN 0xa3114u
 #define AB_OFF_LUA_THROW  0xa3390u
+#define AB_OFF_HANDLE_LOAD 0x98efcu
+#define AB_OFF_LUAL_LOADBUF 0x9ebc8u
+#define AB_OFF_LUA_PCALL  0x9df20u
+#define AB_OFF_LUA_GETTOP 0x9d3e4u
+#define AB_OFF_LUA_SETTOP 0x9d3f8u
 #define AB_OFF_WMMXD      0x1176c4u
 #define AB_OFF_WMMXC      0x11774cu
 #define AB_OFF_VFP_D16    0x1176b4u
@@ -168,6 +175,7 @@ static void hook_spr_ctor(void *self, void *sheet, int x, int y, int w, int h, i
 static void hook_parse_index(void *self, const void *name, const void *extra);
 static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) __attribute__((noinline));
 static void hook_lua_throw(void *L, int err) __attribute__((noinline));
+static void hook_handle_load(void *self, int status, void *name, void *table) __attribute__((noinline));
 static void patch_unwind_nops(void);
 static void mk_string(void *slot, const char *s);
 static void install_jump(void *fn, void *hook, uint32_t saved[2]);
@@ -262,9 +270,12 @@ int ab_start(void) {
         lua_throw = (lua_throw_fn)(g_so.base + AB_OFF_LUA_THROW);
         install_jump((void *)lua_rawrun, (void *)hook_lua_rawrun, lua_rawrun_saved);
         install_jump((void *)lua_throw, (void *)hook_lua_throw, lua_throw_saved);
+        handle_load = (handle_load_fn)(g_so.base + AB_OFF_HANDLE_LOAD);
+        install_jump((void *)handle_load, (void *)hook_handle_load, handle_load_saved);
         plat_log_line("ab_start: lua setjmp hook on");
     }
     plat_log_flush();
+    ab_persist_prepare();
     env = ab_jni_env();
     files = ab_jni_new_utf(plat_files_dir());
     plat_log_line("ab_start: nativeInit 480x320");
@@ -280,6 +291,7 @@ int ab_start(void) {
         plat_log_flush();
     }
     started = 1;
+    ab_lua_prove_recovery();
     plat_log_line("ab_start: ok");
     plat_log_flush();
     return 0;
@@ -625,6 +637,116 @@ static void hook_lua_throw(void *L, int err) {
     restore_jump((void *)lua_throw, lua_throw_saved);
     lua_throw(L, err);
     patch_arm_jump((void *)lua_throw, (void *)hook_lua_throw);
+}
+
+static void hook_handle_load(void *self, int status, void *name, void *table) {
+    /* After lua_load fails, handleLoadResult throwError<LuaException>.
+     * Host EHABI catches; the device dies in unwind (log ends at
+     * luaD_throw longjmp status=3, no cxa_throw line). Persist load
+     * fail is empty, like Android's catch. */
+    if (status != 0 && ab_persist_name(ab_last_io())) {
+        char b[160];
+        snprintf(b, sizeof b, "persist lua_load fail status=%d last='%s' empty (no LuaException)",
+                 status, ab_last_io());
+        plat_log_line(b);
+        plat_log_flush();
+        return;
+    }
+    if (!handle_load) return;
+    restore_jump((void *)handle_load, handle_load_saved);
+    handle_load(self, status, name, table);
+    patch_arm_jump((void *)handle_load, (void *)hook_handle_load);
+}
+
+static void *lua_state_ptr(void) {
+    uint8_t *lua = (uint8_t *)game_lua();
+    uint8_t *wrap = 0;
+    void *L = 0;
+    if (!lua) return 0;
+    /* GameLua/LuaTable +8 is lua::LuaState*; LuaState +8 is lua_State*. */
+    memcpy(&wrap, lua + 8, 4);
+    if (!wrap) return 0;
+    memcpy(&L, wrap + 8, 4);
+    return L;
+}
+
+void ab_lua_prove_recovery(void) {
+    typedef int (*loadbuf_fn)(void *, const char *, unsigned, const char *);
+    typedef int (*pcall_fn)(void *, int, int, int);
+    typedef int (*gettop_fn)(void *);
+    typedef void (*settop_fn)(void *, int);
+    loadbuf_fn loadbuf;
+    pcall_fn pcall;
+    gettop_fn gettop;
+    settop_fn settop;
+    void *L;
+    char parent[192], leftover[192], b[160];
+    void *buf = 0;
+    uint32_t n = 0;
+    int top, st;
+    const char *files;
+    const char *slash;
+    if (!g_so.base) return;
+    L = lua_state_ptr();
+    if (!L) {
+        plat_log_line("lua recovery skip (no state)");
+        plat_log_flush();
+        return;
+    }
+    loadbuf = (loadbuf_fn)(g_so.base + AB_OFF_LUAL_LOADBUF);
+    pcall = (pcall_fn)(g_so.base + AB_OFF_LUA_PCALL);
+    gettop = (gettop_fn)(g_so.base + AB_OFF_LUA_GETTOP);
+    settop = (settop_fn)(g_so.base + AB_OFF_LUA_SETTOP);
+    files = plat_files_dir();
+    parent[0] = leftover[0] = 0;
+    slash = files ? strrchr(files, '/') : 0;
+    if (slash && files) {
+        size_t k = (size_t)(slash - files);
+        if (k >= sizeof parent) k = sizeof parent - 1;
+        memcpy(parent, files, k);
+        parent[k] = 0;
+        snprintf(leftover, sizeof leftover, "%s/settings.lua", parent);
+    }
+    top = gettop(L);
+    /* Device leftover I/O: hb_fs_read(size+SLACK) may hand FAT junk after
+     * the 186-byte valid file. lua_load of that length is ERRSYNTAX=3. */
+    if (leftover[0] && plat_read_abs(leftover, &buf, &n) == 0 && buf && n == 186) {
+        uint8_t *slack = malloc(n + 8192);
+        if (slack) {
+            memset(slack, 0xA5, n + 8192);
+            memcpy(slack, buf, n);
+            /* LUA_ERRSYNTAX=3 in 5.1; LUA_ERRMEM=4. Slack length is syntax. */
+            st = loadbuf(L, (char *)slack, n + 8192, "leftover-slack");
+            snprintf(b, sizeof b, "lua recovery leftover-slack err=%d", st);
+            plat_log_line(b);
+            plat_log_flush();
+            settop(L, top);
+            st = loadbuf(L, (char *)buf, n, "leftover-exact");
+            snprintf(b, sizeof b, "lua recovery leftover-exact err=%d", st);
+            plat_log_line(b);
+            plat_log_flush();
+            settop(L, top);
+            free(slack);
+        }
+        free(buf);
+    } else {
+        if (buf) free(buf);
+        plat_log_line("lua recovery leftover-slack skip (no leftover)");
+        plat_log_flush();
+    }
+    st = loadbuf(L, "this is not { valid lua = ???\n", 29, "forced-syntax");
+    snprintf(b, sizeof b, "lua recovery syntax err=%d", st);
+    plat_log_line(b);
+    plat_log_flush();
+    settop(L, top);
+    /* VM arith error -> luaG_runerror -> luaD_throw(ERRRUN=2). Do not call
+     * the error() global: GameLua may bind that to throwError<LuaException>. */
+    st = loadbuf(L, "return 1+nil", 12, "forced-runtime");
+    if (st == 0) st = pcall(L, 0, 0, 0);
+    snprintf(b, sizeof b, "lua recovery runtime err=%d", st);
+    plat_log_line(b);
+    plat_log_flush();
+    settop(L, top);
 }
 
 /* Android packs data/bundleIndex.idx; convert_assets never ships it. parseIndex

@@ -391,6 +391,12 @@ def convert_tree(app: Path, dest: Path) -> dict:
         if src.name.startswith("._") or src.name in {".DS_Store", "Thumbs.db"}:
             n_skip += 1
             continue
+        # Persist lives in docs/, not packed data/. Copying the templates
+        # into DATA_DIR made leftover settings.lua indistinguishable from
+        # assets and hid a missing Android files-dir save.
+        if src.name in {"settings.lua", "highscores.lua"}:
+            n_skip += 1
+            continue
         rel = src.relative_to(data)
         suf = src.suffix.lower()
         if suf in SKIP_AUDIO:
@@ -459,7 +465,7 @@ def convert_tree(app: Path, dest: Path) -> dict:
 def main():
     app, dest = Path(sys.argv[1]), Path(sys.argv[2])
     info = convert_tree(app, dest)
-    print("convert_assets: copied %d, scaled %d, skipped audio %d, textures %s"
+    print("convert_assets: copied %d, scaled %d, skipped audio/persist %d, textures %s"
           % (info["copy"], info["scale"], info["skip"], ",".join(info["scaled"]) or "-"))
 
 
