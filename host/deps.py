@@ -209,8 +209,8 @@ def ensure_deps(*, check_only: bool = False, device: bool = True) -> int:
         else:
             print(f"    install '{label}' manually")
 
-    need("arm-none-eabi-gcc", have("arm-none-eabi-gcc"), brew="arm-none-eabi-gcc",
-         linux="gcc-arm-none-eabi")
+    from .toolchain import ensure as ensure_arm_toolchain
+
     if is_macos() and have("arm-none-eabi-gcc"):
         # The darwin-x86_64 Arm toolchain links Homebrew's libzstd; without it every
         # compile dies in dyld. The fix copies a libzstd into the toolchain folder.
@@ -218,6 +218,7 @@ def ensure_deps(*, check_only: bool = False, device: bool = True) -> int:
         mode = "--check" if check_only else "--check-or-fix"
         zstd_ok = subprocess.run(["bash", str(zstd_script), mode]).returncode == 0
         need("arm-none-eabi-gcc runs", zstd_ok)
+    need("ARM toolchain + newlib", ensure_arm_toolchain(check_only=check_only))
     need("make", have("make"), brew="make", linux="make")
     need("git", have("git"), brew="git", linux="git")
     need("cc", have("cc") or have("gcc") or have("clang"),

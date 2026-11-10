@@ -2968,6 +2968,9 @@ def cmd_fetch(args) -> int:
 
 
 def main(argv=None) -> int:
+    from .toolchain import select as select_arm_toolchain
+
+    select_arm_toolchain()
     p = build_parser()
     args = p.parse_args(argv)
     cmd = args.cmd

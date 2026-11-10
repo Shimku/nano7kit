@@ -8,10 +8,17 @@ You also need the Xcode Command Line Tools: `xcode-select --install`.
 Install [Homebrew](https://brew.sh), then:
 
 ```sh
-brew install arm-none-eabi-gcc make git libusb pkg-config go mtools
+brew install make git libusb pkg-config go mtools
+brew install --cask --no-binaries gcc-arm-embedded
 ./start deps
 ./start doctor
 ```
+
+The compiler-only `arm-none-eabi-gcc` formula lacks the newlib headers and libraries
+needed by game ports. `./start deps` checks both and installs the complete Arm GNU
+toolchain when needed. `./start` automatically selects a complete toolchain from
+PATH, `build/arm-toolchain`, the Intel bootstrap, or `/Applications/ArmGNUToolchain`.
+The cask uses `--no-binaries` to avoid conflicts with existing Homebrew tools.
 
 Rust comes from [rustup](https://rustup.rs). Apple silicon is untested on hardware.
 
