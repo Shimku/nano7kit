@@ -156,6 +156,11 @@ int plat_read_file(const char *name, void **out, uint32_t *len) {
     if (n && fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); fclose(f); return -1; }
     ((char *)buf)[n] = 0;
     fclose(f);
+    if (ab_persist_name(name) && n == 0) {
+        snprintf(b, sizeof b, "%s empty (zero)", ab_persist_leaf(name));
+        plat_log_line(b);
+        plat_log_flush();
+    }
     if (!ab_persist_lua_ok(name, buf, (uint32_t)n)) {
         snprintf(b, sizeof b, "%s skip invalid %u bytes",
                  ab_persist_leaf(name), (unsigned)n);
@@ -1014,13 +1019,15 @@ int main(int argc, char **argv) {
                 (double)b.score, flying, stretched);
         ab_throw_report();
         if (ab_cxa_throw_count()) fail++;
+        if (ab_persist_lua_throw_count()) fail++;
         if (ab_malloc_failures()) fail++;
         if (!flying) fail++;
         if (!hit) fail++;
         if (!stretched) fail++;
-        fprintf(stderr, "AB_BOOT_SHOT_TEST heap used %u peak %u cxa=%d lua=%d malloc_fail=%u\n",
+        fprintf(stderr, "AB_BOOT_SHOT_TEST heap used %u peak %u cxa=%d lua=%d persist_lua=%d malloc_fail=%u\n",
                 ab_heap_used(), ab_heap_peak(), ab_cxa_throw_count(),
-                ab_lua_throw_count(), (unsigned)ab_malloc_failures());
+                ab_lua_throw_count(), ab_persist_lua_throw_count(),
+                (unsigned)ab_malloc_failures());
         fprintf(stderr, "AB_BOOT_SHOT_TEST %s\n", fail ? "FAIL" : "PASS");
         return fail ? 1 : 0;
     }

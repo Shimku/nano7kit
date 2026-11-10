@@ -263,6 +263,11 @@ have:
              (unsigned)hb_os_heap_free(), (unsigned)hb_os_heap_largest());
     plat_log_line(log);
     plat_log_flush();
+    if (ab_persist_name(name) && size == 0) {
+        snprintf(log, sizeof log, "%s empty (zero)", ab_persist_leaf(name));
+        plat_log_line(log);
+        plat_log_flush();
+    }
     if (!ab_persist_lua_ok(name, buf, size)) {
         snprintf(log, sizeof log, "%s skip invalid %u bytes",
                  ab_persist_leaf(name), (unsigned)size);

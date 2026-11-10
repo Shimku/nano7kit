@@ -72,6 +72,10 @@ static lua_rawrun_fn lua_rawrun;
 static lua_throw_fn lua_throw;
 typedef void (*handle_load_fn)(void *, int, void *, void *);
 static handle_load_fn handle_load;
+typedef void (*compile_is_fn)(void *, void *, int, void *, void *);
+static compile_is_fn compile_is;
+typedef const char *(*loadfile_fn)(void *, void *, unsigned *);
+static loadfile_fn lua_loadfile;
 static int started;
 static int cam_hold;
 static float hold_scale, hold_left, hold_top;
@@ -81,6 +85,7 @@ static uint32_t scale_saved[2], topleft_saved[2];
 static uint32_t sheet_ctor_saved[2], spr_ctor_saved[2];
 static uint32_t parse_index_saved[2];
 static uint32_t lua_rawrun_saved[2], lua_throw_saved[2], handle_load_saved[2];
+static uint32_t compile_is_saved[2], lua_loadfile_saved[2];
 static uint32_t wmmxd_saved[2], wmmxc_saved[2], vfpd16_saved[2];
 static int cam_hooks_on;
 static int block_sheet_loading;
@@ -113,6 +118,8 @@ static float pinch_d0, pinch_s0, pinch_cx, pinch_cy;
 #define AB_OFF_LUA_RAWRUN 0xa3114u
 #define AB_OFF_LUA_THROW  0xa3390u
 #define AB_OFF_HANDLE_LOAD 0x98efcu
+#define AB_OFF_COMPILE_IS 0x99094u
+#define AB_OFF_LOADFILE   0x9750cu
 #define AB_OFF_LUAL_LOADBUF 0x9ebc8u
 #define AB_OFF_LUA_PCALL  0x9df20u
 #define AB_OFF_LUA_GETTOP 0x9d3e4u
@@ -176,6 +183,8 @@ static void hook_parse_index(void *self, const void *name, const void *extra);
 static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) __attribute__((noinline));
 static void hook_lua_throw(void *L, int err) __attribute__((noinline));
 static void hook_handle_load(void *self, int status, void *name, void *table) __attribute__((noinline));
+static void hook_compile_is(void *ls, void *is, int remaining, void *name, void *env) __attribute__((noinline));
+static const char *hook_load_file(void *L, void *ud, unsigned *sz) __attribute__((noinline));
 static void patch_unwind_nops(void);
 static void mk_string(void *slot, const char *s);
 static void install_jump(void *fn, void *hook, uint32_t saved[2]);
@@ -272,6 +281,10 @@ int ab_start(void) {
         install_jump((void *)lua_throw, (void *)hook_lua_throw, lua_throw_saved);
         handle_load = (handle_load_fn)(g_so.base + AB_OFF_HANDLE_LOAD);
         install_jump((void *)handle_load, (void *)hook_handle_load, handle_load_saved);
+        compile_is = (compile_is_fn)(g_so.base + AB_OFF_COMPILE_IS);
+        install_jump((void *)compile_is, (void *)hook_compile_is, compile_is_saved);
+        lua_loadfile = (loadfile_fn)(g_so.base + AB_OFF_LOADFILE);
+        install_jump((void *)lua_loadfile, (void *)hook_load_file, lua_loadfile_saved);
         plat_log_line("ab_start: lua setjmp hook on");
     }
     plat_log_flush();
@@ -576,7 +589,7 @@ static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
     struct ab_lua_lj *lj;
     volatile int i;
     int st;
-    static int nlog;
+    static int nlog, nafter;
     if (nlog < 12) {
         plat_log_line("lua pcall setjmp");
         plat_log_flush();
@@ -595,17 +608,39 @@ static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
         memcpy(ls + AB_LUA_ERRJMP, &p, 4);
     }
     /* After longjmp, only volatile locals and BSS are defined. Index the
-     * header through i; do not keep lj in a caller-saved register. */
+     * header through i; do not keep lj in a caller-saved register.
+     * jmp_buf is 8-aligned BSS; fn_setjmp saves r4-r11,sp,lr,d8-d15,FPSCR
+     * only (Cortex-A5 VFPv4-D16: d16-d31 do not exist). */
     st = fn_setjmp(lua_lj_jb[i]);
+    if (nafter < 16) {
+        char b[160];
+        snprintf(b, sizeof b, "lua pcall setjmp after st=%d last='%s'", st, ab_last_io());
+        plat_log_line(b);
+        plat_log_flush();
+    }
     if (st == 0) {
+        if (nafter < 16) {
+            char b[160];
+            snprintf(b, sizeof b, "lua pcall setjmp enter f last='%s'", ab_last_io());
+            plat_log_line(b);
+            plat_log_flush();
+        }
         if (f) f(L, ud);
         asm volatile("" ::: "memory");
+        if (nafter < 16) {
+            char b[160];
+            snprintf(b, sizeof b, "lua pcall setjmp f returned last='%s'", ab_last_io());
+            plat_log_line(b);
+            plat_log_flush();
+            nafter++;
+        }
     } else {
         char b[80];
         snprintf(b, sizeof b, "luaD_throw longjmp status=%d", lua_lj_hdr[i].status);
         plat_log_line(b);
         plat_log_flush();
         if (lua_lj_hdr[i].status == 0) lua_lj_hdr[i].status = -1;
+        if (nafter < 16) nafter++;
     }
     if (ls) memcpy(ls + AB_LUA_ERRJMP, &lua_lj_hdr[i].previous, 4);
     lua_lj_n = i;
@@ -640,10 +675,19 @@ static void hook_lua_throw(void *L, int err) {
 }
 
 static void hook_handle_load(void *self, int status, void *name, void *table) {
+    static int nlog;
     /* After lua_load fails, handleLoadResult throwError<LuaException>.
      * Host EHABI catches; the device dies in unwind (log ends at
      * luaD_throw longjmp status=3, no cxa_throw line). Persist load
-     * fail is empty, like Android's catch. */
+     * fail is empty, like Android's catch. Missing/zero persist never
+     * reaches lua_load (compile skip). */
+    if (nlog < 12 || ab_persist_name(ab_last_io())) {
+        char b[160];
+        snprintf(b, sizeof b, "handleLoadResult status=%d last='%s'", status, ab_last_io());
+        plat_log_line(b);
+        plat_log_flush();
+        nlog++;
+    }
     if (status != 0 && ab_persist_name(ab_last_io())) {
         char b[160];
         snprintf(b, sizeof b, "persist lua_load fail status=%d last='%s' empty (no LuaException)",
@@ -656,6 +700,62 @@ static void hook_handle_load(void *self, int status, void *name, void *table) {
     restore_jump((void *)handle_load, handle_load_saved);
     handle_load(self, status, name, table);
     patch_arm_jump((void *)handle_load, (void *)hook_handle_load);
+}
+
+static void hook_compile_is(void *ls, void *is, int remaining, void *name, void *env) {
+    const char *nm = (name && str_cstr) ? str_cstr(name) : "";
+    int skip = ab_persist_skip_load(remaining, nm);
+    char b[192];
+    if (skip) {
+        snprintf(b, sizeof b, "compile skip persist empty remaining=%d last='%s'",
+                 remaining, ab_last_io());
+        plat_log_line(b);
+        plat_log_flush();
+        return;
+    }
+    if (ab_persist_name(ab_last_io()) || ab_persist_name(nm)) {
+        snprintf(b, sizeof b, "compile persist remaining=%d last='%s' skip=0",
+                 remaining, ab_last_io());
+        plat_log_line(b);
+        plat_log_flush();
+        ab_persist_compile_enter();
+    }
+    if (!compile_is) {
+        ab_persist_compile_leave();
+        return;
+    }
+    restore_jump((void *)compile_is, compile_is_saved);
+    compile_is(ls, is, remaining, name, env);
+    patch_arm_jump((void *)compile_is, (void *)hook_compile_is);
+    ab_persist_compile_leave();
+}
+
+static const char *hook_load_file(void *L, void *ud, unsigned *sz) {
+    unsigned rem = 0;
+    const char *r;
+    static int nlog;
+    if (ud) memcpy(&rem, (char *)ud + 4, 4);
+    if (nlog < 12 || rem == 0 || ab_persist_name(ab_last_io())) {
+        char b[160];
+        snprintf(b, sizeof b, "lua_load reader remaining=%u last='%s'", rem, ab_last_io());
+        plat_log_line(b);
+        plat_log_flush();
+        nlog++;
+    }
+    if (rem == 0) {
+        if (sz) *sz = 0;
+        plat_log_line("lua_load reader eof empty");
+        plat_log_flush();
+        return 0;
+    }
+    if (!lua_loadfile) {
+        if (sz) *sz = 0;
+        return 0;
+    }
+    restore_jump((void *)lua_loadfile, lua_loadfile_saved);
+    r = lua_loadfile(L, ud, sz);
+    patch_arm_jump((void *)lua_loadfile, (void *)hook_load_file);
+    return r;
 }
 
 static void *lua_state_ptr(void) {

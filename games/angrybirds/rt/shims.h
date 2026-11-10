@@ -21,10 +21,17 @@ int ab_persist_in_docs(const char *path);
 int ab_persist_lua_ok(const char *name, const void *buf, uint32_t n);
 int ab_persist_empty(void **out, uint32_t *len);
 void ab_persist_prepare(void);
+void ab_persist_note_open(uint32_t n);
+int ab_persist_last_empty(void);
+int ab_persist_skip_load(int remaining, const char *name);
+void ab_persist_compile_enter(void);
+void ab_persist_compile_leave(void);
+int ab_persist_in_compile(void);
 const char *ab_last_io(void);
 void ab_note_io(const char *name);
 void ab_note_lua_throw(int err);
 void ab_throw_report(void);
 int ab_cxa_throw_count(void);
 int ab_lua_throw_count(void);
+int ab_persist_lua_throw_count(void);
 #endif

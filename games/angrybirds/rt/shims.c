@@ -69,7 +69,9 @@ void *ab_dso_handle;
 char __sF[3][BIONIC_FILE];
 
 static uint32_t heap_now, heap_peak, heap_fail;
-static int n_cxa_throw, n_lua_throw;
+static int n_cxa_throw, n_lua_throw, n_persist_lua_throw;
+static int persist_compile_depth;
+static uint32_t persist_last_len = ~0u;
 static char last_io[96];
 #define AB_THROW_MAX 32
 static char throw_sites[AB_THROW_MAX][160];
@@ -79,6 +81,7 @@ uint32_t ab_heap_peak(void) { return heap_peak; }
 uint32_t ab_malloc_failures(void) { return heap_fail; }
 int ab_cxa_throw_count(void) { return n_cxa_throw; }
 int ab_lua_throw_count(void) { return n_lua_throw; }
+int ab_persist_lua_throw_count(void) { return n_persist_lua_throw; }
 
 void ab_note_io(const char *name) {
     const char *s = name ? name : "";
@@ -102,6 +105,7 @@ static void throw_site(const char *kind, const char *detail) {
 void ab_note_lua_throw(int err) {
     char d[32];
     n_lua_throw++;
+    if (persist_compile_depth > 0) n_persist_lua_throw++;
     snprintf(d, sizeof d, "err=%d", err);
     throw_site("lua", d);
 }
@@ -109,8 +113,8 @@ void ab_note_lua_throw(int err) {
 void ab_throw_report(void) {
     char b[128];
     int i;
-    snprintf(b, sizeof b, "THROW_REPORT cxa=%d lua=%d malloc_fail=%u sites=%d",
-             n_cxa_throw, n_lua_throw, (unsigned)heap_fail, n_throw_sites);
+    snprintf(b, sizeof b, "THROW_REPORT cxa=%d lua=%d persist_lua=%d malloc_fail=%u sites=%d",
+             n_cxa_throw, n_lua_throw, n_persist_lua_throw, (unsigned)heap_fail, n_throw_sites);
     plat_log_line(b);
     plat_log_flush();
     for (i = 0; i < n_throw_sites; i++) {
@@ -308,7 +312,7 @@ int ab_persist_lua_ok(const char *name, const void *buf, uint32_t n) {
     uint32_t i;
     int brace = 0;
     if (!ab_persist_name(name)) return 1;
-    /* Empty persist is Android's missing-save (compile never runs). */
+    /* n==0 is Android's missing-save: compile skip, never lua_load. */
     if (n == 0) return 1;
     if (!p || n < 4) return 0;
     if (p[0] == 0x1b && p[1] == 'L' && p[2] == 'u' && p[3] == 'a') return 1;
@@ -340,6 +344,21 @@ int ab_persist_empty(void **out, uint32_t *len) {
     if (len) *len = 0;
     return 0;
 }
+
+void ab_persist_note_open(uint32_t n) { persist_last_len = n; }
+int ab_persist_last_empty(void) { return persist_last_len == 0; }
+int ab_persist_skip_load(int remaining, const char *name) {
+    /* Missing, zero-length, slack-stripped-to-empty, or invalid persist:
+     * never lua_load. The LuaTable stays empty, like Android's catch. */
+    if (!ab_persist_name(ab_last_io()) && !ab_persist_name(name)) return 0;
+    if (remaining <= 0) return 1;
+    return persist_last_len == 0;
+}
+void ab_persist_compile_enter(void) { persist_compile_depth++; }
+void ab_persist_compile_leave(void) {
+    if (persist_compile_depth > 0) persist_compile_depth--;
+}
+int ab_persist_in_compile(void) { return persist_compile_depth > 0; }
 
 static void persist_parent_dir(const char *files, char *out, size_t n) {
     const char *s;
@@ -451,8 +470,9 @@ void ab_cxa_throw_log(void *obj, void *ti, void *dest) {
     /* IOException is the packed-index / persist miss; dump is a String layout. */
     if (n && strstr(n, "lua_longjmp"))
         plat_log_line("lua_longjmp via EHABI (setjmp missed)");
-    if (n && strstr(n, "IOException"))
-        return;
+    /* IOException / LuaException / lua_longjmp: no host libc unwinder.
+     * Any C++ throw or EHABI unwind is a reboot on the nano. */
+    plat_fatal("cxa_throw");
     if (w) {
         snprintf(buf, sizeof buf, "  obj %08x %08x %08x %08x %08x %08x",
                  w[0], w[1], w[2], w[3], w[4], w[5]);
@@ -517,13 +537,12 @@ static void *hook_alloc_exception(unsigned n) {
     return r;
 }
 static int hook_unwind_raise(void *exc, void *ctx) {
-    int r;
+    (void)exc;
+    (void)ctx;
     plat_log_line("unwind raise");
     plat_log_flush();
-    unpatch_jump(fn_unwind, saved_unwind);
-    r = ((int (*)(void *, void *))fn_unwind)(exc, ctx);
-    patch_jump(fn_unwind, (void *)hook_unwind_raise, saved_unwind);
-    return r;
+    plat_fatal("EHABI unwind");
+    return 0;
 }
 
 static void *so_fn(const char *name, uint32_t off) {
@@ -696,14 +715,15 @@ void *ab_fopen(const char *path, const char *mode) {
         void *buf = 0; uint32_t n = 0;
         char hb[96];
         if (plat_read_file(path, &buf, &n)) {
-            if (ab_persist_name(path) && ab_persist_empty(&buf, &n) == 0)
-                persist_miss_log(path);
-            else {
-                w->mag = 0;
-                return 0;
-            }
+        if (ab_persist_name(path) && ab_persist_empty(&buf, &n) == 0)
+            persist_miss_log(path);
+        else {
+            w->mag = 0;
+            return 0;
+        }
         }
         w->data = buf; w->len = n; w->cap = n ? n : 1;
+        if (ab_persist_name(path)) ab_persist_note_open(n);
         if (ab_persist_name(path) || strstr(path, "settings.lua")) {
             unsigned fl = (unsigned char)w->file[12] | ((unsigned)(unsigned char)w->file[13] << 8);
             snprintf(hb, sizeof hb, "nfile open '%s' len=%u flags=%u %02x %02x %02x %02x",
@@ -1026,7 +1046,9 @@ void *ab_resolve(const char *name) {
 
 void ab_shims_reset(void) {
     heap_now = heap_peak = heap_fail = 0;
-    n_cxa_throw = n_lua_throw = n_throw_sites = 0;
+    n_cxa_throw = n_lua_throw = n_persist_lua_throw = n_throw_sites = 0;
+    persist_compile_depth = 0;
+    persist_last_len = ~0u;
     last_io[0] = 0;
     memset(NF, 0, sizeof NF);
     memset(tls, 0, sizeof tls);
