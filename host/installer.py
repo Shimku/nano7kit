@@ -80,6 +80,8 @@ ITEMS: Tuple[Item, ...] = (
     # Games: bring your own file
     Item("Mario 64", "Mario 64", "games", "your Super Mario 64 (USA) .z64 ROM", "rom"),
     Item("Mario Kart 64", "Mario Kart", "games", "your Mario Kart 64 (USA) .z64 ROM", "rom", tested=False),
+    Item("Angry Birds", "Angry Birds", "games", "your Angry Birds 1.0 .ipa", "ipa", tested=False,
+         bundle="com.clickgamer.AngryBirds", version="1.0"),
     Item("Temple Run", "Temple Run", "games", "your decrypted Temple Run 1.0 .ipa", "ipa",
          bundle="com.imangi.templerun", version="1.0"),
     Item("Fruit Ninja", "Fruit Ninja", "games", "your decrypted Fruit Ninja 1.0 .ipa", "ipa",

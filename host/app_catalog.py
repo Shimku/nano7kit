@@ -157,6 +157,7 @@ CATEGORIES = {
         "Mario Kart",
         "Mario 64",
         "Temple Run",
+        "Angry Birds",
         "Flappy Bird",
         "Doodle Jump",
         "Fruit Ninja",
@@ -167,6 +168,7 @@ CATEGORIES = {
 
 # nfzerox wrote the NanoApps apps (MIT). Extra credits per app:
 AUTHORS = {
+    "Angry Birds": "olievans123 nano-angrybirds (engine reimplementation; user-supplied Rovio 1.0 assets, not in git)",
     "Blocks": "nfzerox (NanoApps, MIT)",
     "Game Boy": "nfzerox (NanoApps, MIT); Peanut-GB core by Mahyar Koshkouei (MIT)",
     "Probe": "nfzerox (NanoApps, MIT)",
@@ -213,6 +215,8 @@ AUTHORS = {
 }
 
 ALIASES = {
+    "angrybirds": "Angry Birds",
+    "angry-birds": "Angry Birds",
     "2048": "G2048",
     "g2048": "G2048",
     "gameboy": "Game Boy",
@@ -348,6 +352,7 @@ _RISK_BY_NAME = {
     "Mario Kart": 6,
     "Mario 64": 6,
     "Temple Run": 6,
+    "Angry Birds": 6,
     "Flappy Bird": 6,
     "Doodle Jump": 6,
     "Fruit Ninja": 6,

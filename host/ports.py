@@ -4,7 +4,7 @@ Mario 64 / Mario Kart 64 are native GL ports in this tree (games/ +
 nanoapps/apps/sm64|mk64). They need a user ROM to build; nothing from
 Nintendo is in git.
 
-Temple Run, Flappy Bird and Doodle Jump live in separate GitHub repos.
+Temple Run, Angry Birds, Flappy Bird and Doodle Jump live in separate GitHub repos.
 Those trees contain none of the original game files. This toolkit clones
 them on demand into build/ports/ and builds only when you pass --payload.
 
@@ -35,6 +35,12 @@ from .compat import Refused, is_macos, md5_file, root, sha1_file, which
 
 # Pinned clones of olievans123 ports (no original game data in those trees).
 PORT_REPOS = {
+    "angrybirds": {
+        "url": "https://github.com/olievans123/nano-angrybirds.git",
+        "commit": "b547023d4be99a54052ce821540548d13596b3a0",
+        "name": "Angry Birds",
+        "folder": "angrybirds",
+    },
     "templerun": {
         "url": "https://github.com/olievans123/nano-templerun.git",
         "commit": "b73a3d43f6d26147198060cdb28b6b55d59418a1",
@@ -57,6 +63,11 @@ PORT_REPOS = {
 
 # Host / FAT data trees staged next to extra .hbapp files.
 PORT_DATA = {
+    "Angry Birds": {
+        "host": "artifacts/extra/Data/AngryBirds",
+        "fat": "/Apps/Data/AngryBirds",
+        "required": True,
+    },
     "Mario 64": {
         "host": "artifacts/extra/Data/SM64",
         "fat": "/Apps/Data/SM64",
@@ -96,8 +107,8 @@ PORT_DATA = {
 
 # PocketJS MicroTS apps (nano7g): RAW_SURFACE, but 1 to 2.2 MB with baked fonts, so slot B too.
 POCKETJS_APPS = frozenset({"JS Hero", "JS Samples", "JS QuickJS"})
-LARGE_GL = frozenset({"Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "PvZ Portable"}) | POCKETJS_APPS
-NEEDS_PAYLOAD = frozenset({"Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "PvZ Portable"})
+LARGE_GL = frozenset({"Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "PvZ Portable", "Angry Birds"}) | POCKETJS_APPS
+NEEDS_PAYLOAD = frozenset({"Angry Birds", "Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "PvZ Portable"})
 NEEDS_ROM = frozenset({"Mario 64", "Mario Kart"})
 
 SLOT_B_FAT = "/Apps/Startup/resident-B.hbapp"
@@ -133,11 +144,21 @@ PVZP_CMD = "./start apps add 'PvZ Portable' --payload /path/to/pvz-goty"
 TEMPLE_BUNDLE_ID = "com.imangi.templerun"
 FRUIT_BUNDLE_ID = "com.Halfbrick.Fruit"
 PAYLOAD_BUNDLES = {
+    "Angry Birds": "com.clickgamer.AngryBirds",
     "Temple Run": TEMPLE_BUNDLE_ID,
     "Fruit Ninja": FRUIT_BUNDLE_ID,
 }
 
 OVERLAY_PLISTS = (
+    {
+        "folder": "angrybirds",
+        "name": "Angry Birds",
+        "bundle_id": "org.nanoapps.angrybirds",
+        "kind": 2,
+        "glyph": "dove",
+        "color": "#2980b9",
+        "executable_key": "angrybirds",
+    },
     {
         "folder": "flappybird",
         "name": "Flappy Bird",
@@ -264,6 +285,10 @@ def missing_help(name: str) -> str:
             "no game files in git). Asset conversion uses macOS sips. "
             f"{DOODLE_CMD}"
         )
+    if name == "Angry Birds":
+        from .angrybirds import CMD
+
+        return "Angry Birds uses olievans123/nano-angrybirds with your own Angry Birds 1.0 assets. Untested in nano7kit; silent. " + CMD
     if name == "Temple Run":
         return (
             "Temple Run is olievans123/nano-templerun (the original 1.0 engine "
@@ -669,6 +694,14 @@ def prepare_for_add(
         if payload is not None:
             build_doodle(Path(payload))
         return {"name": name, "present": True, "built": payload is not None}
+    if name == "Angry Birds":
+        if payload is None and not ready:
+            raise Refused(missing_help(name))
+        if payload is not None:
+            from .angrybirds import build
+
+            build(Path(payload))
+        return {"name": name, "present": True, "built": payload is not None}
     if name == "Temple Run":
         if payload is None and not ready:
             raise Refused(missing_help(name))
@@ -710,7 +743,7 @@ def print_status() -> None:
     print("nano7kit third-party ports (olievans123)")
     print("Helvetica silver_resident / 39A10023. Pack cap 8 (grow_cache);")
     print("nogrow overlay raises host cap to 16 (./start apps cap enable).")
-    print("Large GL (Mario, Temple Run, Fruit Ninja, PvZ Portable) uses slot B, not the 576 KB slot A.")
+    print("Large GL (Mario, Angry Birds, Temple Run, Fruit Ninja, PvZ Portable) uses slot B, not the 576 KB slot A.")
     print("iOS-port repos state no OSS licence: credit, do not redistribute")
     print("derived game files. Original iOS apps and Nintendo ROMs stay local.")
     print()
@@ -718,6 +751,7 @@ def print_status() -> None:
         "Mario 64",
         "Mario Kart",
         "Temple Run",
+        "Angry Birds",
         "Flappy Bird",
         "Doodle Jump",
         "Fruit Ninja",

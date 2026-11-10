@@ -35,3 +35,17 @@ Without the installer, in Disk Mode:
 On the nano7-untethered layout use `./start apps add` with the same names
 (`--ipa` for the iOS games). `./start apps add NAME --ipa FILE --plan` checks your
 file, the tools and the memory on either layout and writes nothing.
+
+## Angry Birds 1.0 (untested integration)
+
+Supply your own `Angry Birds 1.0.ipa` (`com.clickgamer.AngryBirds`), or an unpacked
+`AngryBirds.app`. The supported asset tree is hash-checked; other versions are refused.
+The port uses the original scripts/artwork with an engine reimplementation; it does
+not need or translate the original executable. See [PORTING.md](PORTING.md#angry-birds-ios-10-assets-olievans123-engine-reimplementation).
+
+```sh
+./start nabase add 'Angry Birds' --payload '/path/to/Angry Birds 1.0.ipa'
+```
+
+Use the installer menu or `apps add` for the untethered base. Silent, landscape
+(Home on right), and untested on nano7kit hardware. Your game files stay local.

@@ -174,3 +174,35 @@ Follow how PvZ Portable is wired in (`rg "PvZ Portable" host`):
 
 If a game restarts the iPod: `./start apps lasttrace` reads the launcher's trace from
 the previous boot (Disk Mode, read-only), and `./start nabase remove NAME` takes it off Home.
+
+### Angry Birds (iOS 1.0 assets, olievans123 engine reimplementation)
+
+`host/angrybirds.py` fetches [nano-angrybirds](https://github.com/olievans123/nano-angrybirds)
+at `b547023d4be99a54052ce821540548d13596b3a0`. The original executable is
+not translated or used: the engine runs the game's Lua scripts with converted artwork.
+The bundle must be `com.clickgamer.AngryBirds`, version `1.0`; the asset tree is
+hash-checked against the supported build, excluding Finder/AppleDouble metadata.
+Its asset-tree SHA-256 is `05dacfc26e35fcbf689916d88225a96de36aa7737c7a98f88436d1335ec16cbd`
+(sorted relative path + NUL + raw SHA-256 of each file). This pins the inputs
+actually consumed by the port, instead of an unused executable hash.
+
+```sh
+# Check the input without writing to a device:
+./start apps add 'Angry Birds' --payload /path/to/AngryBirds.ipa --plan
+# NanoApps base, mounted in Disk Mode:
+./start nabase add 'Angry Birds' --payload /path/to/AngryBirds.ipa
+# Untethered base:
+./start apps add 'Angry Birds' --payload /path/to/AngryBirds.ipa
+```
+
+The pinned converter uses 0.5 texture scale and 256×128 page limits, and its
+manifest is validated before staging. The ARM C/C++ build checks static constructors,
+Thumb floating-point instructions and relocations. A private venv provides pinned
+Pillow, NumPy, texture2ddecoder and pyelftools. The original red-bird icon is built
+locally from your assets. No source from the unlicensed port or game assets are
+redistributed; fetched code, unpacked input and build output are ignored by Git.
+
+Untested in nano7kit on hardware. Silent; hold Home on the right. Upstream's
+2–4 MiB arena, textures and driver allocations need device validation; the plan
+does not claim that the game fits based on a host build. Converted output is
+staged separately from on-device settings/high scores, which installation preserves.

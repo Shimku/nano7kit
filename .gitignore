@@ -9,6 +9,7 @@ nanoapps/apps/*/build/
 nanoapps/apps/flappybird/
 nanoapps/apps/doodlejump/
 nanoapps/apps/templerun/
+nanoapps/apps/angrybirds/
 nanoapps/harnesses/*/build/
 nanoapps/system/*/build/
 untether/build/
@@ -73,3 +74,7 @@ untether/artifacts/extra/Executables/*.hbapp
 !untether/artifacts/extra/Executables/JS Samples.hbapp
 !untether/artifacts/extra/Executables/Lap.hbapp
 untether/artifacts/extra/Startup/na-backup/
+
+# User-supplied Angry Birds assets and derived artwork
+untether/artifacts/extra/Data/AngryBirds/
+untether/artifacts/extra/Icons/Angry Birds.bin
