@@ -1717,13 +1717,13 @@ def _apps_add_pvz(args, names, payload) -> int:
 
 
 def _apps_add_plan(args, names, payload) -> int:
-    """apps add NAME --plan: read-only. Temple Run only for now."""
+    """apps add NAME --plan: inspect one supported port without device writes."""
     from .apps import normalize_selection
 
     selected = normalize_selection(names, default_all=False, allow_extra=True)
-    if selected not in (["Temple Run"], ["Fruit Ninja"], ["PvZ Portable"]):
+    if selected not in (["Temple Run"], ["Fruit Ninja"], ["PvZ Portable"], ["Angry Birds"]):
         raise Refused(
-            "apps add --plan is for one port at a time and covers Temple Run, Fruit Ninja, PvZ and PvZ Portable: "
+            "apps add --plan is for one port at a time and covers Angry Birds, Temple Run, Fruit Ninja, PvZ and PvZ Portable: "
             "./start apps add TempleRun --ipa /path/to/TempleRun.ipa --plan"
         )
     from .templerun import parse_size, plan_lines
@@ -1739,6 +1739,9 @@ def _apps_add_plan(args, names, payload) -> int:
 
         def plan_lines(payload, **kw):  # noqa: F811 - same call shape as Temple Run's
             return pvzp_plan_lines(payload, kw.pop("heap_free"), kw.pop("largest"), **kw)
+
+    if selected == ["Angry Birds"]:
+        from .angrybirds import plan_lines
 
     heap_free = parse_size(getattr(args, "heap_free", None))
     largest = parse_size(getattr(args, "largest", None))
@@ -2968,6 +2971,9 @@ def cmd_fetch(args) -> int:
 
 
 def main(argv=None) -> int:
+    from .toolchain import select as select_arm_toolchain
+
+    select_arm_toolchain()
     p = build_parser()
     args = p.parse_args(argv)
     cmd = args.cmd
