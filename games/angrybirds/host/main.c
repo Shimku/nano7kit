@@ -929,6 +929,18 @@ int main(int argc, char **argv) {
     /* docs/ is created by ab_persist_prepare (device: docs/ may be missing). */
     fake_us = 1000000ull;
     fngl_reset();
+    ab_ctype_init();
+    {
+        /* Same 3 MB engine pool as the nano: Lua TValue/LDRD see 8-aligned
+         * payloads. glibc calloc is 16-aligned and hid the 12-byte pchunk bug. */
+        void *pool = calloc(1, 0x300000u);
+        if (!pool) {
+            fprintf(stderr, "FATAL: host pool\n");
+            return 3;
+        }
+        ab_heap_init(pool, 0x300000u);
+    }
+    ab_diag_report("host-main-pre-start");
     if (ab_start()) {
         ab_throw_report();
         return 1;

@@ -56,12 +56,16 @@ double ab_frexp(double x, int *e) { return frexp(x, e); }
 double ab_ldexp(double x, int e) { return ldexp(x, e); }
 double ab_modf(double x, double *i) { return modf(x, i); }
 
-/* Bionic exports these as pointers (GOT is the address of the pointer). */
+/* Bionic exports _ctype_ as a POINTER to a 257-byte table. newlib's _ctype_
+ * is the table itself; the names collide in the hbapp. The .so double-derefs
+ * GOT[_ctype_], so the reloc must hit a pointer variable, not newlib's table.
+ * so_to_obj remaps the import to ab_ctype_ (unique). */
 char ab_ctype_tab[257];
 short ab_tolower_tab[257], ab_toupper_tab[257];
-char *_ctype_ = ab_ctype_tab;
-short *_tolower_tab_ = ab_tolower_tab;
-short *_toupper_tab_ = ab_toupper_tab;
+char *ab_ctype_ = ab_ctype_tab;
+short *ab_tolower_tab_ = ab_tolower_tab;
+short *ab_toupper_tab_ = ab_toupper_tab;
+void *ab_ctype_ptr(void) { return &ab_ctype_; }
 uint32_t ab_stack_chk_guard = 0xa5a5a5a5u;
 void *ab_dso_handle;
 /* Bionic FILE is 84 bytes; libpng fprintfs to __sF+168 (stderr). */
@@ -73,6 +77,19 @@ static int n_cxa_throw, n_lua_throw, n_persist_lua_throw;
 static int persist_compile_depth;
 static uint32_t persist_last_len = ~0u;
 static char last_io[96];
+static int diag_on;
+static uint32_t diag_minsp;
+static int strtod_nlog;
+void ab_diag_set(int on) { diag_on = on ? 1 : 0; }
+void ab_diag_reset_logs(void) { strtod_nlog = 0; }
+int ab_diag_on(void) { return diag_on; }
+uint32_t ab_diag_sp(void) {
+    uint32_t sp;
+    __asm__ volatile("mov %0, sp" : "=r"(sp));
+    if (!diag_minsp || sp < diag_minsp) diag_minsp = sp;
+    return sp;
+}
+uint32_t ab_diag_minsp(void) { return diag_minsp; }
 #define AB_THROW_MAX 32
 static char throw_sites[AB_THROW_MAX][160];
 static int n_throw_sites;
@@ -126,7 +143,16 @@ void ab_throw_report(void) {
 typedef struct { uint32_t mag, n; } ahdr;
 #define AMAG 0x41424d48u
 #define PMAG 0x41424850u
-typedef struct pchunk { uint32_t mag, size; struct pchunk *next; } pchunk;
+/* 16-byte header so the payload is 8-aligned (ARM sizeof(pchunk) was 12:
+ * mag+size+next). Lua TValue/LDRD/VLDR on a 4-aligned block abort the A5.
+ * qemu-arm 8.2 SIGBUS on odd-address LDRD; SCTLR.A is not a qemu-user
+ * CPU property. */
+typedef struct pchunk {
+    uint32_t mag, size;
+    struct pchunk *next;
+    uint32_t pad;
+} pchunk;
+typedef char ab_pchunk_align[(sizeof(struct pchunk) == 16) ? 1 : -1];
 static uint8_t *pool_lo, *pool_hi;
 static pchunk *pfree;
 
@@ -167,7 +193,15 @@ static void *pool_alloc(uint32_t n) {
         }
         c->next = 0;
         memset(c + 1, 0, n);
-        return c + 1;
+        {
+            void *p = c + 1;
+            if (((uintptr_t)p & 7u) != 0) {
+                plat_log_line("malloc pool payload not 8-aligned");
+                plat_log_flush();
+                plat_fatal("malloc align");
+            }
+            return p;
+        }
     }
     return 0;
 }
@@ -333,7 +367,7 @@ int ab_persist_lua_ok(const char *name, const void *buf, uint32_t n) {
 }
 
 int ab_persist_empty(void **out, uint32_t *len) {
-    char *p = (char *)malloc(1);
+    char *p = ab_heap_ready() ? (char *)ab_malloc(8) : (char *)malloc(1);
     if (!p) {
         if (out) *out = 0;
         if (len) *len = 0;
@@ -634,7 +668,7 @@ _Unwind_Ptr ab_gnu_Unwind_Find_exidx(_Unwind_Ptr pc, int *pcount) {
 
 int __srget(void *fp) { (void)fp; return EOF; }
 
-static void ctype_init(void) {
+void ab_ctype_init(void) {
     static int done; int i;
     if (done) return;
     done = 1;
@@ -656,15 +690,90 @@ static void ctype_init(void) {
         ab_tolower_tab[i + 1] = (short)((c >= 'A' && c <= 'Z') ? c + 32 : c);
         ab_toupper_tab[i + 1] = (short)((c >= 'a' && c <= 'z') ? c - 32 : c);
     }
-    _ctype_ = ab_ctype_tab;
-    _tolower_tab_ = ab_tolower_tab;
-    _toupper_tab_ = ab_toupper_tab;
+    ab_ctype_ = ab_ctype_tab;
+    ab_tolower_tab_ = ab_tolower_tab;
+    ab_toupper_tab_ = ab_toupper_tab;
+}
+
+/* Locale-free strtod for Lua (LUA_NUMBER is float; luaO_str2d vmov d6,r0,r1
+ * then vcvt.f32.f64). Host glibc strtod and newlib strtod (_ctype_ table,
+ * __global_locale) are not the same; the .so import is remapped here. */
+double ab_strtod(const char *nptr, char **endptr) {
+    const unsigned char *p, *start;
+    int sign = 1, exp_s = 1, exp_v = 0, digits = 0, frac_n = 0;
+    unsigned long ip = 0;
+    double v, frac = 1.0;
+    ab_ctype_init();
+    if (diag_on && strtod_nlog < 24) {
+        char b[96];
+        snprintf(b, sizeof b, "strtod enter '%s' sp=%08x", nptr ? nptr : "",
+                 (unsigned)ab_diag_sp());
+        plat_log_line(b);
+        plat_log_flush();
+    }
+    p = (const unsigned char *)(nptr ? nptr : "");
+    while (ab_ctype_tab[*p + 1] & 0x08) p++;
+    start = p;
+    if (*p == '+' || *p == '-') { if (*p == '-') sign = -1; p++; }
+    while (*p >= '0' && *p <= '9') {
+        ip = ip * 10u + (unsigned)(*p - '0');
+        p++;
+        digits = 1;
+    }
+    v = (double)ip;
+    if (*p == '.') {
+        p++;
+        while (*p >= '0' && *p <= '9') {
+            v = v * 10.0 + (double)(*p - '0');
+            frac_n++;
+            p++;
+            digits = 1;
+        }
+        while (frac_n--) frac *= 10.0;
+        if (frac > 1.0) v /= frac;
+    }
+    if (digits && (*p == 'e' || *p == 'E')) {
+        const unsigned char *e = p + 1;
+        if (*e == '+' || *e == '-') { if (*e == '-') exp_s = -1; e++; }
+        if (*e >= '0' && *e <= '9') {
+            p = e;
+            while (*p >= '0' && *p <= '9') { exp_v = exp_v * 10 + (*p - '0'); p++; }
+            {
+                double m = 1.0;
+                int k = exp_v;
+                while (k--) m *= 10.0;
+                if (exp_s < 0) v /= m;
+                else v *= m;
+            }
+        }
+    }
+    if (!digits) {
+        if (endptr) *endptr = (char *)nptr;
+        v = 0.0;
+    } else {
+        if (endptr) *endptr = (char *)p;
+        v = (double)sign * v;
+        (void)start;
+    }
+    if (diag_on && strtod_nlog < 24) {
+        unsigned bits[2];
+        char b[96];
+        memcpy(bits, &v, 8);
+        snprintf(b, sizeof b, "strtod exit bits=%08x %08x end='%s' sp=%08x",
+                 bits[0], bits[1], endptr && *endptr ? *endptr : "",
+                 (unsigned)ab_diag_sp());
+        plat_log_line(b);
+        plat_log_flush();
+        strtod_nlog++;
+    }
+    return v;
 }
 
 /* FILE handed to the .so is an 84-byte zeroed bionic FILE so
  * AppDataInputStream::available/read ldrh [FILE,#12] is _flags (not nfile
  * pos). Payload sits after. Host and nano share this: leftover I/O is the
- * same plat_read_file + nfile path. Persist writes flush on fclose. */
+ * same plat_read_file + nfile path. Persist writes flush on fclose.
+ * sizeof must be 8-aligned: a 204-byte slot made NF[1].file 4-aligned. */
 #define MAXF 64
 #define NMAG 0x41424e46u
 typedef struct {
@@ -674,8 +783,99 @@ typedef struct {
     uint32_t len, pos, cap;
     int write;
     char path[96];
+    uint32_t pad;
 } nfile;
-static nfile NF[MAXF];
+typedef char ab_nfile_align[((sizeof(nfile) % 8u) == 0) ? 1 : -1];
+static nfile NF[MAXF] __attribute__((aligned(8)));
+static void io_free(void *p) {
+    if (!p) return;
+    if (ab_heap_contains(p)) ab_free(p);
+    else free(p);
+}
+/* Persist/small fopen buffers live in the 8-aligned pool on host and
+ * device. Host glibc malloc is 16-aligned and hid the 12-byte pchunk
+ * LDRD abort; device malloc already went through the pool. */
+static void *io_pool_own(void *buf, uint32_t n) {
+    void *a;
+    if (!buf || !ab_heap_ready()) return buf;
+    if (ab_heap_contains(buf) && ((uintptr_t)buf & 7u) == 0) return buf;
+    a = ab_malloc(n ? n : 8);
+    if (!a) return buf;
+    if (n) memcpy(a, buf, n);
+    io_free(buf);
+    return a;
+}
+
+void ab_diag_report(const char *where) {
+    char b[192];
+    unsigned sp;
+    unsigned char *tab;
+    void *p8 = 0;
+    ab_ctype_init();
+    sp = ab_diag_sp();
+    tab = (unsigned char *)ab_ctype_tab;
+    snprintf(b, sizeof b, "diag report '%s' sp=%08x minsp=%08x",
+             where ? where : "", sp, (unsigned)diag_minsp);
+    plat_log_line(b);
+    plat_log_flush();
+    snprintf(b, sizeof b,
+             "diag ctype ptr=%p tab=%p *ptr=%p tab[1]=%02x isalpha_A=%d isdigit_1=%d space=%d",
+             (void *)&ab_ctype_, (void *)ab_ctype_tab, (void *)ab_ctype_,
+             tab[1], (tab['A' + 1] & 0x01) != 0, (tab['1' + 1] & 0x04) != 0,
+             (tab[' ' + 1] & 0x08) != 0);
+    plat_log_line(b);
+    plat_log_flush();
+    snprintf(b, sizeof b, "diag pchunk header=%u payload_expect_align=8 heap_ready=%d nfile=%u nfile_align=%u NF0=%p",
+             (unsigned)sizeof(pchunk), ab_heap_ready(), (unsigned)sizeof(nfile),
+             (unsigned)((uintptr_t)&NF[0] & 7u), (void *)&NF[0]);
+    plat_log_line(b);
+    plat_log_flush();
+    if (ab_heap_ready()) {
+        p8 = ab_malloc(8);
+        snprintf(b, sizeof b, "diag malloc8 %p align=%u", p8,
+                 p8 ? (unsigned)((uintptr_t)p8 & 7u) : 9u);
+        plat_log_line(b);
+        plat_log_flush();
+        if (p8) {
+            void *q = ab_realloc(p8, 64);
+            snprintf(b, sizeof b, "diag realloc 8->64 %p align=%u", q,
+                     q ? (unsigned)((uintptr_t)q & 7u) : 9u);
+            plat_log_line(b);
+            plat_log_flush();
+            if (q) {
+                void *r = ab_realloc(q, 16);
+                snprintf(b, sizeof b, "diag realloc 64->16 %p align=%u", r,
+                         r ? (unsigned)((uintptr_t)r & 7u) : 9u);
+                plat_log_line(b);
+                plat_log_flush();
+                if (r) ab_free(r);
+            }
+        }
+    }
+    {
+        double d = ab_strtod("1.5", 0);
+        unsigned bits[2];
+        memcpy(bits, &d, 8);
+        snprintf(b, sizeof b, "diag strtod 1.5 bits=%08x %08x (expect 00000000 3ff80000)",
+                 bits[0], bits[1]);
+        plat_log_line(b);
+        plat_log_flush();
+    }
+#ifndef FN_NANO
+    /* qemu-arm 8.2 SIGBUS on odd-address LDRD (observed pc in this probe,
+     * addr&7!=0). Do not execute it: the harness crash handler _exit(139)s.
+     * SCTLR.A is not a qemu-user CPU property. Pool payloads are 8-aligned
+     * so Lua TValue/LDRD/VLDR should not take this fault. */
+    plat_log_line("HOST_PROBE ldrd-unaligned qemu=SIGBUS (not executed; odd LDRD aborts this qemu and the A5)");
+    plat_log_flush();
+    plat_log_line("HOST_PROBE emulate: pool 8-align=yes strtod=ab_strtod ctype=ab_ctype_ glibc_strtod=no qemu_sctlr_a=ldrd-traps");
+    plat_log_flush();
+#else
+    plat_log_line("diag ldrd-unaligned skipped (would reboot the nano)");
+    plat_log_flush();
+#endif
+}
+
 static nfile *nf_of(void *p) {
     int i;
     if (!p) return 0;
@@ -713,7 +913,7 @@ void *ab_fopen(const char *path, const char *mode) {
     }
     if (!wr) {
         void *buf = 0; uint32_t n = 0;
-        char hb[96];
+        char hb[160];
         if (plat_read_file(path, &buf, &n)) {
         if (ab_persist_name(path) && ab_persist_empty(&buf, &n) == 0)
             persist_miss_log(path);
@@ -722,6 +922,8 @@ void *ab_fopen(const char *path, const char *mode) {
             return 0;
         }
         }
+        if (buf && (ab_persist_name(path) || n < 4096u))
+            buf = io_pool_own(buf, n);
         w->data = buf; w->len = n; w->cap = n ? n : 1;
         if (ab_persist_name(path)) ab_persist_note_open(n);
         if (ab_persist_name(path) || strstr(path, "settings.lua")) {
@@ -734,10 +936,24 @@ void *ab_fopen(const char *path, const char *mode) {
                      n > 3 && buf ? ((unsigned char *)buf)[3] : 0);
             plat_log_line(hb);
             plat_log_flush();
+            snprintf(hb, sizeof hb, "nfile fopen return ptr=%p align=%u data=%p dalign=%u nfile=%u sp=%08x",
+                     (void *)w->file, (unsigned)((uintptr_t)w->file & 7u),
+                     (void *)w->data, (unsigned)((uintptr_t)(w->data ? w->data : 0) & 7u),
+                     (unsigned)sizeof(nfile), (unsigned)ab_diag_sp());
+            plat_log_line(hb);
+            plat_log_flush();
+            if (w->data && ((uintptr_t)w->data & 7u)) {
+                plat_log_line("nfile data NOT 8-aligned");
+                plat_log_flush();
+            }
+            if ((uintptr_t)w->file & 7u) {
+                plat_log_line("nfile FILE NOT 8-aligned");
+                plat_log_flush();
+            }
         }
     } else {
         w->write = 1;
-        w->data = calloc(1, 256);
+        w->data = ab_heap_ready() ? ab_malloc(256) : calloc(1, 256);
         w->cap = 256;
         if (ab_persist_name(path)) plat_mkdir_abs(plat_files_dir());
     }
@@ -748,7 +964,7 @@ int ab_fclose(void *fp) {
     if (!w) return -1;
     if (w->write && w->path[0] && w->data)
         plat_write_abs(w->path, w->data, w->len);
-    free(w->data);
+    io_free(w->data);
     w->mag = 0; w->data = 0;
     return 0;
 }
@@ -774,7 +990,7 @@ size_t ab_fwrite(const void *ptr, size_t s, size_t n, void *fp) {
         uint32_t cap = w->cap ? w->cap : 256;
         uint8_t *q;
         while (cap < w->pos + want) cap *= 2;
-        q = realloc(w->data, cap);
+        q = ab_heap_contains(w->data) ? ab_realloc(w->data, cap) : realloc(w->data, cap);
         if (!q) return 0;
         w->data = q; w->cap = cap;
     }
@@ -969,7 +1185,7 @@ static rec tab[] = {
     R(memcpy), R(memmove), R(memset), R(memcmp), R(memchr),
     R(strcpy), R(strncpy), R(strcat), R(strncat), R(strcmp), R(strncmp),
     R(strcasecmp), R(strchr), R(strrchr), R(strstr), R(strpbrk), R(strcspn),
-    R(strlen), R(strtod), R(strtol), R(strtoul), R(strtok), R(strerror),
+    R(strlen), A(strtod, ab_strtod), R(strtol), R(strtoul), R(strtok), R(strerror),
     R(strcoll), R(strftime),
     A(printf, ab_printf), A(sprintf, sprintf), A(snprintf, snprintf),
     A(fopen, ab_fopen), A(fclose, ab_fclose), A(fread, ab_fread), A(fwrite, ab_fwrite),
@@ -998,7 +1214,9 @@ static rec tab[] = {
     A(srand48, ab_srand48), A(lrand48, ab_lrand48),
     R(crc32), A(inflate, ab_inflate), A(inflateEnd, inflateEnd),
     A(inflateInit_, ab_inflateInit_), A(inflateReset, inflateReset),
-    A(_ctype_, &_ctype_), A(_tolower_tab_, &_tolower_tab_), A(_toupper_tab_, &_toupper_tab_),
+    A(_ctype_, &ab_ctype_), A(ab_ctype_, &ab_ctype_),
+    A(_tolower_tab_, &ab_tolower_tab_), A(ab_tolower_tab_, &ab_tolower_tab_),
+    A(_toupper_tab_, &ab_toupper_tab_), A(ab_toupper_tab_, &ab_toupper_tab_),
     R(__sF), R(__srget), A(__errno, ab_errno), A(__stack_chk_guard, &ab_stack_chk_guard),
     A(__stack_chk_fail, ab_stack_chk_fail), A(__cxa_atexit, ab_cxa_atexit),
     A(__dso_handle, &ab_dso_handle), A(__gnu_Unwind_Find_exidx, ab_gnu_Unwind_Find_exidx),
@@ -1036,7 +1254,7 @@ static int sorted;
 
 void *ab_resolve(const char *name) {
     rec key, *hit;
-    ctype_init();
+    ab_ctype_init();
     if (!name) return 0;
     if (!sorted) { qsort(tab, sizeof tab / sizeof tab[0], sizeof tab[0], rec_cmp); sorted = 1; }
     key.n = name; key.p = 0;
@@ -1050,6 +1268,9 @@ void ab_shims_reset(void) {
     persist_compile_depth = 0;
     persist_last_len = ~0u;
     last_io[0] = 0;
+    diag_on = 0;
+    diag_minsp = 0;
+    strtod_nlog = 0;
     memset(NF, 0, sizeof NF);
     memset(tls, 0, sizeof tls);
 }

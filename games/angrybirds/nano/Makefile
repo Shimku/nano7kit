@@ -5,7 +5,7 @@ ZLIB ?= build/zlib-1.3.1
 CC := arm-none-eabi-gcc
 AR := arm-none-eabi-ar
 BUILD ?= build/nano
-ARCH := -marm -mcpu=cortex-a5 -mfloat-abi=softfp -mfpu=vfpv3-d16 -mword-relocations
+ARCH := -marm -mcpu=cortex-a5 -mfloat-abi=softfp -mfpu=vfpv3-d16 -mword-relocations -mno-unaligned-access
 CFLAGS := $(ARCH) -Os -ffp-contract=off -std=gnu99 -ffunction-sections -fdata-sections \
           -fno-common -fno-strict-aliasing -fwrapv -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-exceptions \
           -MMD -MP -DFN_NANO -I$(NANOAPPS)/sdk -I../rt -I$(ZLIB)

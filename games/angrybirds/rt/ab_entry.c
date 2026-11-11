@@ -1,5 +1,6 @@
 /* ab_entry.c: drive Ka3D through JNI natives in libangrybirds.so (nano7kit, MIT). */
 #include <math.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -76,6 +77,28 @@ typedef void (*compile_is_fn)(void *, void *, int, void *, void *);
 static compile_is_fn compile_is;
 typedef const char *(*loadfile_fn)(void *, void *, unsigned *);
 static loadfile_fn lua_loadfile;
+typedef int (*lua_load_api_fn)(void *, void *, void *, const char *);
+static lua_load_api_fn lua_load_api;
+typedef void (*lua_xnext_fn)(void *);
+static lua_xnext_fn lua_xnext;
+typedef int (*lua_str2d_fn)(const char *, float *);
+static lua_str2d_fn lua_str2d;
+typedef void *(*lua_newlstr_fn)(void *, const char *, unsigned);
+static lua_newlstr_fn lua_newlstr;
+typedef void *(*lua_hnew_fn)(void *, int, int);
+static lua_hnew_fn lua_hnew;
+typedef int (*lua_kcode_fn)(void *, unsigned, int);
+static lua_kcode_fn lua_kcode;
+typedef void *(*lua_realloc_fn)(void *, void *, unsigned, unsigned);
+static lua_realloc_fn lua_realloc_api;
+typedef void (*load_persist_fn)(void *, void *, const void *);
+static load_persist_fn load_persist;
+typedef int (*available_fn)(void *);
+static available_fn available_is;
+typedef void (*tostring_is_fn)(void *, void *);
+static tostring_is_fn tostring_is;
+typedef void (*table_read_fn)(void *, void *);
+static table_read_fn table_read;
 static int started;
 static int cam_hold;
 static float hold_scale, hold_left, hold_top;
@@ -86,6 +109,10 @@ static uint32_t sheet_ctor_saved[2], spr_ctor_saved[2];
 static uint32_t parse_index_saved[2];
 static uint32_t lua_rawrun_saved[2], lua_throw_saved[2], handle_load_saved[2];
 static uint32_t compile_is_saved[2], lua_loadfile_saved[2];
+static uint32_t lua_load_saved[2], lua_xnext_saved[2], lua_str2d_saved[2];
+static uint32_t lua_newlstr_saved[2], lua_hnew_saved[2], lua_kcode_saved[2];
+static uint32_t lua_realloc_saved[2], load_persist_saved[2];
+static uint32_t available_saved[2], tostring_is_saved[2], table_read_saved[2];
 static uint32_t wmmxd_saved[2], wmmxc_saved[2], vfpd16_saved[2];
 static int cam_hooks_on;
 static int block_sheet_loading;
@@ -124,6 +151,19 @@ static float pinch_d0, pinch_s0, pinch_cx, pinch_cy;
 #define AB_OFF_LUA_PCALL  0x9df20u
 #define AB_OFF_LUA_GETTOP 0x9d3e4u
 #define AB_OFF_LUA_SETTOP 0x9d3f8u
+#define AB_OFF_LUA_LOAD     0x9de74u
+#define AB_OFF_LUA_XNEXT    0xd35e0u
+#define AB_OFF_LUA_STR2D    0xa7be8u
+#define AB_OFF_LUA_NEWLSTR  0xab718u
+#define AB_OFF_LUA_HNEW     0xaeb40u
+#define AB_OFF_LUA_KCODE    0xd075cu
+#define AB_OFF_LUA_REALLOC  0xa74fcu
+#define AB_OFF_LOAD_PERSIST 0x506b4u
+#define AB_OFF_AVAILABLE    0xefb8cu
+#define AB_OFF_TOSTRING_IS  0xef1c4u
+#define AB_OFF_TABLE_READ   0x9985cu
+#define AB_OFF_CTYPE_GOT    0x13d4a0u
+#define AB_OFF_STRTOD_GOT   0x13cf8cu
 #define AB_OFF_WMMXD      0x1176c4u
 #define AB_OFF_WMMXC      0x11774cu
 #define AB_OFF_VFP_D16    0x1176b4u
@@ -185,6 +225,18 @@ static void hook_lua_throw(void *L, int err) __attribute__((noinline));
 static void hook_handle_load(void *self, int status, void *name, void *table) __attribute__((noinline));
 static void hook_compile_is(void *ls, void *is, int remaining, void *name, void *env) __attribute__((noinline));
 static const char *hook_load_file(void *L, void *ud, unsigned *sz) __attribute__((noinline));
+static int hook_lua_load(void *L, void *reader, void *data, const char *name) __attribute__((noinline));
+static void hook_lua_xnext(void *ls) __attribute__((noinline));
+static int hook_lua_str2d(const char *s, float *r) __attribute__((noinline));
+static void *hook_lua_newlstr(void *L, const char *s, unsigned n) __attribute__((noinline));
+static void *hook_lua_hnew(void *L, int na, int nh) __attribute__((noinline));
+static int hook_lua_kcode(void *fs, unsigned code, int line) __attribute__((noinline));
+static void *hook_lua_realloc(void *L, void *p, unsigned o, unsigned n) __attribute__((noinline));
+static void hook_load_persist(void *sret, void *self, const void *name) __attribute__((noinline));
+static int hook_available(void *self) __attribute__((noinline));
+static void hook_tostring_is(void *sret, void *self) __attribute__((noinline));
+static void hook_table_read(void *self, void *is) __attribute__((noinline));
+static void ab_lua_parse_ladder(void *L);
 static void patch_unwind_nops(void);
 static void mk_string(void *slot, const char *s);
 static void install_jump(void *fn, void *hook, uint32_t saved[2]);
@@ -285,9 +337,44 @@ int ab_start(void) {
         install_jump((void *)compile_is, (void *)hook_compile_is, compile_is_saved);
         lua_loadfile = (loadfile_fn)(g_so.base + AB_OFF_LOADFILE);
         install_jump((void *)lua_loadfile, (void *)hook_load_file, lua_loadfile_saved);
+        lua_load_api = (lua_load_api_fn)(g_so.base + AB_OFF_LUA_LOAD);
+        install_jump((void *)lua_load_api, (void *)hook_lua_load, lua_load_saved);
+        lua_xnext = (lua_xnext_fn)(g_so.base + AB_OFF_LUA_XNEXT);
+        install_jump((void *)lua_xnext, (void *)hook_lua_xnext, lua_xnext_saved);
+        lua_str2d = (lua_str2d_fn)(g_so.base + AB_OFF_LUA_STR2D);
+        install_jump((void *)lua_str2d, (void *)hook_lua_str2d, lua_str2d_saved);
+        lua_newlstr = (lua_newlstr_fn)(g_so.base + AB_OFF_LUA_NEWLSTR);
+        install_jump((void *)lua_newlstr, (void *)hook_lua_newlstr, lua_newlstr_saved);
+        lua_hnew = (lua_hnew_fn)(g_so.base + AB_OFF_LUA_HNEW);
+        install_jump((void *)lua_hnew, (void *)hook_lua_hnew, lua_hnew_saved);
+        lua_kcode = (lua_kcode_fn)(g_so.base + AB_OFF_LUA_KCODE);
+        install_jump((void *)lua_kcode, (void *)hook_lua_kcode, lua_kcode_saved);
+        lua_realloc_api = (lua_realloc_fn)(g_so.base + AB_OFF_LUA_REALLOC);
+        install_jump((void *)lua_realloc_api, (void *)hook_lua_realloc, lua_realloc_saved);
+        load_persist = (load_persist_fn)(g_so.base + AB_OFF_LOAD_PERSIST);
+        install_jump((void *)load_persist, (void *)hook_load_persist, load_persist_saved);
+        available_is = (available_fn)(g_so.base + AB_OFF_AVAILABLE);
+        install_jump((void *)available_is, (void *)hook_available, available_saved);
+        tostring_is = (tostring_is_fn)(g_so.base + AB_OFF_TOSTRING_IS);
+        install_jump((void *)tostring_is, (void *)hook_tostring_is, tostring_is_saved);
+        table_read = (table_read_fn)(g_so.base + AB_OFF_TABLE_READ);
+        install_jump((void *)table_read, (void *)hook_table_read, table_read_saved);
         plat_log_line("ab_start: lua setjmp hook on");
+        plat_log_line("ab_start: parse ladder + llex/strtod crumbs on");
+        {
+            uint32_t *ctype_got = (uint32_t *)(g_so.base + AB_OFF_CTYPE_GOT);
+            uint32_t *strtod_got = (uint32_t *)(g_so.base + AB_OFF_STRTOD_GOT);
+            char gb[192];
+            snprintf(gb, sizeof gb, "diag GOT _ctype_=%08x ab_ctype_=%p strtod=%08x ab_strtod=%p",
+                     (unsigned)(ctype_got ? *ctype_got : 0), ab_ctype_ptr(),
+                     (unsigned)(strtod_got ? *strtod_got : 0), (void *)ab_strtod);
+            plat_log_line(gb);
+            plat_log_flush();
+        }
     }
     plat_log_flush();
+    ab_ctype_init();
+    ab_diag_report("ab_start");
     ab_persist_prepare();
     env = ab_jni_env();
     files = ab_jni_new_utf(plat_files_dir());
@@ -590,10 +677,10 @@ static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
     volatile int i;
     int st;
     static int nlog, nafter;
-    if (nlog < 12) {
+    if (nlog < 12 || ab_diag_on()) {
         plat_log_line("lua pcall setjmp");
         plat_log_flush();
-        nlog++;
+        if (nlog < 64) nlog++;
     }
     i = lua_lj_n;
     if (i < 0 || i >= AB_LJ_MAX) i = 0;
@@ -612,14 +699,14 @@ static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
      * jmp_buf is 8-aligned BSS; fn_setjmp saves r4-r11,sp,lr,d8-d15,FPSCR
      * only (Cortex-A5 VFPv4-D16: d16-d31 do not exist). */
     st = fn_setjmp(lua_lj_jb[i]);
-    if (nafter < 16) {
+    if (nafter < 16 || ab_diag_on()) {
         char b[160];
         snprintf(b, sizeof b, "lua pcall setjmp after st=%d last='%s'", st, ab_last_io());
         plat_log_line(b);
         plat_log_flush();
     }
     if (st == 0) {
-        if (nafter < 16) {
+        if (nafter < 16 || ab_diag_on()) {
             char b[160];
             snprintf(b, sizeof b, "lua pcall setjmp enter f last='%s'", ab_last_io());
             plat_log_line(b);
@@ -627,12 +714,12 @@ static int hook_lua_rawrun(void *L, void (*f)(void *, void *), void *ud) {
         }
         if (f) f(L, ud);
         asm volatile("" ::: "memory");
-        if (nafter < 16) {
+        if (nafter < 16 || ab_diag_on()) {
             char b[160];
             snprintf(b, sizeof b, "lua pcall setjmp f returned last='%s'", ab_last_io());
             plat_log_line(b);
             plat_log_flush();
-            nafter++;
+            if (nafter < 64) nafter++;
         }
     } else {
         char b[80];
@@ -706,6 +793,10 @@ static void hook_compile_is(void *ls, void *is, int remaining, void *name, void 
     const char *nm = (name && str_cstr) ? str_cstr(name) : "";
     int skip = ab_persist_skip_load(remaining, nm);
     char b[192];
+    snprintf(b, sizeof b, "compile enter remaining=%d last='%s' name='%s' sp=%08x",
+             remaining, ab_last_io(), nm ? nm : "", (unsigned)ab_diag_sp());
+    plat_log_line(b);
+    plat_log_flush();
     if (skip) {
         snprintf(b, sizeof b, "compile skip persist empty remaining=%d last='%s'",
                  remaining, ab_last_io());
@@ -727,7 +818,12 @@ static void hook_compile_is(void *ls, void *is, int remaining, void *name, void 
     restore_jump((void *)compile_is, compile_is_saved);
     compile_is(ls, is, remaining, name, env);
     patch_arm_jump((void *)compile_is, (void *)hook_compile_is);
+    snprintf(b, sizeof b, "compile exit remaining=%d last='%s' sp=%08x",
+             remaining, ab_last_io(), (unsigned)ab_diag_sp());
+    plat_log_line(b);
+    plat_log_flush();
     ab_persist_compile_leave();
+    if (ab_persist_name(ab_last_io()) && remaining > 0) ab_diag_set(0);
 }
 
 static const char *hook_load_file(void *L, void *ud, unsigned *sz) {
@@ -735,12 +831,13 @@ static const char *hook_load_file(void *L, void *ud, unsigned *sz) {
     const char *r;
     static int nlog;
     if (ud) memcpy(&rem, (char *)ud + 4, 4);
-    if (nlog < 12 || rem == 0 || ab_persist_name(ab_last_io())) {
+    if (nlog < 12 || rem == 0 || ab_persist_name(ab_last_io()) || ab_diag_on()) {
         char b[160];
-        snprintf(b, sizeof b, "lua_load reader remaining=%u last='%s'", rem, ab_last_io());
+        snprintf(b, sizeof b, "lua_load reader remaining=%u ptr=%p sp=%08x last='%s'",
+                 rem, ud, (unsigned)ab_diag_sp(), ab_last_io());
         plat_log_line(b);
         plat_log_flush();
-        nlog++;
+        if (nlog < 64) nlog++;
     }
     if (rem == 0) {
         if (sz) *sz = 0;
@@ -768,6 +865,295 @@ static void *lua_state_ptr(void) {
     if (!wrap) return 0;
     memcpy(&L, wrap + 8, 4);
     return L;
+}
+
+static int llex_n, str2d_n, newlstr_n, hnew_n, kcode_n, realloc_n;
+static void diag_reset_counts(void) {
+    llex_n = str2d_n = newlstr_n = hnew_n = kcode_n = realloc_n = 0;
+    ab_diag_reset_logs();
+}
+
+static void diag_line(const char *fmt, ...) {
+    char b[192];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(b, sizeof b, fmt, ap);
+    va_end(ap);
+    plat_log_line(b);
+    plat_log_flush();
+}
+
+static const char settings_186[] =
+    "currentLanguage = \"en_EN\"\n"
+    "tutorials = {\n"
+    "    BIRD_RED = {\n"
+    "        sprite = \"TUTORIAL_1\",\n"
+    "\n"
+    "    },\n"
+    "\n"
+    "}\n"
+    "audioEnabled = true\n"
+    "lastOpenLevel = 4\n"
+    "currentLevelSelectionPage = 1\n"
+    "gameStarted = true\n";
+
+static void ab_lua_parse_ladder(void *L) {
+    typedef int (*loadbuf_fn)(void *, const char *, unsigned, const char *);
+    typedef int (*pcall_fn)(void *, int, int, int);
+    typedef int (*gettop_fn)(void *);
+    typedef void (*settop_fn)(void *, int);
+    static const char *const names[] = {
+        "empty", "return", "x=1", "x=4", "x=1.5", "x=true", "x='a'",
+        "x=en_EN", "t={}", "t={a=1}", "t={BIRD_RED=true}", "settings.lua"
+    };
+    static const char *const srcs[] = {
+        "", "return", "x=1", "x=4", "x=1.5", "x=true", "x='a'",
+        "x=\"en_EN\"", "t={}", "t={a=1}", "t={BIRD_RED=true}", settings_186
+    };
+    loadbuf_fn loadbuf;
+    pcall_fn pcall;
+    gettop_fn gettop;
+    settop_fn settop;
+    unsigned i, nsrc;
+    int top, st, pc;
+    ab_diag_set(1);
+    diag_line("ladder begin L=%p settings186=%u sp=%08x minsp=%08x",
+              L, (unsigned)(sizeof settings_186 - 1), (unsigned)ab_diag_sp(),
+              (unsigned)ab_diag_minsp());
+    ab_diag_report("ladder");
+    if (!L || !g_so.base) {
+        plat_log_line("ladder skip (no lua_State)");
+        plat_log_flush();
+        return;
+    }
+    loadbuf = (loadbuf_fn)(g_so.base + AB_OFF_LUAL_LOADBUF);
+    pcall = (pcall_fn)(g_so.base + AB_OFF_LUA_PCALL);
+    gettop = (gettop_fn)(g_so.base + AB_OFF_LUA_GETTOP);
+    settop = (settop_fn)(g_so.base + AB_OFF_LUA_SETTOP);
+    top = gettop(L);
+    nsrc = (unsigned)(sizeof srcs / sizeof srcs[0]);
+    for (i = 0; i < nsrc; i++) {
+        unsigned n = (unsigned)strlen(srcs[i]);
+        diag_line("ladder before %s n=%u sp=%08x minsp=%08x",
+                  names[i], n, (unsigned)ab_diag_sp(), (unsigned)ab_diag_minsp());
+        diag_reset_counts();
+        st = loadbuf(L, srcs[i], n, names[i]);
+        diag_line("ladder after %s lua_load err=%d sp=%08x minsp=%08x",
+                  names[i], st, (unsigned)ab_diag_sp(), (unsigned)ab_diag_minsp());
+        if (st == 0) {
+            diag_line("ladder pcall before %s sp=%08x", names[i], (unsigned)ab_diag_sp());
+            pc = pcall(L, 0, 0, 0);
+            diag_line("ladder pcall after %s err=%d sp=%08x",
+                      names[i], pc, (unsigned)ab_diag_sp());
+        }
+        settop(L, top);
+    }
+    diag_line("ladder done sp=%08x minsp=%08x", (unsigned)ab_diag_sp(),
+              (unsigned)ab_diag_minsp());
+}
+
+static int hook_lua_load(void *L, void *reader, void *data, const char *name) {
+    static int nlog;
+    int st, log = ab_diag_on() || nlog < 12 || ab_persist_name(ab_last_io());
+    diag_reset_counts();
+    if (log)
+        diag_line("lua_load enter name='%s' last='%s' sp=%08x",
+                  name ? name : "", ab_last_io(), (unsigned)ab_diag_sp());
+    if (!lua_load_api) return 1;
+    restore_jump((void *)lua_load_api, lua_load_saved);
+    st = lua_load_api(L, reader, data, name);
+    patch_arm_jump((void *)lua_load_api, (void *)hook_lua_load);
+    if (log) {
+        diag_line("lua_load return %d name='%s' sp=%08x", st, name ? name : "",
+                  (unsigned)ab_diag_sp());
+        nlog++;
+    }
+    return st;
+}
+
+static void hook_lua_xnext(void *ls) {
+    int tok = 0, line = 0;
+    if (lua_xnext) {
+        restore_jump((void *)lua_xnext, lua_xnext_saved);
+        lua_xnext(ls);
+        patch_arm_jump((void *)lua_xnext, (void *)hook_lua_xnext);
+    }
+    if (ls) {
+        memcpy(&tok, (char *)ls + 12, 4);
+        memcpy(&line, (char *)ls + 4, 4);
+    }
+    if (ab_diag_on() && llex_n < 40) {
+        diag_line("llex tok=%d line=%d n=%d sp=%08x", tok, line, llex_n,
+                  (unsigned)ab_diag_sp());
+        llex_n++;
+    }
+}
+
+static int hook_lua_str2d(const char *s, float *r) {
+    int st = 0;
+    unsigned bits = 0;
+    if (ab_diag_on() && str2d_n < 16)
+        diag_line("luaO_str2d enter '%s' sp=%08x", s ? s : "", (unsigned)ab_diag_sp());
+    if (lua_str2d) {
+        restore_jump((void *)lua_str2d, lua_str2d_saved);
+        st = lua_str2d(s, r);
+        patch_arm_jump((void *)lua_str2d, (void *)hook_lua_str2d);
+    }
+    if (r) memcpy(&bits, r, 4);
+    if (ab_diag_on() && str2d_n < 16) {
+        diag_line("luaO_str2d exit st=%d bits=%08x sp=%08x", st, bits,
+                  (unsigned)ab_diag_sp());
+        str2d_n++;
+    }
+    return st;
+}
+
+static void *hook_lua_newlstr(void *L, const char *s, unsigned n) {
+    void *p = 0;
+    if (ab_diag_on() && newlstr_n < 24)
+        diag_line("luaS_newlstr enter n=%u '%.*s' sp=%08x", n, n > 12 ? 12 : (int)n,
+                  s ? s : "", (unsigned)ab_diag_sp());
+    if (lua_newlstr) {
+        restore_jump((void *)lua_newlstr, lua_newlstr_saved);
+        p = lua_newlstr(L, s, n);
+        patch_arm_jump((void *)lua_newlstr, (void *)hook_lua_newlstr);
+    }
+    if (ab_diag_on() && newlstr_n < 24) {
+        diag_line("luaS_newlstr exit %p align=%u sp=%08x", p,
+                  p ? (unsigned)((uintptr_t)p & 7u) : 9u, (unsigned)ab_diag_sp());
+        newlstr_n++;
+    }
+    return p;
+}
+
+static void *hook_lua_hnew(void *L, int na, int nh) {
+    void *p = 0;
+    if (ab_diag_on() && hnew_n < 16)
+        diag_line("luaH_new enter array=%d hash=%d sp=%08x", na, nh,
+                  (unsigned)ab_diag_sp());
+    if (lua_hnew) {
+        restore_jump((void *)lua_hnew, lua_hnew_saved);
+        p = lua_hnew(L, na, nh);
+        patch_arm_jump((void *)lua_hnew, (void *)hook_lua_hnew);
+    }
+    if (ab_diag_on() && hnew_n < 16) {
+        diag_line("luaH_new exit %p sp=%08x", p, (unsigned)ab_diag_sp());
+        hnew_n++;
+    }
+    return p;
+}
+
+static int hook_lua_kcode(void *fs, unsigned code, int line) {
+    int r = 0;
+    if (ab_diag_on() && kcode_n < 12)
+        diag_line("luaK_code enter code=%08x line=%d sp=%08x", code, line,
+                  (unsigned)ab_diag_sp());
+    if (lua_kcode) {
+        restore_jump((void *)lua_kcode, lua_kcode_saved);
+        r = lua_kcode(fs, code, line);
+        patch_arm_jump((void *)lua_kcode, (void *)hook_lua_kcode);
+    }
+    if (ab_diag_on() && kcode_n < 12) {
+        diag_line("luaK_code exit pc=%d sp=%08x", r, (unsigned)ab_diag_sp());
+        kcode_n++;
+    }
+    return r;
+}
+
+static void *hook_lua_realloc(void *L, void *p, unsigned o, unsigned n) {
+    void *q = 0;
+    if (ab_diag_on() && realloc_n < 24)
+        diag_line("luaM_realloc enter p=%p old=%u new=%u palign=%u sp=%08x",
+                  p, o, n, p ? (unsigned)((uintptr_t)p & 7u) : 0,
+                  (unsigned)ab_diag_sp());
+    if (lua_realloc_api) {
+        restore_jump((void *)lua_realloc_api, lua_realloc_saved);
+        q = lua_realloc_api(L, p, o, n);
+        patch_arm_jump((void *)lua_realloc_api, (void *)hook_lua_realloc);
+    }
+    if (q && n >= 8 && ((uintptr_t)q & 7u)) {
+        diag_line("luaM_realloc NOT 8-aligned %p", q);
+        plat_fatal("luaM_realloc align");
+    }
+    if (ab_diag_on() && realloc_n < 24) {
+        diag_line("luaM_realloc exit %p align=%u sp=%08x", q,
+                  q ? (unsigned)((uintptr_t)q & 7u) : 9u, (unsigned)ab_diag_sp());
+        realloc_n++;
+    }
+    return q;
+}
+
+static int hook_available(void *self) {
+    static int nlog;
+    int n = 0;
+    void *fp = 0;
+    int log = ab_diag_on() || nlog < 8 || ab_persist_name(ab_last_io());
+    if (self) memcpy(&fp, (char *)self + 8, 4);
+    if (log)
+        diag_line("available enter fp=%p last='%s' sp=%08x", fp, ab_last_io(),
+                  (unsigned)ab_diag_sp());
+    if (available_is) {
+        restore_jump((void *)available_is, available_saved);
+        n = available_is(self);
+        patch_arm_jump((void *)available_is, (void *)hook_available);
+    }
+    if (log) {
+        diag_line("available exit remaining=%d sp=%08x", n, (unsigned)ab_diag_sp());
+        nlog++;
+    }
+    return n;
+}
+
+static void hook_tostring_is(void *sret, void *self) {
+    static int nlog;
+    int log = ab_diag_on() || nlog < 8 || ab_persist_name(ab_last_io());
+    if (log)
+        diag_line("toString enter self=%p last='%s' sp=%08x", self, ab_last_io(),
+                  (unsigned)ab_diag_sp());
+    if (tostring_is) {
+        restore_jump((void *)tostring_is, tostring_is_saved);
+        tostring_is(sret, self);
+        patch_arm_jump((void *)tostring_is, (void *)hook_tostring_is);
+    }
+    if (log) {
+        diag_line("toString exit sp=%08x", (unsigned)ab_diag_sp());
+        nlog++;
+    }
+}
+
+static void hook_table_read(void *self, void *is) {
+    static int nlog;
+    int log = ab_diag_on() || nlog < 8 || ab_persist_name(ab_last_io());
+    if (log)
+        diag_line("LuaTable::read enter last='%s' sp=%08x", ab_last_io(),
+                  (unsigned)ab_diag_sp());
+    if (table_read) {
+        restore_jump((void *)table_read, table_read_saved);
+        table_read(self, is);
+        patch_arm_jump((void *)table_read, (void *)hook_table_read);
+    }
+    if (log) {
+        diag_line("LuaTable::read exit last='%s' sp=%08x", ab_last_io(),
+                  (unsigned)ab_diag_sp());
+        nlog++;
+    }
+}
+
+static void hook_load_persist(void *sret, void *self, const void *name) {
+    static int ladder_done;
+    uint8_t *wrap = 0;
+    void *L = 0;
+    if (!ladder_done) {
+        ladder_done = 1;
+        if (self) memcpy(&wrap, (char *)self + 8, 4);
+        if (wrap) memcpy(&L, wrap + 8, 4);
+        if (!L) L = lua_state_ptr();
+        ab_lua_parse_ladder(L);
+    }
+    if (!load_persist) return;
+    restore_jump((void *)load_persist, load_persist_saved);
+    load_persist(sret, self, name);
+    patch_arm_jump((void *)load_persist, (void *)hook_load_persist);
 }
 
 void ab_lua_prove_recovery(void) {

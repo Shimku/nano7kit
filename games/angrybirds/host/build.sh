@@ -12,7 +12,7 @@ ZTGZ=/tmp/zlib-1.3.1.tar.gz
 # be called from the SO without math_wrap.S; the armel libm is already GPR.
 CC=${CROSS_CC:-arm-linux-gnueabi-gcc}
 # Cortex-A5 VFPv4-D16: same GPR/VFP as the nano. Do not enable NEON/d16-d31/WMMX.
-CF="-O1 -g -static -marm -mcpu=cortex-a5 -mfloat-abi=softfp -mfpu=vfpv3-d16 -fno-strict-aliasing -fwrapv -Wall -I$R -I$H -I$ZSRC"
+CF="-O1 -g -static -marm -mcpu=cortex-a5 -mfloat-abi=softfp -mfpu=vfpv3-d16 -mno-unaligned-access -fno-strict-aliasing -fwrapv -Wall -I$R -I$H -I$ZSRC"
 mkdir -p "$O" "$ROOT/build"
 if [ ! -d "$ZSRC" ]; then
   if [ ! -f "$ZTGZ" ]; then

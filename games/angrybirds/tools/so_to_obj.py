@@ -139,6 +139,10 @@ REMAP = {
     "__cxa_atexit": "ab_cxa_atexit", "__stack_chk_guard": "ab_stack_chk_guard",
     "__dso_handle": "ab_dso_handle",
     "__gnu_Unwind_Find_exidx": "ab_gnu_Unwind_Find_exidx",
+    "strtod": "ab_strtod",
+    "_ctype_": "ab_ctype_",
+    "_tolower_tab_": "ab_tolower_tab_",
+    "_toupper_tab_": "ab_toupper_tab_",
 }
 
 

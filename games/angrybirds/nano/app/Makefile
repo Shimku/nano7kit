@@ -7,9 +7,9 @@ CHECK_NO_THUMB_FP := 1
 AB_LIB ?= build/libab_nano.a
 include ../../sdk/hb_app.mk
 NEWLIB_FLAGS := -marm -march=armv5te+fp -mfloat-abi=softfp
-# shims.c owns bionic _ctype_ (a pointer). newlib's ctype_.o is the table; the
-# first definition wins. Blob globals stay inside .abso (so_to_obj does not
-# re-export them).
+# shims.c owns bionic _ctype_ as ab_ctype_ (a pointer). newlib's _ctype_ is
+# the table; so_to_obj remaps the .so import so they do not collide. Blob
+# globals stay inside .abso (so_to_obj does not re-export them).
 # ARM-state libgcc first: its C++ unwinder saves VFP in ARM state (the SDK's
 # Thumb one traps). --all-alloc: .init_array (rebased) and .ARM.exidx in the
 # image; --pad-sectors: whole 4096-byte FAT sectors.
