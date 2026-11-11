@@ -143,10 +143,9 @@ void ab_throw_report(void) {
 typedef struct { uint32_t mag, n; } ahdr;
 #define AMAG 0x41424d48u
 #define PMAG 0x41424850u
-/* 16-byte header so the payload is 8-aligned (ARM sizeof(pchunk) was 12:
- * mag+size+next). Lua TValue/LDRD/VLDR on a 4-aligned block abort the A5.
- * qemu-arm 8.2 SIGBUS on odd-address LDRD; SCTLR.A is not a qemu-user
- * CPU property. */
+/* 16-byte header plus 16-up pool base: payload is 16-aligned even when
+ * hb_os_alloc returns 4-mod-8 (f2ef5ea). Lua TValue/LDRD/VLDR on a
+ * 4-aligned block abort the A5. qemu-arm 8.2 SIGBUS on odd LDRD. */
 typedef struct pchunk {
     uint32_t mag, size;
     struct pchunk *next;
@@ -157,14 +156,32 @@ static uint8_t *pool_lo, *pool_hi;
 static pchunk *pfree;
 
 void ab_heap_init(void *p, uint32_t n) {
-    if (!p || n < 64) { pool_lo = pool_hi = 0; pfree = 0; return; }
-    n &= ~7u;
-    pool_lo = (uint8_t *)p;
+    uintptr_t a = (uintptr_t)p;
+    uintptr_t aligned;
+    uint32_t loss;
+    char b[128];
+    pool_lo = pool_hi = 0;
+    pfree = 0;
+    if (!p || n < 96) return;
+    /* Device hb_os_alloc is 4-aligned (f2ef5ea pool payload %8==4).
+     * Bump the base to 16 so header+payload stay 8/16-aligned. */
+    aligned = (a + 15u) & ~(uintptr_t)15u;
+    loss = (uint32_t)(aligned - a);
+    if (n <= loss + 64u) return;
+    n -= loss;
+    n &= ~15u;
+    if (n < 64) return;
+    pool_lo = (uint8_t *)aligned;
     pool_hi = pool_lo + n;
     pfree = (pchunk *)pool_lo;
     pfree->mag = PMAG;
     pfree->size = n - (uint32_t)sizeof(pchunk);
     pfree->next = 0;
+    snprintf(b, sizeof b, "diag pool raw=%p base=%p raw_align=%u base_align=%u size=%u",
+             p, (void *)pool_lo, (unsigned)(a & 15u),
+             (unsigned)((uintptr_t)pool_lo & 15u), (unsigned)n);
+    plat_log_line(b);
+    plat_log_flush();
 }
 int ab_heap_ready(void) { return pool_lo != 0; }
 
@@ -174,10 +191,19 @@ static int in_pool(void *p) {
 }
 int ab_heap_contains(const void *p) { return in_pool((void *)p); }
 
-static void *pool_alloc(uint32_t n) {
+static void pool_align_fatal(uint32_t n, void *p, uint32_t lr) {
+    char b[160];
+    snprintf(b, sizeof b, "malloc pool payload not 8-aligned n=%u p=%p lr=%08x",
+             (unsigned)n, p, (unsigned)lr);
+    plat_log_line(b);
+    plat_log_flush();
+    plat_fatal("malloc align");
+}
+
+static void *pool_alloc(uint32_t n, uint32_t lr) {
     pchunk **pp, *c, *rest;
-    n = (n + 7u) & ~7u;
-    if (!n) n = 8;
+    n = (n + 15u) & ~15u;
+    if (!n) n = 16;
     for (pp = &pfree; *pp; pp = &(*pp)->next) {
         c = *pp;
         if (c->size < n) continue;
@@ -195,11 +221,8 @@ static void *pool_alloc(uint32_t n) {
         memset(c + 1, 0, n);
         {
             void *p = c + 1;
-            if (((uintptr_t)p & 7u) != 0) {
-                plat_log_line("malloc pool payload not 8-aligned");
-                plat_log_flush();
-                plat_fatal("malloc align");
-            }
+            if (((uintptr_t)p & 7u) != 0)
+                pool_align_fatal(n, p, lr);
             return p;
         }
     }
@@ -230,6 +253,7 @@ static void pool_release(void *p) {
 void *ab_malloc(size_t n) {
     ahdr *h;
     void *p;
+    uint32_t lr = (uint32_t)(uintptr_t)__builtin_return_address(0);
     if (!n) n = 1;
     if (n >= 256u * 1024u) {
         char b[80];
@@ -237,7 +261,7 @@ void *ab_malloc(size_t n) {
         plat_log_line(b);
     }
     if (pool_lo) {
-        p = pool_alloc((uint32_t)n);
+        p = pool_alloc((uint32_t)n, lr);
         if (!p) {
             char b[96];
             heap_fail++;
@@ -297,6 +321,31 @@ void *ab_realloc(void *p, size_t n) {
     memcpy(q, p, old < n ? old : n);
     ab_free(p);
     return q;
+}
+void *ab_calloc(size_t a, size_t n) {
+    size_t bytes;
+    if (!a || !n) return ab_malloc(1);
+    bytes = a * n;
+    if (n && bytes / n != a) return 0;
+    return ab_malloc(bytes);
+}
+void *ab_memalign(size_t align, size_t n) {
+    if (align < 16) align = 16;
+    if (align & (align - 1)) align = 16;
+    if (n < align) n = align;
+    /* Pool base and block sizes are 16-aligned. align>16 is unused by
+     * this .so (no memalign import); still round the request up. */
+    n = (n + align - 1) & ~(align - 1);
+    return ab_malloc(n);
+}
+int ab_posix_memalign(void **p, size_t align, size_t n) {
+    void *q;
+    if (!p) return 22;
+    if (align < sizeof(void *) || (align & (align - 1))) return 22;
+    q = ab_memalign(align, n);
+    if (!q) return 12;
+    *p = q;
+    return 0;
 }
 
 extern int fn_setjmp(void *b) __attribute__((returns_twice));
@@ -851,6 +900,19 @@ void ab_diag_report(const char *where) {
                 if (r) ab_free(r);
             }
         }
+        {
+            void *c = ab_calloc(3, 7), *m = ab_memalign(16, 48), *pm = 0;
+            int pe = ab_posix_memalign(&pm, 16, 32);
+            snprintf(b, sizeof b, "diag calloc/memalign %p a=%u %p a=%u posix=%d %p a=%u",
+                     c, c ? (unsigned)((uintptr_t)c & 7u) : 9u,
+                     m, m ? (unsigned)((uintptr_t)m & 7u) : 9u,
+                     pe, pm, pm ? (unsigned)((uintptr_t)pm & 7u) : 9u);
+            plat_log_line(b);
+            plat_log_flush();
+            if (c) ab_free(c);
+            if (m) ab_free(m);
+            if (pm) ab_free(pm);
+        }
     }
     {
         double d = ab_strtod("1.5", 0);
@@ -868,7 +930,7 @@ void ab_diag_report(const char *where) {
      * so Lua TValue/LDRD/VLDR should not take this fault. */
     plat_log_line("HOST_PROBE ldrd-unaligned qemu=SIGBUS (not executed; odd LDRD aborts this qemu and the A5)");
     plat_log_flush();
-    plat_log_line("HOST_PROBE emulate: pool 8-align=yes strtod=ab_strtod ctype=ab_ctype_ glibc_strtod=no qemu_sctlr_a=ldrd-traps");
+    plat_log_line("HOST_PROBE emulate: pool 16-up=yes 16-round=yes strtod=ab_strtod ctype=ab_ctype_ glibc_strtod=no qemu_sctlr_a=ldrd-traps");
     plat_log_flush();
 #else
     plat_log_line("diag ldrd-unaligned skipped (would reboot the nano)");
@@ -1182,6 +1244,9 @@ static rec tab[] = {
     A(log, ab_log), A(log10, ab_log10), A(modf, ab_modf), A(pow, ab_pow),
     A(sin, ab_sin), A(sinh, ab_sinh), A(sqrt, ab_sqrt), A(tan, ab_tan), A(tanh, ab_tanh),
     A(malloc, ab_malloc), A(free, ab_free), A(realloc, ab_realloc),
+    A(calloc, ab_calloc), A(memalign, ab_memalign), A(posix_memalign, ab_posix_memalign),
+    A(aligned_alloc, ab_memalign),
+    A(_Znwj, ab_malloc), A(_Znaj, ab_malloc), A(_ZdlPv, ab_free), A(_ZdaPv, ab_free),
     R(memcpy), R(memmove), R(memset), R(memcmp), R(memchr),
     R(strcpy), R(strncpy), R(strcat), R(strncat), R(strcmp), R(strncmp),
     R(strcasecmp), R(strchr), R(strrchr), R(strstr), R(strpbrk), R(strcspn),

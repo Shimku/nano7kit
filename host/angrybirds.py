@@ -30,7 +30,7 @@ APK_SHA256 = "c80ed55b5a7e594653402217b61569049300358d2c2f6c4515c867608104c477"
 CMD = "./start nabase add 'Angry Birds' --payload /path/to/angrybirds-android-1.0.0.apk"
 FAT_EXE = "/Apps/Executables/Angry Birds.hbapp"
 FAT_DATA = "/Apps/Data/AngryBirds"
-RECIPE = 16  # parse ladder + llex/strtod crumbs; 8-align pool; locale-free strtod
+RECIPE = 17  # pool base 16-up; 16-round blocks; host AB_POOL_OFF=4 device-like
 
 # Memory model. IMAGE_BYTES is the loaded .hbapp span (runtime + linked .so).
 # The v7a .so image is about 1.32 MB; runtime/GL/JNI stay ARM+VFP softfp.

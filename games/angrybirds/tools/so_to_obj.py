@@ -112,6 +112,9 @@ def load_so(data: bytes) -> dict:
 
 REMAP = {
     "malloc": "ab_malloc", "free": "ab_free", "realloc": "ab_realloc",
+    "calloc": "ab_calloc", "memalign": "ab_memalign", "posix_memalign": "ab_posix_memalign",
+    "aligned_alloc": "ab_memalign",
+    "_Znwj": "ab_malloc", "_Znaj": "ab_malloc", "_ZdlPv": "ab_free", "_ZdaPv": "ab_free",
     "fopen": "ab_fopen", "fclose": "ab_fclose", "fread": "ab_fread",
     "fwrite": "ab_fwrite", "fseek": "ab_fseek", "ftell": "ab_ftell",
     "fflush": "ab_fflush", "fgets": "ab_fgets", "fputc": "ab_fputc",

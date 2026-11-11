@@ -337,7 +337,7 @@ class SourceTests(unittest.TestCase):
         self.assertIn("so constructor done", (GAME / "rt" / "so_load.c").read_text())
         self.assertIn("nativeInit returned", (GAME / "rt" / "ab_entry.c").read_text())
         self.assertIn("first tick: nativeUpdate", (GAME / "rt" / "ab_entry.c").read_text())
-        self.assertGreaterEqual(ab.RECIPE, 16)
+        self.assertGreaterEqual(ab.RECIPE, 17)
         self.assertIn("THROW_REPORT", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("THROW_SITE", (GAME / "rt" / "shims.c").read_text())
         self.assertIn("wait_frames(300)", (GAME / "host" / "main.c").read_text())
@@ -400,6 +400,8 @@ class SourceTests(unittest.TestCase):
         self.assertIn("empty (zero)", hostm)
         self.assertIn("ab_persist_lua_throw_count", hostm)
         self.assertIn("ab_heap_init", hostm)
+        self.assertIn("AB_POOL_OFF", hostm)
+        self.assertIn("unsigned off = 4", hostm)
         self.assertIn("ab_ctype_init", hostm)
         self.assertIn("AB_OFF_HANDLE_LOAD", entry)
         self.assertIn("AB_OFF_COMPILE_IS", entry)
@@ -420,6 +422,14 @@ class SourceTests(unittest.TestCase):
         self.assertIn("pchunk header", shims)
         self.assertIn("HOST_PROBE ldrd-unaligned", shims)
         self.assertIn("payload_expect_align=8", shims)
+        self.assertIn("Bump the base to 16", shims)
+        self.assertIn("malloc pool payload not 8-aligned n=%u p=%p lr=%08x", shims)
+        self.assertIn("(n + 15u) & ~15u", shims)
+        self.assertIn("ab_calloc", shims)
+        self.assertIn("ab_memalign", shims)
+        self.assertIn("ab_posix_memalign", shims)
+        self.assertIn("diag calloc/memalign", shims)
+        self.assertIn("void *memalign", (GAME / "nano" / "plat_nano.c").read_text())
         self.assertIn("ab_nfile_align", shims)
         self.assertIn("io_pool_own", shims)
         self.assertIn("ab_diag_reset_logs", shims)
@@ -438,6 +448,10 @@ class SourceTests(unittest.TestCase):
         conv = (GAME / "tools" / "so_to_obj.py").read_text()
         self.assertIn("\"strtod\": \"ab_strtod\"", conv)
         self.assertIn("\"_ctype_\": \"ab_ctype_\"", conv)
+        self.assertIn("\"calloc\": \"ab_calloc\"", conv)
+        self.assertIn("\"memalign\": \"ab_memalign\"", conv)
+        self.assertIn("\"posix_memalign\": \"ab_posix_memalign\"", conv)
+        self.assertIn("\"_Znwj\": \"ab_malloc\"", conv)
         self.assertIn("4096, 0)", conv)
         self.assertIn("unsupported reloc type", conv)
         self.assertIn("init_array[", conv)
@@ -489,9 +503,11 @@ class PhysicsHarnessTests(unittest.TestCase):
     def _harness_env(**extra):
         env = os.environ.copy()
         for k in ("AB_PLAY_TEST", "AB_BOOT_SHOT_TEST", "AB_GESTURE_TEST",
-                  "AB_LEVELS_TEST", "AB_LEVELS_MIN", "AB_LEVELS_MAX"):
+                  "AB_LEVELS_TEST", "AB_LEVELS_MIN", "AB_LEVELS_MAX", "AB_POOL_OFF"):
             env.pop(k, None)
         env.update(extra)
+        # Device hb_os_alloc is 4-mod-8 (f2ef5ea). Default 4; 8 is %16==8.
+        env.setdefault("AB_POOL_OFF", "4")
         return env
 
     def test_levels_1_3_draw_objects(self):
@@ -590,11 +606,14 @@ class PhysicsHarnessTests(unittest.TestCase):
         'gameStarted = true\n'
     )
 
-    def _run_abso_init(self, abso, out):
+    def _run_abso_init(self, abso, out, pool_off=None):
         import subprocess
+        extra = {}
+        if pool_off is not None:
+            extra["AB_POOL_OFF"] = str(pool_off)
         r = subprocess.run(
             QEMU_DEV + [str(ABHOST), str(ABDATA), str(abso), str(out), "0", "0"],
-            env=self._harness_env(), capture_output=True, text=True, timeout=180)
+            env=self._harness_env(**extra), capture_output=True, text=True, timeout=180)
         err = (r.stderr or "") + (r.stdout or "")
         return r.returncode, err
 
@@ -652,8 +671,27 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("HOST_PROBE ldrd-unaligned qemu=SIGBUS", err)
         self.assertIn("HOST_PROBE emulate:", err)
 
-    def _assert_census(self, rc, err):
+    def _assert_pool(self, err, off=4):
+        """Host pool must look like the nano (off=4 => %8==4). f2ef5ea died here."""
+        import re
+        m = re.search(r"host pool raw=0x[0-9a-f]+ off=(\d+) align=(\d+)", err)
+        self.assertIsNotNone(m, err[:2500])
+        self.assertEqual(int(m.group(1)), off, err[:1500])
+        align = int(m.group(2))
+        if off == 4:
+            self.assertEqual(align % 8, 4, "want device-like (align%%8)==4, align=%s" % align)
+        elif off == 8:
+            self.assertEqual(align, 8, "want (align%%16)==8, align=%s" % align)
+        self.assertRegex(err, r"diag pool raw=.*base_align=0")
+        self.assertRegex(err, r"diag malloc8 .* align=0")
+        self.assertRegex(err, r"diag calloc/memalign .* a=0 .* a=0 posix=0 .* a=0")
+        self.assertIn("so constructors done", err)
+        self.assertNotIn("FATAL: malloc align", err)
+        self.assertNotIn("malloc pool payload not 8-aligned", err)
+
+    def _assert_census(self, rc, err, pool_off=4):
         self.assertEqual(rc, 0, err[-8000:])
+        self._assert_pool(err, pool_off)
         self.assertIn("so_load abso", err, err[-4000:])
         self.assertIn("nativeInit returned", err, err[-4000:])
         self.assertIn("AB_BOOT_SHOT_TEST menu frames=300", err, err[-8000:])
@@ -742,7 +780,7 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertEqual(rc, 0, err3[-4000:])
         leftover.unlink()
         self._plant_leftover_settings(out, docs_junk=True)
-        rc, err4 = self._run_abso_init(abso, out)
+        rc, err4 = self._run_abso_init(abso, out, pool_off=4)
         self.assertIn("persist migrate leftover", err4, err4[-8000:])
         self.assertIn("persist settings lastOpenLevel=4", err4, err4[-8000:])
         self.assertIn("lua recovery leftover-slack err=3", err4, err4[-8000:])
@@ -751,6 +789,7 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertIn("lua recovery runtime err=2", err4, err4[-8000:])
         self.assertRegex(err4, r"nfile open '.*settings\.lua' len=186")
         self._assert_ladder(err4)
+        self._assert_pool(err4, 4)
         self._assert_compile_skip_empty_hs(err4)
         self.assertNotIn("LuaException", err4)
         self.assertNotIn("cxa_throw type=", err4)
@@ -760,10 +799,18 @@ class PhysicsHarnessTests(unittest.TestCase):
         migrated = (out / "docs" / "settings.lua").read_bytes()
         self.assertEqual(len(migrated), 186)
         self.assertIn(b"lastOpenLevel = 4", migrated)
+        # Same leftover-186 under %16==8 pool base (also 8-aligned, not 16).
+        self._plant_leftover_settings(out, docs_junk=True)
+        rc8, err8 = self._run_abso_init(abso, out, pool_off=8)
+        self.assertEqual(rc8, 0, err8[-4000:])
+        self._assert_pool(err8, 8)
+        self._assert_ladder(err8)
+        self.assertIn("nativeInit returned", err8, err8[-4000:])
+        self.assertNotIn("FATAL:", err8)
 
-    def _boot_shot(self, abso, out):
+    def _boot_shot(self, abso, out, pool_off=4):
         import subprocess
-        env = self._harness_env(AB_BOOT_SHOT_TEST="1")
+        env = self._harness_env(AB_BOOT_SHOT_TEST="1", AB_POOL_OFF=str(pool_off))
         r = subprocess.run(
             QEMU_DEV + [str(ABHOST), str(ABDATA), str(abso), str(out), "1", "0"],
             env=env, capture_output=True, text=True, timeout=600)
@@ -777,7 +824,11 @@ class PhysicsHarnessTests(unittest.TestCase):
         return body
 
     def test_abso_boot_shot_throw_census(self):
-        """Device layouts (a-e): menu, Level 1, one shot. cxa=0 persist_lua=0."""
+        """Device layouts (a-e): menu, Level 1, one shot. cxa=0 persist_lua=0.
+
+        Run under both iPod-like pool bases: %8==4 (f2ef5ea device) and %16==8.
+        Unfixed f2ef5ea + off=4 died: 'malloc pool payload not 8-aligned' / FATAL malloc align.
+        """
         import subprocess
         conv = GAME / "tools" / "so_to_obj.py"
         out = ROOT / "build" / "angrybirds_rc" / "boot-shot-test"
@@ -794,59 +845,60 @@ class PhysicsHarnessTests(unittest.TestCase):
             else self.HS_VALID.encode("ascii")
         self.assertIn(b"Level", packed)
 
-        # (a) exact device state: leftover 186 settings, .bak only, no docs/, AppleDouble.
-        self._plant_leftover_settings(out, docs_junk=False)
-        rc, err = self._boot_shot(abso, out)
-        self._assert_census(rc, err)
-        self.assertIn("persist migrate leftover", err)
-        self.assertIn("persist settings lastOpenLevel=4", err)
-        self.assertIn("lua recovery leftover-slack err=3", err)
-        self.assertIn("lua recovery leftover-exact err=0", err)
-        self.assertIn("lua recovery syntax err=3", err)
-        self.assertIn("lua recovery runtime err=2", err)
-        self._assert_ladder(err)
-        self.assertRegex(err, r"nfile open '.*settings\.lua' len=186")
-        self.assertIn("highscores.lua empty (missing)", err)
-        self._assert_compile_skip_empty_hs(err)
-        self.assertTrue((out / "panel-menu.ppm").is_file())
-        self.assertTrue((out / "panel-hit.ppm").is_file())
-        migrated = (docs / "settings.lua").read_bytes()
-        self.assertIn(b"lastOpenLevel = 4", migrated)
-        self.assertFalse(hs.exists(), "parent .bak must not become docs/highscores.lua")
+        for off in (4, 8):
+            # (a) exact device state: leftover 186 settings, .bak only, no docs/, AppleDouble.
+            self._plant_leftover_settings(out, docs_junk=False)
+            rc, err = self._boot_shot(abso, out, pool_off=off)
+            self._assert_census(rc, err, pool_off=off)
+            self.assertIn("persist migrate leftover", err)
+            self.assertIn("persist settings lastOpenLevel=4", err)
+            self.assertIn("lua recovery leftover-slack err=3", err)
+            self.assertIn("lua recovery leftover-exact err=0", err)
+            self.assertIn("lua recovery syntax err=3", err)
+            self.assertIn("lua recovery runtime err=2", err)
+            self._assert_ladder(err)
+            self.assertRegex(err, r"nfile open '.*settings\.lua' len=186")
+            self.assertIn("highscores.lua empty (missing)", err)
+            self._assert_compile_skip_empty_hs(err)
+            self.assertTrue((out / "panel-menu.ppm").is_file())
+            self.assertTrue((out / "panel-hit.ppm").is_file())
+            migrated = (docs / "settings.lua").read_bytes()
+            self.assertIn(b"lastOpenLevel = 4", migrated)
+            self.assertFalse(hs.exists(), "parent .bak must not become docs/highscores.lua")
 
-        # (b) after one run: docs/settings.lua present, docs/highscores.lua missing.
-        if leftover_hs.exists():
-            leftover_hs.unlink()
-        if hs.exists():
-            hs.unlink()
-        rc, err = self._boot_shot(abso, out)
-        self._assert_census(rc, err)
-        self.assertIn("highscores.lua empty (missing)", err)
-        self._assert_compile_skip_empty_hs(err)
-        self.assertRegex(err, r"nfile open '.*settings\.lua' len=186")
+            # (b) after one run: docs/settings.lua present, docs/highscores.lua missing.
+            if leftover_hs.exists():
+                leftover_hs.unlink()
+            if hs.exists():
+                hs.unlink()
+            rc, err = self._boot_shot(abso, out, pool_off=off)
+            self._assert_census(rc, err, pool_off=off)
+            self.assertIn("highscores.lua empty (missing)", err)
+            self._assert_compile_skip_empty_hs(err)
+            self.assertRegex(err, r"nfile open '.*settings\.lua' len=186")
 
-        # (c) after the game writes highscores (valid packed template).
-        hs.write_bytes(packed)
-        rc, err = self._boot_shot(abso, out)
-        self._assert_census(rc, err)
-        self.assertNotIn("compile skip persist empty", err)
-        self.assertRegex(err, r"nfile open '.*highscores\.lua' len=[1-9]")
-        self.assertIn("handleLoadResult status=0", err)
+            # (c) after the game writes highscores (valid packed template).
+            hs.write_bytes(packed)
+            rc, err = self._boot_shot(abso, out, pool_off=off)
+            self._assert_census(rc, err, pool_off=off)
+            self.assertNotIn("compile skip persist empty", err)
+            self.assertRegex(err, r"nfile open '.*highscores\.lua' len=[1-9]")
+            self.assertIn("handleLoadResult status=0", err)
 
-        # (d) zero-byte docs/highscores.lua
-        hs.write_bytes(b"")
-        rc, err = self._boot_shot(abso, out)
-        self._assert_census(rc, err)
-        self.assertIn("highscores.lua empty (zero)", err)
-        self._assert_compile_skip_empty_hs(err)
+            # (d) zero-byte docs/highscores.lua
+            hs.write_bytes(b"")
+            rc, err = self._boot_shot(abso, out, pool_off=off)
+            self._assert_census(rc, err, pool_off=off)
+            self.assertIn("highscores.lua empty (zero)", err)
+            self._assert_compile_skip_empty_hs(err)
 
-        # (e) garbage docs/highscores.lua
-        hs.write_text("this is not { valid lua = ???\n", encoding="ascii")
-        rc, err = self._boot_shot(abso, out)
-        self._assert_census(rc, err)
-        self.assertIn("highscores.lua skip invalid", err)
-        self.assertIn("highscores.lua empty (invalid)", err)
-        self._assert_compile_skip_empty_hs(err)
+            # (e) garbage docs/highscores.lua
+            hs.write_text("this is not { valid lua = ???\n", encoding="ascii")
+            rc, err = self._boot_shot(abso, out, pool_off=off)
+            self._assert_census(rc, err, pool_off=off)
+            self.assertIn("highscores.lua skip invalid", err)
+            self.assertIn("highscores.lua empty (invalid)", err)
+            self._assert_compile_skip_empty_hs(err)
 
     def test_gesture_frame_fixed_pinch_and_l1_l2_l3(self):
         import subprocess

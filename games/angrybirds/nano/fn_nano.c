@@ -238,6 +238,13 @@ static int start(int w, int h) {
     block = hb_os_alloc(size);
     if (!block) { logf_("nano7kit malloc pool: %u bytes refused", (unsigned)size); return -1; }
     HB_APP_AUX_BLOCK = block;           /* the resident frees it when the app unloads */
+    {
+        char pb[96];
+        snprintf(pb, sizeof pb, "malloc pool os=%p align=%u size=%u",
+                 block, (unsigned)((uintptr_t)block & 15u), (unsigned)size);
+        plat_log_line(pb);
+        plat_log_flush();
+    }
     ab_heap_init(block, size);
     {
         /* The loader does not run .init_array; PvZ rebooted until these were

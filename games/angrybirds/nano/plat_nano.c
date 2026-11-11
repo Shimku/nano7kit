@@ -85,6 +85,17 @@ void *_malloc_r(struct _reent *r, size_t n) { (void)r; return malloc(n); }
 void _free_r(struct _reent *r, void *p) { (void)r; free(p); }
 void *_calloc_r(struct _reent *r, size_t a, size_t b) { (void)r; return calloc(a, b); }
 void *_realloc_r(struct _reent *r, void *p, size_t n) { (void)r; return realloc(p, n); }
+void *memalign(size_t a, size_t n) {
+    if (ab_heap_ready()) return ab_memalign(a, n);
+    return malloc(n < a ? a : n);
+}
+int posix_memalign(void **p, size_t a, size_t n) {
+    void *q = memalign(a, n);
+    if (!q) return 12;
+    *p = q;
+    return 0;
+}
+void *_memalign_r(struct _reent *r, size_t a, size_t n) { (void)r; return memalign(a, n); }
 void *_sbrk(int n) { (void)n; return (void *)-1; }
 int _write(int f, const void *b, int n) { (void)f; (void)b; return n; }
 int _read(int f, void *b, int n) { (void)f; (void)b; (void)n; return 0; }

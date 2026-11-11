@@ -931,14 +931,31 @@ int main(int argc, char **argv) {
     fngl_reset();
     ab_ctype_init();
     {
-        /* Same 3 MB engine pool as the nano: Lua TValue/LDRD see 8-aligned
-         * payloads. glibc calloc is 16-aligned and hid the 12-byte pchunk bug. */
-        void *pool = calloc(1, 0x300000u);
-        if (!pool) {
+        /* Device hb_os_alloc of 3 MB is 4-aligned (f2ef5ea: first pool
+         * payload failed the 8-align guard in EGL_State's operator new[]).
+         * glibc calloc is 16-aligned and hid that. Default +4 matches the
+         * nano; AB_POOL_OFF=8 is %16==8; AB_POOL_OFF=0 is host-aligned. */
+        unsigned off = 4;
+        const char *e = getenv("AB_POOL_OFF");
+        uint8_t *raw;
+        char b[96];
+        if (e && e[0]) off = (unsigned)atoi(e);
+        raw = calloc(1, 0x300000u + 32u);
+        if (!raw) {
             fprintf(stderr, "FATAL: host pool\n");
             return 3;
         }
-        ab_heap_init(pool, 0x300000u);
+        /* Walk a few bytes so off=4 => %8==4 (device) and off=8 => %16==8. */
+        if (off == 4) {
+            while (((uintptr_t)raw & 7u) != 4u) raw++;
+        } else if (off == 8) {
+            while (((uintptr_t)raw & 15u) != 8u) raw++;
+        }
+        snprintf(b, sizeof b, "host pool raw=%p off=%u align=%u",
+                 (void *)raw, off, (unsigned)((uintptr_t)raw & 15u));
+        plat_log_line(b);
+        plat_log_flush();
+        ab_heap_init(raw, 0x300000u);
     }
     ab_diag_report("host-main-pre-start");
     if (ab_start()) {

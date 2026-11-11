@@ -351,6 +351,10 @@ void so_run_init(const so_image *img) {
     hi = lo + (uint32_t)img->map_size;
     for (i = 0; i < img->init_count; i++) {
         uint32_t fn = *(uint32_t *)(img->base + img->init_off + i * 4);
+        char b[80];
+        snprintf(b, sizeof b, "so constructor a=%08x", (unsigned)fn);
+        plat_log_line(b);
+        plat_log_flush();
 #ifdef FN_NANO
         ab_crumb("so constructor", fn);
 #endif
@@ -367,8 +371,16 @@ void so_run_init(const so_image *img) {
 #ifdef FN_NANO
         ab_crumb("so constructor done", fn);
 #endif
+        plat_log_line("so constructor done");
+        plat_log_flush();
     }
 #ifdef FN_NANO
     ab_crumb("so constructors done", img->init_count);
 #endif
+    {
+        char b[48];
+        snprintf(b, sizeof b, "so constructors done n=%u", (unsigned)img->init_count);
+        plat_log_line(b);
+        plat_log_flush();
+    }
 }
