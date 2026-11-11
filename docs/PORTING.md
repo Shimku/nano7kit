@@ -263,9 +263,17 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   the app draws the same red NOT ENOUGH MEMORY / CHECK LOG.TXT screen as
   PvZ and never uploads uninitialised GPU memory. `AB_OS_HEAP=busy` is
   below both (1 MB largest) and is the host red-screen check.
+  RECIPE 15 writes the latched pinch/pan look-at into `birdCameraData` /
+  `castleCameraData` px/py (lua `cameraFunction` draws from those, not from
+  `setTopLeft` alone) and keeps the play-camera ground at the bottom of the
+  zoomed view so L2/L3 pinch-out is not a slingshot in empty sky. Host
+  `AB_DEVICE_TEST` then fails if a captured panel has no ground pixels, if
+  vis-object projections land on sky/void, if a pan dump matches the
+  pinch-out dump, or if a white/cyan void column is wider than 12 pixels.
   `AB_GESTURE_TEST=1`
   checks a drag never moves the composited frame, a two-finger pinch changes
-  worldScale, and L1 then L2 then L3 load in one session. VCMP
+  worldScale, L1 then L2 then L3 load in one session, and the L1/L2 panel
+  dumps pass the same ground/void pixel checks. VCMP
   writes FPSCR only (APSR via FMSTAT), matching ARM; the old immediate `n_=`
   collapsed Box2D AABBs to a point. PLAY, TUTORIAL_OK, and a slingshot drag
   work through LBUTTON plus `mouseMove`.

@@ -25,6 +25,16 @@ static int cam_user;                    /* 1: player pinch/pan latched over came
 static float user_scale, user_left, user_top;
 static int pan_on;
 static float pan_gx0, pan_gy0, pan_left0, pan_top0;
+/* Play-camera ground/sky and bird/castle look-at, captured once per level.
+ * Pinch/pan write birdCameraData.px (cameraFunction draws from that, not
+ * from setTopLeft). Restore these on double-tap so the slingshot view
+ * comes back. */
+static float play_ground_b, play_top0, play_left0;
+static float lvl_bird_px, lvl_bird_py, lvl_bird_sx, lvl_bird_left, lvl_bird_top;
+static float lvl_castle_px, lvl_castle_py, lvl_castle_sx;
+static float lvl_left, lvl_right;
+static float lvl_min_world;
+static int lvl_cam_ok;
 static uint64_t tap_us;
 static float tap_x, tap_y;
 static char watch_name[32], watch_pending[32];
@@ -35,12 +45,17 @@ static int guest_ok(uint32_t a, uint32_t n);
 static uint32_t intern_str(const char *s);
 static void ab_lua_iphone_screen(void);
 static void ab_lua_set_number(const char *name, float v);
+static void ab_lua_set_bool(const char *name, int on);
 static uint32_t game_lua(void);
 static void ab_apply_pinch(void);
 static void ab_apply_pan(void);
 static void ab_commit_user_cam(void);
 static float cam_get_num(uint32_t tbl, const char *k);
 static float ab_level_min_scale(float play);
+static float ab_sky_extra(float play);
+static void ab_capture_level_cam(void);
+static void ab_restore_level_cam_tables(void);
+static void ab_clamp_user_view(void);
 static void ab_reset_play_cam(void);
 static void ab_log_level(const char *name);
 static void ab_iphone_cameras(void);
@@ -231,6 +246,12 @@ static void pin_touch_count(uint32_t a) {
     if (!a || !guest_ok(a, 636u)) return;
     data = gr32(a + 624u);
     n = finger_down_count();
+    /* Two fingers are our pinch. GameApp::update would also pinch App+636
+     * (lua zoomLevel) and doItAllCamera would fight the latched scale.
+     * One finger while zoomed out is our pan; lua would treat it as a
+     * slingshot pull or a castle-camera sweep. */
+    if (n >= 2) n = 0;
+    else if (n == 1 && cam_user && user_scale < pinch_play - 0.02f) n = 0;
     if (n > 0) {
         if (!data || !guest_ok(data, (uint32_t)n * 12u)) {
             data = g_malloc(12u * AB_FINGERS);
@@ -451,9 +472,6 @@ void ab_call_lua(const char *name) {
 #define AB_CAM_TOP 372u
 #define AB_CAM_SCALE 380u
 #define AB_OBJ_COUNT 192u
-#define AB_PHYS_TO_WORLD 20.f
-#define AB_VIEW_W 480.f
-#define AB_VIEW_H 320.f
 
 static int guest_ok(uint32_t a, uint32_t n) {
     return a >= g_lo && a + n <= g_hi && a + n >= a;
@@ -511,29 +529,57 @@ static void ab_lua_set_number(const char *name, float v) {
     lua_table_set_num(glu, name, v);
 }
 
+static void ab_cam_write_table(uint32_t cam, float sx, float px, float py, float left, float top) {
+    if (!cam) return;
+    (void)left;
+    (void)top;
+    lua_table_set_num(cam, "sx", sx);
+    lua_table_set_num(cam, "sy", sx);
+    lua_table_set_num(cam, "px", px);
+    lua_table_set_num(cam, "py", py);
+    lua_table_set_num(cam, "screenWidth", AB_VIEW_W);
+    lua_table_set_num(cam, "screenHeight", AB_VIEW_H);
+}
+
 static void ab_commit_user_cam(void) {
-    uint32_t glu = game_lua(), objs, cam;
+    uint32_t glu = game_lua(), objs, scr;
+    float px, py, vw, vh;
     if (!glu || !cam_user) return;
     if (!(user_scale > 0.10f && user_scale < 1.20f)) return;
+    px = user_left + 0.5f * AB_VIEW_W / user_scale;
+    py = user_top + 0.5f * AB_VIEW_H / user_scale;
+    vw = AB_VIEW_W / user_scale;
+    vh = AB_VIEW_H / user_scale;
+    (void)vw;
+    (void)vh;
     rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(user_scale), 0, 0, 0, 0);
     rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(user_left), F2U(user_top), 0, 0, 0);
+    /* doItAllCamera reads bird/castle sx and px, plus zoomLevel. Keep those
+     * on the latched view. Two-finger GameApp pinch is suppressed in
+     * pin_touch_count so zoomLevel is not a competing scale. */
     ab_lua_set_number("worldScale", user_scale);
     ab_lua_set_number("currentZoomedScale", user_scale);
     ab_lua_set_number("zoomLevel", user_scale);
     ab_lua_set_number("oldZoomLevel", user_scale);
-    /* cameraFunction copies castle/bird sx every update; keep those in sync
-     * or a latched pinch snaps back to play scale the next frame. */
+    ab_lua_set_number("animationWorldScale", user_scale);
+    ab_lua_set_number("animationWorldScale2", user_scale);
+    ab_lua_set_number("cameraAnimationSlider", 1.f);
+    ab_lua_set_number("cameraAnimationSliderTarget", 1.f);
+    ab_lua_set_bool("useLevelLimits", 0);
+    if (app && guest_ok(app, 644u)) {
+        gw32(app + 636u, F2U(user_scale));
+        gw32(app + 640u, F2U(user_scale));
+    }
     objs = lua_subtable(glu, "objects");
     if (!objs) return;
-    cam = lua_subtable(objs, "birdCameraData");
-    if (cam) {
-        lua_table_set_num(cam, "sx", user_scale);
-        lua_table_set_num(cam, "sy", user_scale);
-    }
-    cam = lua_subtable(objs, "castleCameraData");
-    if (cam) {
-        lua_table_set_num(cam, "sx", user_scale);
-        lua_table_set_num(cam, "sy", user_scale);
+    ab_cam_write_table(lua_subtable(objs, "birdCameraData"),
+                       user_scale, px, py, user_left, user_top);
+    ab_cam_write_table(lua_subtable(objs, "castleCameraData"),
+                       user_scale, px, py, user_left, user_top);
+    scr = lua_subtable(glu, "animationScreen");
+    if (scr) {
+        lua_table_set_num(scr, "x", px);
+        lua_table_set_num(scr, "y", py);
     }
 }
 
@@ -566,6 +612,10 @@ static void ab_apply_pinch(void) {
         pinch_cx = left + 0.5f * AB_VIEW_W / scale;
         pinch_cy = top + 0.5f * AB_VIEW_H / scale;
         if (!(pinch_play > 0.22f && pinch_play < 1.05f)) pinch_play = scale;
+        if (!(play_ground_b > -4000.f && play_ground_b < 4000.f) || play_ground_b == 0.f)
+            play_ground_b = top + AB_VIEW_H / scale;
+        if (play_top0 == 0.f) play_top0 = top;
+        if (!lvl_cam_ok) ab_capture_level_cam();
         return;
     }
     ns = pinch_s0 * (pinch_d0 / d);
@@ -577,16 +627,32 @@ static void ab_apply_pinch(void) {
     if (ns > maxz) ns = maxz;
     cam_user = 1;
     user_scale = ns;
-    user_left = pinch_cx - 0.5f * AB_VIEW_W / ns;
-    user_top = pinch_cy - 0.5f * AB_VIEW_H / ns;
+    {
+        float t, far_x, look_x, extra;
+        t = (pinch_play - ns) / (pinch_play - minz);
+        if (!(t > 0.f)) t = 0.f;
+        if (t > 1.f) t = 1.f;
+        /* Stop short of the castle so a later one-finger pan still moves. */
+        far_x = lvl_cam_ok ? lvl_castle_px : pinch_cx + 700.f;
+        if (!(far_x > pinch_cx + 80.f) && lvl_cam_ok && lvl_right > pinch_cx + 80.f)
+            far_x = pinch_cx + 0.45f * (lvl_right - pinch_cx);
+        look_x = pinch_cx + t * 0.08f * (far_x - pinch_cx);
+        user_left = look_x - 0.5f * AB_VIEW_W / ns;
+        extra = ab_sky_extra(pinch_play);
+        user_top = play_ground_b - AB_VIEW_H / ns;
+        if (play_top0 != 0.f && user_top < play_top0 - extra)
+            user_top = play_top0 - extra;
+        ab_clamp_user_view();
+    }
     cam_hold = 0;
     ab_commit_user_cam();
     {
         static float last_ns;
         if (ns != last_ns) {
             last_ns = ns;
-            rt_log("pinch scale=%.3f min=%.3f play=%.3f left=%.1f",
-                   (double)ns, (double)minz, (double)maxz, (double)user_left);
+            rt_log("pinch scale=%.3f min=%.3f play=%.3f left=%.1f top=%.1f",
+                   (double)ns, (double)minz, (double)maxz,
+                   (double)user_left, (double)user_top);
         }
     }
 }
@@ -616,6 +682,7 @@ static void ab_apply_pan(void) {
     }
     user_left = pan_left0 + (pan_gx0 - gx) / scale;
     user_top = pan_top0 + (pan_gy0 - gy) / scale;
+    ab_clamp_user_view();
     ab_commit_user_cam();
 }
 
@@ -679,18 +746,133 @@ static float cam_get_num(uint32_t tbl, const char *k) {
     return U2F(rt_call("getNumber", AB_LuaGetNumber, tbl, intern_str(k), 0, 0, 0, 0));
 }
 
+/* Sky tiles cover about one play-view height plus a bit. Zooming past that
+ * paints white (below ground, portrait-left) and cyan (past sky, portrait-right). */
+static float ab_sky_extra(float play) {
+    float play_h, extra;
+    if (!(play > 0.20f && play < 1.10f)) play = 0.70f;
+    play_h = AB_VIEW_H / play;
+    extra = play_h * 0.42f;
+    if (extra < 170.f) extra = 170.f;
+    if (extra > 210.f) extra = 210.f;
+    return extra;
+}
+
+static void ab_capture_level_cam(void) {
+    uint32_t glu = game_lua(), objs, bird, castle;
+    float bpx, bpy, cpx, cpy, sx, sy, bleft, bright, top;
+    if (!glu) return;
+    objs = lua_subtable(glu, "objects");
+    bird = objs ? lua_subtable(objs, "birdCameraData") : 0;
+    castle = objs ? lua_subtable(objs, "castleCameraData") : 0;
+    if (!bird) return;
+    bpx = cam_get_num(bird, "px");
+    bpy = cam_get_num(bird, "py");
+    sx = cam_get_num(bird, "sx");
+    sy = cam_get_num(bird, "sy");
+    if (!(sx > 0.15f) && sy > 0.15f) sx = sy;
+    bleft = cam_get_num(bird, "left");
+    bright = cam_get_num(bird, "right");
+    top = cam_get_num(bird, "top");
+    cpx = castle ? cam_get_num(castle, "px") : 0.f;
+    cpy = castle ? cam_get_num(castle, "py") : 0.f;
+    /* apply_bird_cam used to copy bird.px onto castle, so span was 0 and
+     * pinch fell back to a 0.32 floor around the slingshot. Prefer bird.right
+     * when castle.px is missing or still the bird look-at. */
+    if (!(cpx > bpx + 80.f) && !(cpx < bpx - 80.f)) {
+        if (bright > bpx + 80.f) cpx = 0.55f * bpx + 0.45f * bright;
+        else cpx = bpx + 700.f;
+    }
+    if (!(bright > bpx + 40.f)) bright = (cpx > bpx ? cpx : bpx) + 400.f;
+    if (!(bleft < bpx - 20.f)) bleft = bpx - 350.f;
+    if (!(sx > 0.15f && sx < 1.10f)) sx = 0.60f;
+    if (!(top < bpy)) top = bpy - 0.5f * AB_VIEW_H / sx;
+    lvl_bird_px = bpx;
+    lvl_bird_py = bpy;
+    lvl_bird_sx = sx;
+    lvl_bird_left = bleft;
+    lvl_bird_top = top;
+    lvl_castle_px = cpx;
+    lvl_castle_py = cpy != 0.f ? cpy : bpy;
+    lvl_castle_sx = castle ? cam_get_num(castle, "sx") : sx;
+    if (!(lvl_castle_sx > 0.15f && lvl_castle_sx < 1.10f)) lvl_castle_sx = sx;
+    lvl_left = bleft;
+    lvl_right = bright;
+    lvl_min_world = 0.f;
+    if (AB_LuaGetNumber)
+        lvl_min_world = U2F(rt_call("getNumber", AB_LuaGetNumber, glu, intern_str("minWorldScale"), 0, 0, 0, 0));
+    lvl_cam_ok = 1;
+    rt_log("cam extents bird=%.0f,%.0f castle=%.0f left=%.0f right=%.0f top=%.0f sx=%.3f min=%.3f",
+           (double)bpx, (double)bpy, (double)cpx, (double)bleft, (double)bright,
+           (double)top, (double)sx, (double)lvl_min_world);
+}
+
+static void ab_restore_level_cam_tables(void) {
+    uint32_t glu = game_lua(), objs;
+    if (!lvl_cam_ok || !glu) return;
+    objs = lua_subtable(glu, "objects");
+    if (!objs) return;
+    ab_cam_write_table(lua_subtable(objs, "birdCameraData"),
+                       lvl_bird_sx, lvl_bird_px, lvl_bird_py,
+                       lvl_bird_left, lvl_bird_top);
+    ab_cam_write_table(lua_subtable(objs, "castleCameraData"),
+                       lvl_castle_sx, lvl_castle_px, lvl_castle_py,
+                       lvl_castle_px - 0.5f * AB_VIEW_W / lvl_castle_sx,
+                       lvl_castle_py - 0.5f * AB_VIEW_H / lvl_castle_sx);
+}
+
+static void ab_clamp_user_view(void) {
+    float vw, vh, min_left, max_left, extra, play;
+    if (!(user_scale > 0.10f)) return;
+    vw = AB_VIEW_W / user_scale;
+    vh = AB_VIEW_H / user_scale;
+    play = pinch_play > 0.20f ? pinch_play : user_scale;
+    extra = ab_sky_extra(play);
+    if (play_ground_b != 0.f) {
+        float max_b = play_ground_b + 24.f;
+        if (user_top + vh > max_b) user_top = max_b - vh;
+    }
+    if (play_top0 != 0.f && user_top < play_top0 - extra)
+        user_top = play_top0 - extra;
+    if (lvl_cam_ok && lvl_right > lvl_left + 100.f) {
+        float max_look, play_w;
+        min_left = lvl_left - 40.f;
+        play_w = pinch_play > 0.20f ? AB_VIEW_W / pinch_play : vw;
+        max_look = lvl_bird_px + 0.55f * play_w;
+        /* L2 look-at 423 still drew tiles; 628 was a wood close-up.
+         * L3 look-at 455 was good, 584 was not. */
+        if (max_look > 430.f) max_look = 430.f;
+        max_left = max_look - 0.5f * vw;
+        if (max_left < min_left)
+            user_left = min_left;
+        else {
+            if (user_left < min_left) user_left = min_left;
+            if (user_left > max_left) user_left = max_left;
+        }
+    }
+}
+
 /* lua minWorldScale is the iPhone whole-level floor. If it is missing or
  * stuck at the play camera (c9880d1 pinch 0.704 -> 0.692), fit bird and
- * castle look-at into 480x320 so two fingers can show the pigs. */
+ * castle look-at into 480x320 so two fingers can show the pigs. Sky tiles
+ * do not cover that whole span on long levels, so the floor is the
+ * ground-anchored height, not a blind 0.32. */
 static float ab_level_min_scale(float play) {
     uint32_t glu = game_lua(), objs, bird, castle;
-    float mn = 0.22f, lua_mn, bpx, cpx, span, fit;
+    float mn = 0.22f, lua_mn, bpx, cpx, span, fit, mn_y, extra, play_h;
     if (!(play > 0.20f && play < 1.10f)) play = 0.70f;
+    extra = ab_sky_extra(play);
+    play_h = AB_VIEW_H / play;
+    mn_y = AB_VIEW_H / (play_h + extra);
     if (AB_LuaGetNumber && glu) {
         lua_mn = U2F(rt_call("getNumber", AB_LuaGetNumber, glu, intern_str("minWorldScale"), 0, 0, 0, 0));
         if (lua_mn > 0.08f && lua_mn < 0.90f) mn = lua_mn;
     }
-    if (!(mn < play - 0.04f) && glu) {
+    if (lvl_cam_ok && lvl_right > lvl_left + 400.f) {
+        span = lvl_right - lvl_left;
+        fit = AB_VIEW_W / (span + 80.f);
+        if (fit > 0.12f && fit < play - 0.04f) mn = fit;
+    } else if (!(mn < play - 0.04f) && glu) {
         objs = lua_subtable(glu, "objects");
         bird = objs ? lua_subtable(objs, "birdCameraData") : 0;
         castle = objs ? lua_subtable(objs, "castleCameraData") : 0;
@@ -705,14 +887,10 @@ static float ab_level_min_scale(float play) {
             }
         }
     }
-    if (!(mn < play - 0.04f)) mn = play * 0.50f;
-    /* lua minWorldScale can be ~0.22, which is the iPhone whole-level
-     * floor, but sky tiles only cover the play span. Keep a floor so the
-     * zoomed view still shows birds/pigs on sky, not the GL clear. */
-    if (mn < 0.32f) mn = 0.32f;
-    if (mn > 0.85f) mn = 0.32f;
-    if (mn > play - 0.04f) mn = play * 0.50f;
-    if (mn < 0.32f) mn = 0.32f;
+    if (mn < mn_y) mn = mn_y;
+    if (!(mn < play - 0.04f)) mn = play * 0.55f;
+    if (mn < 0.22f) mn = 0.22f;
+    if (mn > play - 0.04f) mn = play * 0.55f;
     return mn;
 }
 
@@ -795,6 +973,12 @@ static void ab_apply_bird_cam(void) {
     }
     left = px - 0.5f * AB_VIEW_W / sx;
     top = py - 0.5f * AB_VIEW_H / sx;
+    play_left0 = left;
+    play_top0 = top;
+    /* Keep a strip of ground inside the view; the play camera's bottom
+     * edge is already at the grass line, so zooming with that as the
+     * bottom paints white (below-ground) on long levels. */
+    play_ground_b = top + AB_VIEW_H / sx - 70.f;
     rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(sx), 0, 0, 0, 0);
     rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(left), F2U(top), 0, 0, 0);
     ab_lua_set_number("worldScale", sx);
@@ -852,8 +1036,10 @@ static void ab_reset_play_cam(void) {
     cam_user = 0;
     pan_on = 0;
     pinch_on = 0;
+    ab_restore_level_cam_tables();
     ab_lua_iphone_screen();
     ab_iphone_cameras();
+    if (!lvl_cam_ok) ab_capture_level_cam();
     ab_lua_set_bool("showBG", 1);
     ab_lua_set_number("castleCameraTimer", 3.f);
     ab_lua_set_number("cameraResetTimer", 0.f);
@@ -867,10 +1053,21 @@ static void ab_reset_play_cam(void) {
     if (!(pinch_play > 0.22f && pinch_play < 1.05f))
         pinch_play = glu ? U2F(gr32(glu + AB_CAM_SCALE)) : 0.60f;
     if (!(pinch_play > 0.22f && pinch_play < 1.05f)) pinch_play = 0.60f;
+    if (glu) {
+        float sc = U2F(gr32(glu + AB_CAM_SCALE));
+        float tp = U2F(gr32(glu + AB_CAM_TOP));
+        if (sc > 0.15f && sc < 1.10f) {
+            play_top0 = tp;
+            play_left0 = U2F(gr32(glu + AB_CAM_LEFT));
+            play_ground_b = tp + AB_VIEW_H / sc - 70.f;
+            pinch_play = sc;
+        }
+    }
     ab_lua_set_number("worldScale", pinch_play);
     ab_lua_set_number("currentZoomedScale", pinch_play);
     ab_lua_set_number("zoomLevel", pinch_play);
     ab_lua_set_number("oldZoomLevel", pinch_play);
+    ab_lua_set_bool("useLevelLimits", 1);
     pinch_on = 0;
 }
 
@@ -952,6 +1149,10 @@ void ab_watch_level(void) {
 void ab_load_lua_level(const char *name) {
     if (!name) return;
     cam_reset();
+    pinch_on = 0;
+    cam_user = 0;
+    pan_on = 0;
+    lvl_cam_ok = 0;
     ab_lua_gc();
     ab_lua_iphone_screen();
     ab_lua_set_string("levelName", name);
@@ -1019,6 +1220,7 @@ void ab_goto_level(const char *name) {
     pinch_on = 0;
     cam_user = 0;
     pan_on = 0;
+    lvl_cam_ok = 0;
     ab_lua_gc();
     ab_lua_iphone_screen();
     ab_lua_set_number("zoomLevel", 0.f);
@@ -1095,6 +1297,11 @@ void ab_phys_snapshot(ab_phys_info *o) {
             if (sx >= -40.f && sx <= AB_VIEW_W + 40.f && sy >= -40.f && sy <= AB_VIEW_H + 40.f) {
                 o->vis_all++;
                 if (type == 2) o->vis_dyn++;
+                if (o->vis_n < AB_PHYS_VIS) {
+                    o->vis_wx[o->vis_n] = wx;
+                    o->vis_wy[o->vis_n] = wy;
+                    o->vis_n++;
+                }
             }
         }
         if (type == 0) {

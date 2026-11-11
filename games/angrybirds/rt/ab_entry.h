@@ -16,6 +16,10 @@ void ab_goto_level(const char *name);   /* map path: levelName + updateLoading, 
 
 /* Box2D world walk for host tests and on-device log.txt (offsets from the 1.0 ARM). */
 #define AB_PHYS_SAMPLE 12
+#define AB_PHYS_VIS 48
+#define AB_PHYS_TO_WORLD 20.f
+#define AB_VIEW_W 480.f
+#define AB_VIEW_H 320.f
 typedef struct {
     uint32_t lua, world;
     int phys_on, bodies, static_n, dynamic_n, fixtures, contacts, contacts_hint;
@@ -28,6 +32,8 @@ typedef struct {
     int sample_n;
     int sample_type[AB_PHYS_SAMPLE];
     float sample_x[AB_PHYS_SAMPLE], sample_y[AB_PHYS_SAMPLE];
+    int vis_n;
+    float vis_wx[AB_PHYS_VIS], vis_wy[AB_PHYS_VIS];
 } ab_phys_info;
 void ab_phys_snapshot(ab_phys_info *o);
 void ab_phys_log(const char *tag);

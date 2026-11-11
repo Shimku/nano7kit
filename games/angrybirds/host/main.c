@@ -282,6 +282,149 @@ static int panel_washed(void) {
     }
     return n;
 }
+static int pix_white(unsigned r, unsigned g, unsigned b) {
+    return r >= 230 && g >= 230 && b >= 230;
+}
+static int pix_cyan_void(unsigned r, unsigned g, unsigned b) {
+    /* GL clear (0,1,1) after convert, not the painted hill/sky. */
+    return b > 210 && g > 160 && r < 90;
+}
+static int pix_skyish(unsigned r, unsigned g, unsigned b) {
+    if (pix_white(r, g, b) || pix_cyan_void(r, g, b)) return 1;
+    if (b >= 200 && g >= 170 && r <= 210 && b >= r + 15) return 1;
+    if (b >= 190 && g >= 185 && r >= 145 && (int)b + (int)g > 2 * (int)r + 15) return 1;
+    return 0;
+}
+static int pix_is_ground(unsigned r, unsigned g, unsigned b) {
+    if (pix_white(r, g, b) || pix_cyan_void(r, g, b)) return 0;
+    if (b >= 200 && g >= 180 && r >= 150) return 0;
+    if (g > r + 18 && g > b && g > 55 && g < 210 && r < 150) return 1;
+    if (r < 95 && g < 120 && b < 120 && (int)g + (int)b > 40 && (int)r + (int)g + (int)b < 280)
+        return 1;
+    return 0;
+}
+static int panel_ground_pixels(void) {
+    int n = 0, y, x;
+    for (y = 0; y < 432; y++) {
+        for (x = 0; x < 56; x++) {
+            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            if (pix_is_ground(r, g, b)) n++;
+        }
+    }
+    return n;
+}
+static int panel_col_void(int x) {
+    int n = 0, y;
+    for (y = 0; y < 432; y++) {
+        unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (pix_white(r, g, b) || pix_cyan_void(r, g, b)) n++;
+    }
+    return n;
+}
+static int panel_max_void_run(void) {
+    int run = 0, mx = 0, x;
+    for (x = 0; x < 240; x++) {
+        if (panel_col_void(x) > 432 * 85 / 100) {
+            run++;
+            if (run > mx) mx = run;
+        } else run = 0;
+    }
+    return mx;
+}
+static int neighborhood_drawn(int px, int py) {
+    int x, y, n = 0, solid = 0;
+    int rmin = 255, rmax = 0, gmin = 255, gmax = 0, bmin = 255, bmax = 0;
+    for (y = py - 5; y <= py + 5; y++) {
+        for (x = px - 5; x <= px + 5; x++) {
+            unsigned r, g, b;
+            if (x < 0 || x >= 240 || y < 0 || y >= 432) continue;
+            r = be_fb[y][x][0]; g = be_fb[y][x][1]; b = be_fb[y][x][2];
+            n++;
+            if (r < rmin) rmin = (int)r; if (r > rmax) rmax = (int)r;
+            if (g < gmin) gmin = (int)g; if (g > gmax) gmax = (int)g;
+            if (b < bmin) bmin = (int)b; if (b > bmax) bmax = (int)b;
+            if (!pix_skyish(r, g, b)) solid++;
+        }
+    }
+    if (solid >= 4) return 1;
+    if (n > 12 && (rmax - rmin > 45 || gmax - gmin > 45 || bmax - bmin > 45)) return 1;
+    return 0;
+}
+static int panel_vis_drawn(const ab_phys_info *a, int *in_panel) {
+    int i, drawn = 0, inside = 0;
+    if (in_panel) *in_panel = 0;
+    if (!a || a->vis_n < 1 || !(a->world_scale > 1e-4f)) return 0;
+    for (i = 0; i < a->vis_n; i++) {
+        float gx, gy, px, py;
+        int ix, iy;
+        gx = (a->vis_wx[i] - a->cam_left) * a->world_scale;
+        gy = (a->vis_wy[i] - a->cam_top) * a->world_scale;
+        px = fe_off_x + (fe_fb_h - gy) * fe_scale;
+        py = fe_off_y + gx * fe_scale_y;
+        ix = (int)(px + 0.5f);
+        iy = (int)(py + 0.5f);
+        if (ix < -8 || ix > 247 || iy < -8 || iy > 439) continue;
+        if (ix < 0) ix = 0;
+        if (ix > 239) ix = 239;
+        if (iy < 0) iy = 0;
+        if (iy > 431) iy = 431;
+        inside++;
+        if (neighborhood_drawn(ix, iy)) drawn++;
+    }
+    if (in_panel) *in_panel = inside;
+    return drawn;
+}
+static int ppm_pixel_diff(const char *a, const char *b) {
+    char pa[512], pb[512];
+    FILE *fa, *fb;
+    char ha[32], hb[32];
+    int n = 0, i, na, nb;
+    static unsigned char da[240 * 432 * 3], db[240 * 432 * 3];
+    snprintf(pa, sizeof pa, "%s/%s.ppm", out_dir, a);
+    snprintf(pb, sizeof pb, "%s/%s.ppm", out_dir, b);
+    fa = fopen(pa, "rb"); fb = fopen(pb, "rb");
+    if (!fa || !fb) { if (fa) fclose(fa); if (fb) fclose(fb); return -1; }
+    if (!fgets(ha, sizeof ha, fa) || !fgets(hb, sizeof hb, fb)) {
+        fclose(fa); fclose(fb); return -1;
+    }
+    na = (int)fread(da, 1, sizeof da, fa);
+    nb = (int)fread(db, 1, sizeof db, fb);
+    fclose(fa); fclose(fb);
+    if (na != (int)sizeof da || nb != (int)sizeof db) return -1;
+    for (i = 0; i < na; i += 3) {
+        int dr = (int)da[i] - (int)db[i];
+        int dg = (int)da[i + 1] - (int)db[i + 1];
+        int dbb = (int)da[i + 2] - (int)db[i + 2];
+        if (dr < 0) dr = -dr;
+        if (dg < 0) dg = -dg;
+        if (dbb < 0) dbb = -dbb;
+        if (dr + dg + dbb > 18) n++;
+    }
+    return n;
+}
+#define AB_VOID_COL_MAX 12
+#define AB_GROUND_MIN 400
+#define AB_PAN_DIFF_MIN 800
+static void dump_panel(const char *name);
+static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_from) {
+    int ground, void_run, drawn, inside = 0, diff = -1, bad = 0;
+    ground = panel_ground_pixels();
+    void_run = panel_max_void_run();
+    drawn = panel_vis_drawn(a, &inside);
+    if (diff_from) diff = ppm_pixel_diff(diff_from, tag);
+    if (ground < AB_GROUND_MIN) bad = 1;
+    if (void_run > AB_VOID_COL_MAX) bad = 1;
+    if (inside >= 1 && drawn < 1) bad = 1;
+    if (inside >= 4 && drawn * 3 < inside * 2) bad = 1;
+    if (diff_from && (diff < 0 || diff < AB_PAN_DIFF_MIN)) bad = 1;
+    fprintf(stderr, "AB_DEVICE_TEST %s pixels ground=%d void_col=%d vis_drawn=%d/%d diff=%d %s\n",
+            tag, ground, void_run, drawn, inside, diff, bad ? "FAIL" : "ok");
+    return !bad;
+}
+static int dump_and_check(const char *name, const ab_phys_info *a, const char *diff_from) {
+    dump_panel(name);
+    return panel_check(name, a, diff_from);
+}
 static const char *const host_lowmem_lines[] = {
     "ANGRY BIRDS", "NOT ENOUGH MEMORY", "CHECK LOG.TXT",
     "PAUSE MUSIC, QUIT,", "THEN OPEN IT AGAIN"
@@ -690,7 +833,7 @@ int main(int argc, char **argv) {
         ab_load_lua_level("Level1");
         wait_frames(90);
         if (!level_sane("Level1", &a)) fail++;
-        dump_panel("panel-l1");
+        if (!dump_and_check("panel-l1", &a, NULL)) fail++;
         ox = fe_off_x; oy = fe_off_y; sx = fe_scale; sy = fe_scale_y;
         pr = be_fb[24][215][0]; pg = be_fb[24][215][1]; pb = be_fb[24][215][2];
         ab_touch(0, 1, 120.f, 80.f);
@@ -721,7 +864,7 @@ int main(int argc, char **argv) {
         if (!(scale1 < scale0 - 0.015f) && !(scale1 > scale0 + 0.015f)) fail++;
         if (scale1 < 0.15f || scale1 > 1.05f) fail++;
         if (!level_sane("Level2-pinch", &b)) fail++;
-        dump_panel("panel-l2");
+        if (!dump_and_check("panel-l2", &b, NULL)) fail++;
         tap_at(215.f, 24.f);
         wait_frames(8);
         dump_panel("panel-pause");
@@ -764,21 +907,21 @@ int main(int argc, char **argv) {
         for (i = 0; i < 8; i++) { tap_at(49.f, 324.f); tap_at(55.f, 333.f); }
         wait_frames(40);
         if (!level_sane("map-L1", &a)) fail++;
-        dump_panel("panel-l1");
+        if (!dump_and_check("panel-l1", &a, NULL)) fail++;
         print_cam("L1-normal", &a);
         s0 = a.world_scale;
         pinch_out(20);
         wait_frames(8);
         ab_phys_snapshot(&b);
         s1 = b.world_scale;
-        dump_panel("panel-l1-out");
+        if (!dump_and_check("panel-l1-out", &b, NULL)) fail++;
         print_cam("L1-pinch-out", &b);
         if (!(s1 < s0 - 0.04f)) fail++;
         left0 = b.cam_left;
         /* panel y is game x (Home-on-right). Drag toward smaller py to raise cam_left (pigs). */
         pan_drag(18, 120.f, 360.f, 120.f, 50.f);
         ab_phys_snapshot(&b);
-        dump_panel("panel-l1-pan");
+        if (!dump_and_check("panel-l1-pan", &b, "panel-l1-out")) fail++;
         print_cam("L1-pan-pigs", &b);
         if (!(b.cam_left > left0 + 40.f)) fail++;
         pan_drag(18, 120.f, 50.f, 120.f, 360.f);
@@ -801,19 +944,19 @@ int main(int argc, char **argv) {
         ab_goto_level("Level2");
         wait_frames(90);
         if (!level_sane("next-L2", &a)) fail++;
-        dump_panel("panel-l2");
+        if (!dump_and_check("panel-l2", &a, NULL)) fail++;
         print_cam("L2-normal", &a);
         s0 = a.world_scale;
         pinch_out(20);
         wait_frames(6);
         ab_phys_snapshot(&b);
-        dump_panel("panel-l2-out");
+        if (!dump_and_check("panel-l2-out", &b, NULL)) fail++;
         print_cam("L2-pinch-out", &b);
         s1 = b.world_scale;
         left0 = b.cam_left;
         pan_drag(18, 120.f, 360.f, 120.f, 50.f);
         ab_phys_snapshot(&b);
-        dump_panel("panel-l2-pan");
+        if (!dump_and_check("panel-l2-pan", &b, "panel-l2-out")) fail++;
         print_cam("L2-pan-pigs", &b);
         if (!(b.cam_left > left0 + 30.f)) fail++;
         pan_drag(18, 120.f, 50.f, 120.f, 360.f);
@@ -834,19 +977,20 @@ int main(int argc, char **argv) {
         ab_goto_level("Level3");
         wait_frames(90);
         if (!level_sane("next-L3", &a)) fail++;
-        dump_panel("panel-l3");
+        if (!dump_and_check("panel-l3", &a, NULL)) fail++;
         print_cam("L3-normal", &a);
         s0 = a.world_scale;
         pinch_out(20);
         wait_frames(6);
         ab_phys_snapshot(&b);
-        dump_panel("panel-l3-out");
+        if (!dump_and_check("panel-l3-out", &b, NULL)) fail++;
         print_cam("L3-pinch-out", &b);
         left0 = b.cam_left;
         pan_drag(18, 120.f, 360.f, 120.f, 50.f);
         ab_phys_snapshot(&b);
-        dump_panel("panel-l3-pan");
+        if (!dump_and_check("panel-l3-pan", &b, "panel-l3-out")) fail++;
         print_cam("L3-pan-pigs", &b);
+        if (!(b.cam_left > left0 + 30.f)) fail++;
         pan_drag(18, 120.f, 50.f, 120.f, 360.f);
         pinch_in(12);
         wait_frames(6);
