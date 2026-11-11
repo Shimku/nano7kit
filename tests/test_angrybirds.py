@@ -58,6 +58,20 @@ class FitTests(unittest.TestCase):
         host = (GAME / "host" / "main.c").read_text()
         self.assertIn("0x200000u", host)
         self.assertNotIn("24u << 20", host)
+        self.assertIn("3865672u", host)
+        self.assertIn("2097152u", host)
+        self.assertIn("1048576u", host)
+        self.assertIn("524288u", host)
+        self.assertIn("6014264u", host)
+        self.assertIn("4194304u", host)
+        self.assertIn("AB_OS_HEAP", host)
+        self.assertIn("os_profile", host)
+        self.assertIn("panel-lowmem", host)
+        self.assertIn("AB_LOWMEM_TEST", host)
+        self.assertIn("plat_os_alloc(size)", host)
+        self.assertIn("print_cam", host)
+        self.assertIn("pan_drag", host)
+        self.assertIn("panel-menu", host)
         self.assertIn("AB_NO_OUTSIDE", (GAME / "rt" / "rt_core.c").read_text())
         self.assertIn("AB_PLAY_TEST", host)
         self.assertIn("AB_GESTURE_TEST", host)
@@ -72,7 +86,13 @@ class FitTests(unittest.TestCase):
     def test_notice_allocates_nothing(self):
         n = (GAME / "nano" / "notice.c").read_text()
         self.assertNotIn("malloc", n)
-        self.assertIn("NOT ENOUGH MEMORY", (GAME / "nano" / "fn_nano.c").read_text())
+        self.assertIn("notice_fill_rgb", n)
+        nano = (GAME / "nano" / "fn_nano.c").read_text()
+        self.assertIn("NOT ENOUGH MEMORY", nano)
+        self.assertIn("CHECK LOG.TXT", nano)
+        self.assertIn("fe_enter_lowmem", nano)
+        self.assertIn("fe_enter_lowmem", (GAME / "rt" / "fngl.c").read_text())
+        self.assertIn("fe_lowmem", (GAME / "rt" / "ab_entry.c").read_text())
 
     def test_plan_without_payload_refuses(self):
         lines = ab.plan_lines(None, None, None)
@@ -176,6 +196,9 @@ class SourceTests(unittest.TestCase):
         self.assertIn("320", entry)
         self.assertNotIn("ab_zoom_by", entry)
         self.assertNotIn("ab_pan_by", entry)
+        self.assertIn("ab_apply_pan", entry)
+        self.assertIn("cam_user", entry)
+        self.assertIn("minWorldScale", entry)
         self.assertNotIn("view_zoom", entry)
         nano = (GAME / "nano" / "fn_nano.c").read_text()
         self.assertNotIn("ab_zoom_by", nano)
@@ -272,7 +295,7 @@ class SourceTests(unittest.TestCase):
         self.assertIn("__ZNK3lua8LuaTable8getTableEPKc", (GAME / "tools" / "recomp.py").read_text())
         self.assertIn("rt_check_align8", (GAME / "tools" / "recomp.py").read_text())
         self.assertIn("vfp_d16", (GAME / "tools" / "recomp.py").read_text())
-        self.assertEqual(ab.RECIPE, 12)
+        self.assertEqual(ab.RECIPE, 14)
         self.assertIn("ab_apply_bird_cam", entry)
         self.assertIn("lua_gc", entry)
         self.assertIn("240 * 432 * 9 / 10", host)
@@ -284,7 +307,34 @@ class SourceTests(unittest.TestCase):
         self.assertIn("b2Step", entry)
         nano_be = (GAME / "nano" / "be_nano.c").read_text()
         self.assertIn("tex fail", nano_be)
+        self.assertIn("tex upload null: solid fallback", nano_be)
         self.assertIn("w > 512", (GAME / "host" / "be_soft.c").read_text())
+
+    def test_convert_png_is_pvr_4444(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("ab_convert_assets", GAME / "tools" / "convert_assets.py")
+        ca = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ca)
+        td = tempfile.TemporaryDirectory()
+        src = Path(td.name) / "MENU.png"
+        dst = Path(td.name) / "out.png"
+        ca.write_png(src, [(255, 0, 0, 255), (0, 255, 0, 128), (0, 0, 255, 64), (255, 255, 0, 0)], 2, 2)
+        w, h, _ = ca.convert_png(src, dst, 0, 512)
+        raw = dst.read_bytes()
+        self.assertEqual(w, 2)
+        self.assertEqual(h, 2)
+        self.assertEqual(raw[:4], b"\x34\x00\x00\x00")  # PVR header size 52
+        self.assertIn(b"PVR!", raw[44:48])
+        src3 = Path(td.name) / "odd.png"
+        dst3 = Path(td.name) / "odd.pvr"
+        ca.write_png(src3, [(255, 0, 0, 255)] * 9, 3, 3)
+        w3, h3, _ = ca.convert_png(src3, dst3, 0, 512)
+        raw3 = dst3.read_bytes()
+        self.assertEqual(ca.pvr_header(raw3)["w"], 4)
+        self.assertEqual(ca.pvr_header(raw3)["h"], 4)
+        self.assertEqual(w3, 3)
+        self.assertEqual(h3, 3)
+        td.cleanup()
 
     def test_convert_skips_audio(self):
         src = (GAME / "tools" / "convert_assets.py").read_text()
@@ -300,6 +350,23 @@ class SourceTests(unittest.TestCase):
         self.assertIn("needed_shift", src)
         self.assertIn("texscale", src)
         self.assertIn('dest / "texscale"', src)
+        self.assertIn("write_pvr_4444", src)
+        self.assertIn("write_pvr_4444(dst, w, h, rgba)", src)
+        self.assertIn("515100", src)
+        self.assertIn("pad_rgba_pot", src)
+        self.assertIn('.with_suffix(".pvr")', src)
+        self.assertIn('raw.replace(b".png", b".pvr")', src)
+        gl = (GAME / "rt" / "fngl.c").read_text()
+        self.assertIn("fe_os_alloc", gl)
+        self.assertIn("tex_convert_fail", gl)
+        self.assertIn("solid fallback", gl)
+        self.assertIn("One POT 16-bit store", gl)
+        self.assertIn("AB_REPRO_UNINIT", gl)
+        self.assertIn("tex_drv_charge", gl)
+        self.assertIn("fe_enter_lowmem", gl)
+        self.assertIn("check log.txt", gl)
+        entry = (GAME / "rt" / "ab_entry.c").read_text()
+        self.assertIn("ab_level_min_scale", entry)
         imports = (GAME / "rt" / "rt_imports.c").read_text()
         self.assertIn("silent_wav", imports)
         self.assertIn("silent stub", imports)
@@ -344,7 +411,7 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertEqual(r.returncode, 0, err[-3000:])
         self.assertIn("Level1", err)
         self.assertIn("Level4", err)
-        self.assertIn("guest block 2097152", err)
+        self.assertIn("guest block 2031616", err)
         self.assertNotIn("guest heap exhausted", err)
 
     def test_menu_png_fits_guest_with_address_ordered_first_fit(self):
@@ -364,7 +431,7 @@ class PhysicsHarnessTests(unittest.TestCase):
             env=env, capture_output=True, text=True, timeout=180)
         err = (r.stderr or "") + (r.stdout or "")
         self.assertEqual(r.returncode, 0, err[-4000:])
-        self.assertIn("Loading image data/data/MENU.png", err)
+        self.assertIn("Loading image data/data/MENU.pvr", err)
         self.assertNotIn("guest heap exhausted", err)
         self.assertNotIn("out of guest memory", err)
 
@@ -380,8 +447,9 @@ class PhysicsHarnessTests(unittest.TestCase):
         err = (r.stderr or "") + (r.stdout or "")
         self.assertIn("AB_PLAY_TEST PASS", err, err[-8000:])
         self.assertEqual(r.returncode, 0, err[-4000:])
-        self.assertIn("MENU.png", err)
-        self.assertIn("outside alloc 515100", err)
+        self.assertIn("MENU.pvr", err)
+        self.assertNotIn("outside alloc 515100", err)
+        self.assertNotIn("no memory to convert", err)
         self.assertIn("flying=1", err)
         self.assertIn("before rest=1", err)
         self.assertNotIn("guest heap exhausted", err)
@@ -453,6 +521,7 @@ class PhysicsHarnessTests(unittest.TestCase):
     def test_device_path_l1_l2_l3_pinch_and_log(self):
         import subprocess
         env = os.environ.copy()
+        env.pop("AB_REPRO_UNINIT", None)
         env["AB_DEVICE_TEST"] = "1"
         env["AB_DEVICE_CH1"] = "3"
         out = ROOT / "build" / "angrybirds_rc" / "device-test"
@@ -472,9 +541,57 @@ class PhysicsHarnessTests(unittest.TestCase):
         self.assertTrue((out / "panel-l3.ppm").is_file())
         self.assertTrue((out / "panel-l2-out.ppm").is_file())
         self.assertTrue((out / "panel-l2-in.ppm").is_file())
+        self.assertTrue((out / "panel-l2-pan.ppm").is_file())
+        self.assertTrue((out / "panel-menu.ppm").is_file())
         self.assertTrue((out / "panel-pause.ppm").is_file())
+        self.assertIn("L1-pinch-out", err)
+        self.assertIn("L1-pan-pigs", err)
+        self.assertNotIn("no memory to convert", err)
+        self.assertNotIn("POT pad: no memory", err)
         log = (out / "docs" / "log.txt").read_text(errors="replace")
         self.assertIn("LEVEL Level1", log)
         self.assertIn("LEVEL Level2", log)
         self.assertTrue((out / "docs" / "sync.txt").is_file())
         self.assertNotIn("guest heap exhausted", err)
+        self.assertIn("profile=low", err)
+        self.assertIn("heap free 3865672", err)
+        self.assertIn("largest 2097152", err)
+        env["AB_OS_HEAP"] = "clean"
+        outc = ROOT / "build" / "angrybirds_rc" / "device-test-clean"
+        outc.mkdir(parents=True, exist_ok=True)
+        rc = subprocess.run(
+            [str(ABHOST), str(ABDATA), str(ABDATA / "guest.img"), str(outc), "1", "0"],
+            env=env, capture_output=True, text=True, timeout=400)
+        errc = (rc.stderr or "") + (rc.stdout or "")
+        self.assertIn("AB_DEVICE_TEST PASS", errc, errc[-8000:])
+        self.assertEqual(rc.returncode, 0, errc[-4000:])
+        self.assertIn("profile=clean", errc)
+        self.assertIn("heap free 6014264", errc)
+        self.assertIn("largest 4194304", errc)
+        self.assertNotIn("no memory to convert", errc)
+        self.assertNotIn("POT pad: no memory", errc)
+
+    def test_busy_os_heap_shows_red_check_log_screen(self):
+        import subprocess
+        env = os.environ.copy()
+        env.pop("AB_REPRO_UNINIT", None)
+        env["AB_OS_HEAP"] = "busy"
+        env["AB_LOWMEM_TEST"] = "1"
+        out = ROOT / "build" / "angrybirds_rc" / "lowmem-test"
+        out.mkdir(parents=True, exist_ok=True)
+        r = subprocess.run(
+            [str(ABHOST), str(ABDATA), str(ABDATA / "guest.img"), str(out), "1", "0"],
+            env=env, capture_output=True, text=True, timeout=60)
+        err = (r.stderr or "") + (r.stdout or "")
+        self.assertIn("AB_LOWMEM_TEST PASS", err, err[-4000:])
+        self.assertEqual(r.returncode, 0, err[-2000:])
+        self.assertIn("check log.txt", err)
+        self.assertIn("profile=busy", err)
+        self.assertTrue((out / "panel-lowmem.ppm").is_file(), err[-2000:])
+        ppm = (out / "panel-lowmem.ppm").read_bytes()
+        self.assertTrue(ppm.startswith(b"P6 240 432 255\n"))
+        pix = ppm.split(b"\n", 1)[1]
+        self.assertGreater(len(pix), 240 * 3)
+        self.assertGreater(pix[0], 50)
+        self.assertLess(pix[1], 40)
+        self.assertLess(pix[2], 40)

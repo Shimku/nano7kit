@@ -11,6 +11,7 @@
 #include "../rt/rt_plat.h"
 #include "../rt/fngl.h"
 #include "ab_entry.h"
+#include "notice.h"
 
 extern uint8_t be_fb[432][240][4];
 extern int be_stat_pvrtc, be_stat_uncompressed, be_tex_peak_bytes, be_check_tiny, be_frame_tris_max, be_frame_big_max;
@@ -76,9 +77,148 @@ void plat_log_step(const char *what, uint32_t a) {
 }
 void plat_trace(void) { void *b[24]; int n = backtrace(b, 24); char **s = backtrace_symbols(b, n);
     fprintf(stderr, "  at"); for (int i = 1; i < n; i++) { const char *p = strchr(s[i], '('); if (p && p[1] == 'F') fprintf(stderr, " %.*s", (int)(strcspn(p + 1, "+)")), p + 1); } fprintf(stderr, "\n"); }
-void *plat_os_alloc(uint32_t n) { return calloc(1, n ? n : 1); }
-void plat_os_free(void *p) { free(p); }
-uint32_t plat_os_largest(void) { return 4u << 20; }   /* iPod probe largest; the nano uses hb_os_heap_largest */
+
+/* Two device OS-heap profiles from real nano logs, plus a third that is too
+ * small to start (red CHECK LOG.TXT screen). Power-of-two runs, address-ordered
+ * first-fit, 16-byte payloads. An allocation that does not fit returns NULL.
+ *   low   (c9880d1, Bluetooth + music): 3,865,672 free, 2,097,152 largest
+ *   clean (Fruit Ninja clean boot):     6,014,264 free, 4,194,304 largest
+ *   busy  (below both):                 2,097,152 free, 1,048,576 largest
+ * AB_OS_HEAP=low|clean|busy. Default low so PLAY/GESTURE/DEVICE match the
+ * tight device. The old plat_os_largest=4 MB plus libc malloc for convert
+ * never saw SPLASHES/MENU "no memory". */
+#define OS_LOW_FREE    3865672u
+#define OS_LOW_2M      2097152u
+#define OS_LOW_1M      1048576u
+#define OS_LOW_512      524288u
+#define OS_CLEAN_FREE  6014264u
+#define OS_CLEAN_4M    4194304u
+#define OS_CLEAN_1M    1048576u
+#define OS_BUSY_FREE   2097152u
+#define OS_BUSY_1M     1048576u
+#define AB_BLOCK_MAX   0x200000u
+#define AB_BLOCK_MIN   0x190000u
+#define AB_AFTER_MIN   0x1A0000u
+#define OS_MAXB 96
+typedef struct { uint32_t off, sz; int used; } os_blk;
+static uint8_t os_arena[OS_CLEAN_FREE];
+static os_blk osb[OS_MAXB];
+static int osn, os_ready, os_profile;   /* 0 low, 1 clean, 2 busy */
+static uint32_t os_cap;
+static const char *os_profile_name(void) {
+    return os_profile == 1 ? "clean" : os_profile == 2 ? "busy" : "low";
+}
+static uint32_t os_p2floor(uint32_t n) {
+    uint32_t p = 0x80000000u;
+    if (!n) return 0;
+    while (p > n) p >>= 1;
+    return p;
+}
+static void os_coalesce(void) {
+    int i, j;
+    for (i = 0; i < osn; i++) for (j = i + 1; j < osn; j++)
+        if (osb[i].off > osb[j].off) { os_blk t = osb[i]; osb[i] = osb[j]; osb[j] = t; }
+    i = 0;
+    while (i + 1 < osn) {
+        if (!osb[i].used && !osb[i + 1].used && osb[i].off + osb[i].sz == osb[i + 1].off) {
+            osb[i].sz += osb[i + 1].sz;
+            memmove(&osb[i + 1], &osb[i + 2], (size_t)(osn - i - 2) * sizeof osb[0]);
+            osn--;
+        } else i++;
+    }
+}
+static void os_init(void) {
+    const char *e;
+    if (os_ready) return;
+    e = getenv("AB_OS_HEAP");
+    os_profile = 0;
+    if (e && (!strcmp(e, "clean") || !strcmp(e, "fn") || !strcmp(e, "6m"))) os_profile = 1;
+    else if (e && (!strcmp(e, "busy") || !strcmp(e, "tiny"))) os_profile = 2;
+    memset(osb, 0, sizeof osb);
+    if (os_profile == 1) {
+        /* 771384 + 4 MB + 1 MB = 6,014,264. Address-ordered first-fit skips
+         * the head for a 2 MB guest and splits the 4 MB; leftover + 1 MB
+         * coalesces the way the Fruit Ninja log's largest 2 MB did. */
+        uint32_t head = OS_CLEAN_FREE - OS_CLEAN_4M - OS_CLEAN_1M;
+        os_cap = OS_CLEAN_FREE;
+        osn = 3;
+        osb[0].off = 0; osb[0].sz = head;
+        osb[1].off = head; osb[1].sz = OS_CLEAN_4M;
+        osb[2].off = head + OS_CLEAN_4M; osb[2].sz = OS_CLEAN_1M;
+    } else if (os_profile == 2) {
+        os_cap = OS_BUSY_FREE;
+        osn = 2;
+        osb[0].off = 0; osb[0].sz = OS_BUSY_1M;
+        osb[1].off = OS_BUSY_1M; osb[1].sz = OS_BUSY_1M;
+    } else {
+        os_cap = OS_LOW_FREE;
+        osn = 4;
+        osb[0].off = 0; osb[0].sz = OS_LOW_2M;
+        osb[1].off = OS_LOW_2M; osb[1].sz = OS_LOW_1M;
+        osb[2].off = OS_LOW_2M + OS_LOW_1M; osb[2].sz = OS_LOW_512;
+        osb[3].off = OS_LOW_2M + OS_LOW_1M + OS_LOW_512;
+        osb[3].sz = OS_LOW_FREE - (OS_LOW_2M + OS_LOW_1M + OS_LOW_512);
+    }
+    os_ready = 1;
+}
+static uint32_t os_free_sum(void) {
+    uint32_t n = 0; int i;
+    for (i = 0; i < osn; i++) if (!osb[i].used) n += osb[i].sz;
+    return n;
+}
+void *plat_os_alloc(uint32_t n) {
+    uint32_t want = (n + 15u) & ~15u, off, left;
+    int i, best = -1;
+    uint8_t *p;
+    if (!want) want = 16;
+    os_init();
+    for (i = 0; i < osn; i++) {
+        if (osb[i].used || osb[i].sz < want) continue;
+        if (best < 0 || osb[i].off < osb[best].off) best = i;
+    }
+    if (best < 0) {
+        uint32_t lg = 0;
+        for (i = 0; i < osn; i++) if (!osb[i].used && osb[i].sz > lg) lg = osb[i].sz;
+        fprintf(stderr, "os alloc %u refused (max run %u free %u nblk %d)\n",
+                (unsigned)want, (unsigned)lg, (unsigned)os_free_sum(), osn);
+        return NULL;
+    }
+    off = osb[best].off;
+    left = osb[best].sz - want;
+    osb[best].sz = want;
+    osb[best].used = 1;
+    if (left && osn < OS_MAXB) {
+        osb[osn].off = off + want;
+        osb[osn].sz = left;
+        osb[osn].used = 0;
+        osn++;
+    }
+    p = os_arena + off;
+    /* Unwritten / failed OS memory is a loud stripe, like uninit GPU RAM. */
+    for (i = 0; (uint32_t)i < want; i++) p[i] = (uint8_t)(0x39 + ((i * 13) ^ (i >> 3)));
+    return p;
+}
+void plat_os_free(void *p) {
+    uint32_t off; int i;
+    if (!p || !os_ready) return;
+    if ((uint8_t *)p < os_arena || (uint8_t *)p >= os_arena + os_cap) return;
+    off = (uint32_t)((uint8_t *)p - os_arena);
+    for (i = 0; i < osn; i++) if (osb[i].used && osb[i].off == off) {
+        osb[i].used = 0;
+        os_coalesce();
+        return;
+    }
+}
+uint32_t plat_os_largest(void) {
+    uint32_t best = 0; int i;
+    os_init();
+    for (i = 0; i < osn; i++) if (!osb[i].used) {
+        uint32_t p = os_p2floor(osb[i].sz);
+        if (p > best) best = p;
+    }
+    return best;
+}
+uint32_t plat_os_free_total(void) { os_init(); return os_free_sum(); }
 void plat_fatal(const char *why) { fprintf(stderr, "FATAL: %s\n", why); plat_trace(); exit(3); }
 uint64_t plat_time_us(void) { return fake_us; }
 uint32_t plat_load_image(void *dst, uint32_t size) {
@@ -142,9 +282,26 @@ static int panel_washed(void) {
     }
     return n;
 }
+static const char *const host_lowmem_lines[] = {
+    "ANGRY BIRDS", "NOT ENOUGH MEMORY", "CHECK LOG.TXT",
+    "PAUSE MUSIC, QUIT,", "THEN OPEN IT AGAIN"
+};
+static void host_draw_lowmem(void) {
+    notice_fill_rgb(&be_fb[0][0][0], 240, 432, 4, 240 * 4, host_lowmem_lines, 5);
+}
+static int host_panel_is_red(void) {
+    int n = 0, y, x;
+    for (y = 0; y < 432; y++) for (x = 0; x < 240; x++) {
+        unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (r > 50 && g < 40 && b < 40) n++;
+    }
+    return n > 240 * 432 / 2;
+}
 static void dump_panel(const char *name) {
     char p[512]; snprintf(p, sizeof p, "%s/%s.ppm", out_dir, name);
-    FILE *f = fopen(p, "wb"); if (!f) return;
+    FILE *f;
+    if (fe_lowmem) host_draw_lowmem();
+    f = fopen(p, "wb"); if (!f) return;
     fprintf(f, "P6 240 432 255\n");
     for (int y = 0; y < 432; y++)
         for (int x = 0; x < 240; x++)
@@ -174,7 +331,12 @@ static void shot(int frame) {
 }
 static void wait_frames(int n) {
     int f;
-    for (f = 0; f < n; f++) { fake_us += 33333; ab_frame(1.f / 30.f); }
+    for (f = 0; f < n; f++) {
+        fake_us += 33333;
+        if (fe_lowmem) { host_draw_lowmem(); continue; }
+        ab_frame(1.f / 30.f);
+        if (fe_lowmem) host_draw_lowmem();
+    }
 }
 static void tap_at(float x, float y) {
     ab_touch(0, 1, x, y);
@@ -190,13 +352,18 @@ static int level_sane(const char *name, ab_phys_info *a) {
     blk = panel_black();
     if (a->dynamic_n < 1) bad = 1;
     if (a->vis_dyn < 1 || a->vis_all < 2) bad = 1;
-    if (a->world_scale < 0.22f || a->world_scale > 1.05f) bad = 1;
-    if (pix < 8000) bad = 1;
+    if (a->world_scale < 0.18f || a->world_scale > 1.05f) bad = 1;
     if (blk > 240 * 432 / 12) bad = 1;
     /* Device white L2 is ~93% near-white with one untextured wood strip
      * (pix under 8000). Playable levels can have light sky over 90% wash
-     * and still show 40k+ game pixels. */
-    if (panel_washed() > 240 * 432 * 9 / 10 && pix < 20000) bad = 1;
+     * and still show 40k+ game pixels. Fully zoomed out (minWorldScale)
+     * is mostly sky; require bodies in view instead of fill. */
+    if (a->world_scale >= 0.35f) {
+        if (pix < 8000) bad = 1;
+        if (panel_washed() > 240 * 432 * 9 / 10 && pix < 20000) bad = 1;
+    } else if (a->vis_all < 5) {
+        bad = 1;
+    }
     if (be_stat_tex_fail) bad = 1;
     if (a->shape_bad) bad = 1;
     fprintf(stderr, "AB_GESTURE_TEST %s dyn=%d vis=%d/%d scale=%.3f pix=%d black=%d wash=%d tex=%d fail=%d circ=%d poly=%d shapebad=%d %s\n",
@@ -223,8 +390,26 @@ static void pinch_spread(int frames, float from, float to) {
     ab_touch(1, 0, 120.f + to, 216.f);
     fake_us += 33333; ab_frame(1.f / 30.f);
 }
-static void pinch_out(int frames) { pinch_spread(frames, 40.f, 90.f); }
-static void pinch_in(int frames) { pinch_spread(frames, 90.f, 30.f); }
+static void pinch_out(int frames) { pinch_spread(frames, 16.f, 110.f); }
+static void pinch_in(int frames) { pinch_spread(frames, 110.f, 24.f); }
+static void pan_drag(int frames, float x0, float y0, float x1, float y1) {
+    int i;
+    ab_touch(0, 1, x0, y0);
+    fake_us += 33333; ab_frame(1.f / 30.f);
+    for (i = 1; i <= frames; i++) {
+        float k = (float)i / (float)frames;
+        ab_touch(0, 1, x0 + (x1 - x0) * k, y0 + (y1 - y0) * k);
+        fake_us += 33333; ab_frame(1.f / 30.f);
+    }
+    ab_touch(0, 0, x1, y1);
+    fake_us += 33333; ab_frame(1.f / 30.f);
+    wait_frames(8);
+}
+static void print_cam(const char *tag, const ab_phys_info *a) {
+    fprintf(stderr, "AB_DEVICE_TEST %s scale=%.3f cam_left=%.1f cam_top=%.1f vis=%d/%d heap=%u hole=%u texfail=%d\n",
+            tag, (double)a->world_scale, (double)a->cam_left, (double)a->cam_top,
+            a->vis_all, a->bodies, rt_heap_used(), rt_heap_largest_free(), be_stat_tex_fail);
+}
 static void double_tap(float x, float y) {
     tap_at(x, y);
     fake_us += 80000; ab_frame(1.f / 30.f);
@@ -241,12 +426,6 @@ int main(int argc, char **argv) {
     if (getenv("FN_TEX_SHIFT")) fe_tex_shift = atoi(getenv("FN_TEX_SHIFT"));
     fe_atlas_max_side = getenv("FN_ATLAS") ? atoi(getenv("FN_ATLAS")) : fe_atlas_max_side;
     fe_tex_big_shift = getenv("FN_TEX_BIG") ? atoi(getenv("FN_TEX_BIG")) : fe_tex_shift;
-    /* Same 2 MB guest block as nano BLOCK_MAX. A 24 MB host block hid the
-     * MENU.png 515100-byte new[] fragmentation the iPod hits. */
-    uint32_t size = 0x200000u;
-    if (getenv("AB_GUEST_BLOCK")) size = (uint32_t)strtoul(getenv("AB_GUEST_BLOCK"), 0, 0);
-    void *block = malloc(size);
-    if (!block) { fprintf(stderr, "host block %u failed\n", size); return 1; }
     {
         char p[512];
         snprintf(p, sizeof p, "%s/docs", out_dir);
@@ -259,10 +438,70 @@ int main(int argc, char **argv) {
             fprintf(stderr, "AB_BAD_SAVE wrote garbage highscores.lua\n");
         }
     }
-    if (rt_init(block, size)) return 1;
-    if (ab_start()) return 1;
-    fprintf(stderr, "init ok: guest block %u heap %u used %u peak %u\n",
-            size, rt_heap_size(), rt_heap_used(), rt_heap_peak());
+    /* Same guest-block arithmetic as nano/fn_nano.c: largest 2 MB -> size =
+     * (largest-0x10000)&~0xFFFF = 2031616 on the low profile. Charged to the
+     * device-like OS heap so convert/decode compete with it. AB_GUEST_BLOCK
+     * overrides. Too little OS memory: red CHECK LOG.TXT screen, never start. */
+    {
+        uint32_t largest, free0, size;
+        void *block;
+        os_init();
+        largest = plat_os_largest();
+        free0 = plat_os_free_total();
+        size = largest > AB_BLOCK_MAX + 0x10000u ? AB_BLOCK_MAX : (largest - 0x10000u) & ~0xFFFFu;
+        if (getenv("AB_GUEST_BLOCK")) size = (uint32_t)strtoul(getenv("AB_GUEST_BLOCK"), 0, 0);
+        fprintf(stderr, "nano7kit Angry Birds host: profile=%s heap free %u, largest %u\n",
+                os_profile_name(), (unsigned)free0, (unsigned)largest);
+        if (largest < AB_BLOCK_MIN + 0x10000u || size < AB_BLOCK_MIN || free0 < size + AB_AFTER_MIN) {
+            char why[160];
+            snprintf(why, sizeof why,
+                     "heap free %u largest %u, needs %u and %u (music or bluetooth?)",
+                     (unsigned)free0, (unsigned)largest,
+                     (unsigned)(AB_BLOCK_MAX + AB_AFTER_MIN),
+                     (unsigned)(AB_BLOCK_MIN + 0x10000u));
+            fe_enter_lowmem(why);
+            host_draw_lowmem();
+            dump_panel("panel-lowmem");
+            fprintf(stderr, "AB_LOWMEM_TEST red=%d profile=%s why=%s\n",
+                    host_panel_is_red(), os_profile_name(), why);
+            if (getenv("AB_LOWMEM_TEST") || os_profile == 2) {
+                fprintf(stderr, "AB_LOWMEM_TEST %s\n", host_panel_is_red() ? "PASS" : "FAIL");
+                if (getenv("AB_DEVICE_TEST"))
+                    fprintf(stderr, "AB_DEVICE_TEST %s profile=%s (red screen)\n",
+                            host_panel_is_red() ? "PASS" : "FAIL", os_profile_name());
+                return host_panel_is_red() ? 0 : 1;
+            }
+            fprintf(stderr, "AB_DEVICE_TEST FAIL profile=%s (pre-flight refused a playable profile)\n",
+                    os_profile_name());
+            return 1;
+        }
+        block = plat_os_alloc(size);
+        if (!block) { fprintf(stderr, "host block %u failed (os largest %u free %u)\n",
+                              size, plat_os_largest(), plat_os_free_total()); return 1; }
+        fprintf(stderr, "nano7kit guest block %u bytes; heap free after %u largest %u\n",
+                (unsigned)size, (unsigned)plat_os_free_total(), (unsigned)plat_os_largest());
+        if (rt_init(block, size)) return 1;
+        if (ab_start()) return 1;
+        if (fe_lowmem) {
+            host_draw_lowmem();
+            dump_panel("panel-lowmem");
+            fprintf(stderr, "AB_LOWMEM_TEST red=%d profile=%s (texture convert)\n",
+                    host_panel_is_red(), os_profile_name());
+            if (getenv("AB_REPRO_UNINIT")) {
+                /* Keep going: the repro path must still draw rainbow. */
+            } else if (getenv("AB_LOWMEM_TEST")) {
+                fprintf(stderr, "AB_LOWMEM_TEST %s\n", host_panel_is_red() ? "PASS" : "FAIL");
+                return host_panel_is_red() ? 0 : 1;
+            } else if (getenv("AB_DEVICE_TEST")) {
+                fprintf(stderr, "AB_DEVICE_TEST FAIL profile=%s (texture convert OOM, red screen)\n",
+                        os_profile_name());
+                return 1;
+            }
+        }
+        fprintf(stderr, "init ok: guest block %u heap %u used %u peak %u os free %u largest %u\n",
+                size, rt_heap_size(), rt_heap_used(), rt_heap_peak(),
+                plat_os_free_total(), plat_os_largest());
+    }
     if (getenv("AB_PHYS_TEST")) {
         static const char *levels[] = { "Level1", "Level2", "Level3", "Level4" };
         int warm = atoi(getenv("AB_PHYS_WARM") ? getenv("AB_PHYS_WARM") : "200");
@@ -508,10 +747,13 @@ int main(int argc, char **argv) {
          * Pinch out then in on each level. L1 again, then chapter 1. */
         int fail = 0, i, n, ch1_fail = 0;
         ab_phys_info a, b;
-        float s0, s1, s2;
+        float s0, s1, s2, left0;
+        fprintf(stderr, "AB_DEVICE_TEST profile=%s\n", os_profile_name());
         wait_frames(200);
+        dump_panel("panel-splash");
         tap_at(105.f, 216.f);
         wait_frames(45);
+        dump_panel("panel-menu");
         tap_at(151.f, 32.f);
         wait_frames(20);
         for (i = 0; i < 600; i++) {
@@ -523,23 +765,36 @@ int main(int argc, char **argv) {
         wait_frames(40);
         if (!level_sane("map-L1", &a)) fail++;
         dump_panel("panel-l1");
+        print_cam("L1-normal", &a);
         s0 = a.world_scale;
-        pinch_out(16);
+        pinch_out(20);
         wait_frames(8);
         ab_phys_snapshot(&b);
         s1 = b.world_scale;
         dump_panel("panel-l1-out");
-        fprintf(stderr, "AB_DEVICE_TEST L1 pinch-out %.3f -> %.3f\n", (double)s0, (double)s1);
-        if (!(s1 < s0 - 0.015f)) fail++;
+        print_cam("L1-pinch-out", &b);
+        if (!(s1 < s0 - 0.04f)) fail++;
+        left0 = b.cam_left;
+        /* panel y is game x (Home-on-right). Drag toward smaller py to raise cam_left (pigs). */
+        pan_drag(18, 120.f, 360.f, 120.f, 50.f);
+        ab_phys_snapshot(&b);
+        dump_panel("panel-l1-pan");
+        print_cam("L1-pan-pigs", &b);
+        if (!(b.cam_left > left0 + 40.f)) fail++;
+        pan_drag(18, 120.f, 50.f, 120.f, 360.f);
+        ab_phys_snapshot(&b);
+        dump_panel("panel-l1-pan-back");
+        print_cam("L1-pan-back", &b);
         pinch_in(16);
         wait_frames(8);
         ab_phys_snapshot(&b);
         s2 = b.world_scale;
         dump_panel("panel-l1-in");
-        fprintf(stderr, "AB_DEVICE_TEST L1 pinch-in %.3f -> %.3f\n", (double)s1, (double)s2);
-        if (!(s2 > s1 + 0.015f)) fail++;
+        print_cam("L1-pinch-in", &b);
+        if (!(s2 > s1 + 0.03f)) fail++;
         double_tap(120.f, 200.f);
         ab_phys_snapshot(&b);
+        print_cam("L1-double-tap", &b);
         fprintf(stderr, "AB_DEVICE_TEST L1 double-tap scale %.3f (play was %.3f)\n",
                 (double)b.world_scale, (double)s0);
         if (b.world_scale < s0 - 0.08f || b.world_scale > s0 + 0.08f) fail++;
@@ -547,20 +802,30 @@ int main(int argc, char **argv) {
         wait_frames(90);
         if (!level_sane("next-L2", &a)) fail++;
         dump_panel("panel-l2");
+        print_cam("L2-normal", &a);
         s0 = a.world_scale;
-        pinch_out(16);
+        pinch_out(20);
         wait_frames(6);
         ab_phys_snapshot(&b);
         dump_panel("panel-l2-out");
+        print_cam("L2-pinch-out", &b);
         s1 = b.world_scale;
+        left0 = b.cam_left;
+        pan_drag(18, 120.f, 360.f, 120.f, 50.f);
+        ab_phys_snapshot(&b);
+        dump_panel("panel-l2-pan");
+        print_cam("L2-pan-pigs", &b);
+        if (!(b.cam_left > left0 + 30.f)) fail++;
+        pan_drag(18, 120.f, 50.f, 120.f, 360.f);
         pinch_in(16);
         wait_frames(6);
         ab_phys_snapshot(&b);
         dump_panel("panel-l2-in");
         s2 = b.world_scale;
+        print_cam("L2-pinch-in", &b);
         fprintf(stderr, "AB_DEVICE_TEST L2 pinch %.3f -> %.3f -> %.3f vis %d/%d\n",
                 (double)s0, (double)s1, (double)s2, b.vis_all, b.bodies);
-        if (!(s1 < s0 - 0.010f) || !(s2 > s1 + 0.010f)) fail++;
+        if (!(s1 < s0 - 0.04f) || !(s2 > s1 + 0.03f)) fail++;
         tap_at(215.f, 24.f);
         wait_frames(8);
         dump_panel("panel-pause");
@@ -570,7 +835,24 @@ int main(int argc, char **argv) {
         wait_frames(90);
         if (!level_sane("next-L3", &a)) fail++;
         dump_panel("panel-l3");
-        pinch_out(12); pinch_in(12);
+        print_cam("L3-normal", &a);
+        s0 = a.world_scale;
+        pinch_out(20);
+        wait_frames(6);
+        ab_phys_snapshot(&b);
+        dump_panel("panel-l3-out");
+        print_cam("L3-pinch-out", &b);
+        left0 = b.cam_left;
+        pan_drag(18, 120.f, 360.f, 120.f, 50.f);
+        ab_phys_snapshot(&b);
+        dump_panel("panel-l3-pan");
+        print_cam("L3-pan-pigs", &b);
+        pan_drag(18, 120.f, 50.f, 120.f, 360.f);
+        pinch_in(12);
+        wait_frames(6);
+        ab_phys_snapshot(&b);
+        print_cam("L3-pinch-in", &b);
+        if (!(b.world_scale > s0 - 0.08f)) fail++;
         ab_goto_level("Level1");
         wait_frames(40);
         for (i = 0; i < 8; i++) { tap_at(49.f, 324.f); tap_at(55.f, 333.f); }
@@ -631,7 +913,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "AB_DEVICE_TEST chapter1 extra fails %d heap %u hole %u texfail %d align %u shapebad last=%d\n",
                 ch1_fail, rt_heap_used(), rt_heap_largest_free(), be_stat_tex_fail,
                 rt_align_faults(), a.shape_bad);
-        fprintf(stderr, "AB_DEVICE_TEST %s\n", fail ? "FAIL" : "PASS");
+        if (rt_heap_largest_free() < 300000u) fail++;
+        if (be_stat_tex_fail) fail++;
+        fprintf(stderr, "AB_DEVICE_TEST %s profile=%s\n", fail ? "FAIL" : "PASS", os_profile_name());
         if (rt_malloc_failures()) {
             fprintf(stderr, "FATAL: %u guest allocations failed\n", rt_malloc_failures());
             return 3;

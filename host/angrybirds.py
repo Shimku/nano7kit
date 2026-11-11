@@ -31,7 +31,7 @@ IPA_SHA256_PREFIX = "cdea1290"
 CMD = "./start nabase add 'Angry Birds' --payload /path/to/AngryBirds.ipa"
 FAT_EXE = "/Apps/Executables/Angry Birds.hbapp"
 FAT_DATA = "/Apps/Data/AngryBirds"
-RECIPE = 12
+RECIPE = 14
 
 # Memory model. IMAGE_BYTES is the loaded .hbapp span (code + log in .bss).
 # The translated engine is Thumb + software float so this fits; runtime/GL stay ARM+VFP.
@@ -161,7 +161,7 @@ def build(payload: Path, *, force: bool = False) -> dict:
     print("==> recomp.py (ARM+VFP -> C)")
     _run_make([str(py), str(game_dir() / "tools" / "recomp.py"), str(facts["exe"]), str(recomp)],
               out, out / "recomp.log")
-    print("==> convert_assets.py (skip wav/mp3, MENU/SPLASHES/TUTORIALS keep 512, rest 256)")
+    print("==> convert_assets.py (skip wav/mp3, PNG->PVR 4444 + .dat patch, MENU/SPLASHES/TUTORIALS keep 512, rest 256)")
     _run_make([str(py), str(game_dir() / "tools" / "convert_assets.py"), str(facts["app"]), str(data)],
               out, out / "convert.log")
     print("==> arm-none-eabi-gcc libab_nano.a")
@@ -219,7 +219,7 @@ def heap_lines(heap_free: Optional[int], largest: Optional[int]) -> List[str]:
         f"              GL textures about {mb(TEXTURE_BYTES)} (pre-scaled at convert; no runtime shift), "
         f"{BYTES_PER_TRIANGLE} bytes a triangle ({TRIS_DRAWN_MAX} at the busiest)",
         f"              pre-flight: under {mb(BLOCK_MIN + SLOP)} largest or {mb(BLOCK_MAX + AFTER_MIN)} free "
-        "after the image, it shows NOT ENOUGH MEMORY and never starts",
+        "after the image, it shows the red NOT ENOUGH MEMORY / CHECK LOG.TXT screen and never starts",
     ]
     if heap_free is None:
         out.append("    heap      pass Probe's numbers to check: --heap-free 6.4M --largest 4.0M")

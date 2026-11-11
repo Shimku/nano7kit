@@ -29,4 +29,7 @@ extern int fe_atlas_max_side, fe_stat_atlased, fe_stat_atlas_pages;   /* 0 = no 
 void fngl_reset(void);                 /* defaults; call before anything else */
 void fe_reset_matrices(void);          /* identity GL stacks; call on level load */
 extern int fe_pending_tex_shift;       /* convert-time downsample; UV is divided by 2^this */
+extern int fe_lowmem;                  /* 1: convert/start OOM; draw the red CHECK LOG.TXT screen */
+extern char fe_lowmem_why[160];
+void fe_enter_lowmem(const char *why);
 #endif

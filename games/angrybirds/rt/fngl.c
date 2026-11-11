@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "rt.h"
 #include "rt_plat.h"
 #include "fngl.h"
@@ -29,6 +30,8 @@ static struct { uint32_t gaddr, size; } bufs[MAXBUF];
 static int tex_bytes[MAXTEX];
 int fe_tex_shift, fe_tex_min_side, fe_tex_big_side, fe_tex_big_shift, fe_stat_tex_peak, fe_stat_tex_count, fe_stat_tex_count_peak;
 int fe_pending_tex_shift;
+int fe_lowmem;
+char fe_lowmem_why[160];
 static uint8_t uv_div[MAXTEX];
 static int texh[MAXTEX];
 static uint32_t bound_tex;
@@ -127,11 +130,17 @@ IMP(_glGenTextures) { UNUSED;
     return 0; }
 IMP(_glBindTexture) { UNUSED; bound_tex = r1 < MAXTEX ? r1 : 0; return 0; }
 static void atlas_free(uint32_t n);
+#ifndef FN_NANO
+static void tex_drv_release(uint32_t n);
+#endif
 IMP(_glDeleteTextures) { UNUSED;
     for (uint32_t i = 0; i < r0; i++) { uint32_t n = gr32(r1 + 4 * i);
         if (!n || n >= MAXTEX || !tex_named[n]) continue;
         if (atl[n].page) atlas_free(n);
         if (texh[n]) { be_tex_delete(texh[n]); texh[n] = 0; fe_stat_tex_count--; }
+#ifndef FN_NANO
+        tex_drv_release(n);
+#endif
         fe_stat_tex_bytes -= tex_bytes[n]; tex_bytes[n] = 0; tex_named[n] = 0; uv_div[n] = 0; }
     return 0; }
 IMP(_glTexParameteri) { UNUSED; if (bound_tex && texh[bound_tex] && !atl[bound_tex].page) be_tex_param(texh[bound_tex], r1, r2); return 0; }
@@ -142,6 +151,53 @@ static int pot2(int n) {
     int p = 1;
     while (p < n) p <<= 1;
     return p < 1 ? 1 : p;
+}
+static void *fe_os_alloc(uint32_t n) {
+    void *p = plat_os_alloc(n ? n : 1u);
+    return p;
+}
+static void fe_os_free(void *p) { if (p) plat_os_free(p); }
+#ifndef FN_NANO
+/* Host models the nano GL driver: glTexImage2D(POT, NULL) takes an OS-heap
+ * store (PNG RGBA8 512x256x4 = 524288). c9880d1 never charged that, so the
+ * leftover 1 MB after the guest still looked free and convert never failed
+ * on host. Device: two 398400 decode buffers plus that store, then
+ * "texture POT pad: no memory". Keep the store until glDeleteTextures. */
+static void *tex_drv_p[MAXTEX];
+static uint32_t tex_drv_n[MAXTEX];
+static void tex_drv_release(uint32_t n) {
+    if (n && n < MAXTEX && tex_drv_p[n]) {
+        plat_os_free(tex_drv_p[n]);
+        tex_drv_p[n] = 0;
+        tex_drv_n[n] = 0;
+    }
+}
+static int tex_drv_charge(uint32_t n, uint32_t bytes) {
+    tex_drv_release(n);
+    if (!n || n >= MAXTEX || !bytes) return 1;
+    tex_drv_p[n] = plat_os_alloc(bytes);
+    if (!tex_drv_p[n]) return 0;
+    tex_drv_n[n] = bytes;
+    return 1;
+}
+#endif
+void fe_enter_lowmem(const char *why) {
+    if (fe_lowmem) return;
+    fe_lowmem = 1;
+    snprintf(fe_lowmem_why, sizeof fe_lowmem_why, "%s", why && why[0] ? why : "low memory");
+    rt_log("nano7kit not enough memory: %s; check log.txt; not continuing", fe_lowmem_why);
+}
+static void tex_convert_fail(int w, int h, const char *why) {
+    extern int be_stat_tex_fail;
+    if (why && !strcmp(why, "POT pad: no memory")) rt_log("texture POT pad: no memory");
+    else rt_log("texture %dx%d: no memory to convert", w, h);
+#ifndef FN_NANO
+    /* c9880d1 uploaded nothing, left the GL name as uninit GPU RAM (rainbow)
+     * and counted fail=0. AB_REPRO_UNINIT repeats that host-side. */
+    if (getenv("AB_REPRO_UNINIT")) return;
+#endif
+    be_stat_tex_fail++;
+    fe_enter_lowmem("texture convert failed");
 }
 
 /* atlas: the nano's driver takes only about 80 textures, and the game makes about 120, most
@@ -162,10 +218,11 @@ static void atlas_free(uint32_t n) {
 static int atlas_put(uint32_t n, int w, int h, const uint16_t *src4444) {
     for (int p = 0; p < ATL_PAGES; p++) {
         if (!pages[p].px) {
-            pages[p].px = (uint16_t *)calloc(ATL_SIDE * ATL_SIDE, 2);
+            pages[p].px = (uint16_t *)fe_os_alloc((uint32_t)ATL_SIDE * (uint32_t)ATL_SIDE * 2u);
             if (!pages[p].px) return 0;
+            memset(pages[p].px, 0, (size_t)ATL_SIDE * (size_t)ATL_SIDE * 2u);
             pages[p].handle = be_tex_create();
-            if (!pages[p].handle) { free(pages[p].px); pages[p].px = NULL; return 0; }
+            if (!pages[p].handle) { fe_os_free(pages[p].px); pages[p].px = NULL; return 0; }
             fe_stat_tex_count++; fe_stat_atlas_pages++; fe_stat_tex_bytes += ATL_SIDE * ATL_SIDE * 2;
             if (fe_stat_tex_count > fe_stat_tex_count_peak) fe_stat_tex_count_peak = fe_stat_tex_count;
         }
@@ -214,9 +271,56 @@ IMP(_glTexImage2D) {
     int ow = w >> sh, oh = h >> sh, k = 1 << sh;
     int opaque = fmt == 0x1907 || type == 0x8363 || fmt == 0x1909;
     uint32_t otype = opaque ? 0x8363u : 0x8033u, ofmt = opaque ? 0x1907u : 0x1908u;
-    uint16_t *out = px ? (uint16_t *)malloc((size_t)ow * (size_t)oh * 2u) : NULL;
-    if (px && !out) { rt_log("texture %dx%d: no memory to convert", w, h); return 0; }
-    if (out) {
+    int pw = pot2(ow), ph = pot2(oh);
+    uint16_t *out = NULL;
+    if (!px) {
+        /* Ka3D glTexImage2D(POT, NULL) then SubImage. Charge the driver's
+         * store on the OS heap (RGBA8 for UNSIGNED_BYTE, 16-bit otherwise).
+         * Do not upload uninitialised memory: SubImage fills it, or the
+         * fail path draws a solid fallback. */
+#ifndef FN_NANO
+        {
+            uint32_t bpp = (type == 0x8033u || type == 0x8363u || type == 0x8034u) ? 2u : 4u;
+            uint32_t bytes = (uint32_t)pw * (uint32_t)ph * bpp;
+            if (!tex_drv_charge(bound_tex, bytes ? bytes : 16u))
+                tex_convert_fail(w, h, pw != w || ph != h ? "POT pad: no memory" : "no memory to convert");
+        }
+#endif
+        return 0;
+    }
+    /* One POT 16-bit store. Convert row-by-row; no full-size extra buffer. */
+    out = (uint16_t *)fe_os_alloc((uint32_t)pw * (uint32_t)ph * 2u);
+    if (!out) {
+        tex_convert_fail(w, h, pw != ow || ph != oh ? "POT pad: no memory" : "no memory to convert");
+        if (!texh[bound_tex]) {
+            texh[bound_tex] = be_tex_create();
+            if (texh[bound_tex] && ++fe_stat_tex_count > fe_stat_tex_count_peak)
+                fe_stat_tex_count_peak = fe_stat_tex_count;
+        }
+        if (texh[bound_tex]) {
+#ifndef FN_NANO
+            if (getenv("AB_REPRO_UNINIT")) {
+                /* Unwritten GPU store: be_soft fills a loud rainbow. */
+                be_tex_image(texh[bound_tex], 0, pw, ph, ofmt, otype, NULL);
+                tex_drv_release(bound_tex);
+                return 0;
+            }
+#endif
+            {
+                uint16_t fb[16];
+                int i;
+                for (i = 0; i < 16; i++) fb[i] = opaque ? 0xF800u : 0xF00Fu;
+                be_tex_image(texh[bound_tex], 0, 4, 4, ofmt, otype, fb);
+                rt_log("texture %dx%d: solid fallback (convert failed)", w, h);
+            }
+        }
+#ifndef FN_NANO
+        tex_drv_release(bound_tex);
+#endif
+        return 0;
+    }
+    memset(out, 0, (size_t)pw * (size_t)ph * 2u);
+    {
         const uint8_t *src = G8(px);
         for (int y = 0; y < oh; y++) for (int x = 0; x < ow; x++) {
             int acc[4] = {0, 0, 0, 0}, c[4];
@@ -225,25 +329,12 @@ IMP(_glTexImage2D) {
                 acc[0] += c[0] * c[3]; acc[1] += c[1] * c[3]; acc[2] += c[2] * c[3]; acc[3] += c[3];
             }
             int a = acc[3] / (k * k), r = acc[3] ? acc[0] / acc[3] : 0, g = acc[3] ? acc[1] / acc[3] : 0, b = acc[3] ? acc[2] / acc[3] : 0;
-            out[y * ow + x] = opaque ? (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3))
+            out[y * pw + x] = opaque ? (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3))
                                      : (uint16_t)((r >> 4) << 12 | (g >> 4) << 8 | (b >> 4) << 4 | (a >> 4));
         }
     }
-    {
-        int pw = pot2(ow), ph = pot2(oh);
-        if (pw != ow || ph != oh) {
-            uint16_t *pad = (uint16_t *)calloc((size_t)pw * (size_t)ph, 2u);
-            if (out && pad) {
-                for (int y = 0; y < oh; y++)
-                    memcpy(pad + (size_t)y * (size_t)pw, out + (size_t)y * (size_t)ow, (size_t)ow * 2u);
-            }
-            free(out);
-            out = pad;
-            ow = pw;
-            oh = ph;
-            if (px && !out) { rt_log("texture POT pad: no memory"); return 0; }
-        }
-    }
+    ow = pw;
+    oh = ph;
     if (atl[bound_tex].page) atlas_free(bound_tex);
     if (out && ow <= fe_atlas_max_side && oh <= fe_atlas_max_side) {
         uint16_t *q = out;
@@ -252,7 +343,10 @@ IMP(_glTexImage2D) {
         }
         if (atlas_put(bound_tex, ow, oh, q)) {
             if (texh[bound_tex]) { be_tex_delete(texh[bound_tex]); texh[bound_tex] = 0; fe_stat_tex_count--; }
-            free(out);
+            fe_os_free(out);
+#ifndef FN_NANO
+            tex_drv_release(bound_tex);
+#endif
             fe_stat_tex_bytes -= tex_bytes[bound_tex]; tex_bytes[bound_tex] = 0;
             return 0;
         }
@@ -262,11 +356,16 @@ IMP(_glTexImage2D) {
     }
     if (!texh[bound_tex]) {
         texh[bound_tex] = be_tex_create();
-        if (!texh[bound_tex]) { free(out); return 0; }
+        if (!texh[bound_tex]) { fe_os_free(out); tex_convert_fail(w, h, "no memory to convert"); return 0; }
         if (++fe_stat_tex_count > fe_stat_tex_count_peak) fe_stat_tex_count_peak = fe_stat_tex_count;
     }
     be_tex_image(texh[bound_tex], 0, ow, oh, ofmt, otype, out);
-    free(out);
+    fe_os_free(out);
+#ifndef FN_NANO
+    /* Scratch convert and the NULL RGBA8 driver store are done. Live
+     * pixels sit in the GL backend, which is not this OS heap. */
+    tex_drv_release(bound_tex);
+#endif
     if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
         uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
         fe_pending_tex_shift = 0;
@@ -548,6 +647,8 @@ void fngl_reset(void) {
     fe_scale = 0.75f; fe_scale_y = 0.9f; fe_off_x = 0.f; fe_off_y = 0.f; fe_fb_h = 320.f; fe_view_h = 320;
     fe_tex_shift = 0; fe_tex_min_side = 64; fe_tex_big_side = 256; fe_tex_big_shift = 0; fe_atlas_max_side = 32;
     fe_pending_tex_shift = 0;
+    fe_lowmem = 0;
+    fe_lowmem_why[0] = 0;
     memset(uv_div, 0, sizeof uv_div);
     fe_reset_matrices();
 }

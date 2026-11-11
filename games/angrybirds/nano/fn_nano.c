@@ -203,16 +203,26 @@ static int short_of_memory(uint32_t free0, uint32_t largest, uint32_t need_free,
     mb(a, free0); mb(b, largest); mb(c, need_free); mb(d, need_largest);
     snprintf(note[0], sizeof note[0], "FREE %s BIG %s", a, b);
     snprintf(note[1], sizeof note[1], "NEEDS %s BIG %s", c, d);
-    static const char *const head[] = {"ANGRY BIRDS", "NOT ENOUGH MEMORY", ""};
+    static const char *const head[] = {"ANGRY BIRDS", "NOT ENOUGH MEMORY", "CHECK LOG.TXT"};
     note_n = 0;
     for (int i = 0; i < 3; i++) note_lines[note_n++] = head[i];
     note_lines[note_n++] = note[0];
     note_lines[note_n++] = note[1];
     note_lines[note_n++] = "PAUSE MUSIC, QUIT,";
     note_lines[note_n++] = "THEN OPEN IT AGAIN";
-    logf_("nano7kit not enough memory: heap free %u largest %u, needs %u and %u (music playing?); not starting",
+    logf_("nano7kit not enough memory: heap free %u largest %u, needs %u and %u (music or bluetooth?); check log.txt; not starting",
           (unsigned)free0, (unsigned)largest, (unsigned)need_free, (unsigned)need_largest);
+    fe_enter_lowmem("heap too small to start");
     return -3;
+}
+static void fill_convert_oom_notice(void) {
+    static const char *const oom[] = {
+        "ANGRY BIRDS", "NOT ENOUGH MEMORY", "CHECK LOG.TXT",
+        "PAUSE MUSIC, QUIT,", "THEN OPEN IT AGAIN"
+    };
+    note_n = 0;
+    for (int i = 0; i < 5; i++) note_lines[note_n++] = oom[i];
+    if (!fe_lowmem) fe_enter_lowmem("texture convert failed");
 }
 extern uint32_t host_in_guest, host_outside, host_outside_peak, host_outside_count;
 static int start(int w, int h) {
@@ -243,6 +253,10 @@ static int start(int w, int h) {
     if (rt_init(block, size)) { logf_("nano7kit guest image did not load (Data/AngryBirds/guest.img)"); return -1; }
     uint64_t t0 = plat_time_us();
     if (ab_start()) return -1;
+    if (fe_lowmem || be_stat_tex_fail) {
+        fill_convert_oom_notice();
+        return -3;
+    }
     uint32_t left = hb_os_heap_free();
     int b = (int)(left / BYTES_PER_TRIANGLE);
     be_budget = b < 300 ? 300 : b > 1200 ? 1200 : b;
@@ -264,6 +278,14 @@ void fn_nano_frame(int w, int h, uint32_t n) {
     if (state == 2) {
         static const char *const stopped[] = {"ANGRY BIRDS", "STOPPED", "", "SEE LOG.TXT IN", "DATA/ANGRYBIRDS"};
         notice_draw(w, h, stopped, 5);
+        gll_save();
+        return;
+    }
+    if (state == 1 && (fe_lowmem || be_stat_tex_fail)) {
+        fill_convert_oom_notice();
+        state = 3;
+        notice_draw(w, h, note_lines, note_n);
+        plat_log_flush();
         gll_save();
         return;
     }

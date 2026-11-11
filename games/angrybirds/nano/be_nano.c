@@ -129,6 +129,17 @@ void be_tex_image(int h, int level, int w, int ht, uint32_t format, uint32_t typ
     glBindTexture(GL_TEXTURE_2D, (GLuint)h);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    if (!px) {
+        /* Never upload uninitialised GPU RAM (c9880d1 rainbow). The front
+         * end draws a 4x4 solid fallback when convert fails. */
+        uint16_t fb[16];
+        int i;
+        for (i = 0; i < 16; i++) fb[i] = 0xF00F;
+        glTexImage2D(GL_TEXTURE_2D, 0, (GLint)format, 4, 4, 0, format, type, fb);
+        be_stat_tex_fail++;
+        plat_log_line("tex upload null: solid fallback");
+        return;
+    }
     glTexImage2D(GL_TEXTURE_2D, 0, (GLint)format, w, ht, 0, format, type, px);
     if (glGetError()) {
         char b[80];

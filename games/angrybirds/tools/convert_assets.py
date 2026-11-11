@@ -9,6 +9,14 @@ fonts, cutscenes, tutorials and level-select fill the 480x320 frame: keep 512
 (one fewer halve than INGAME). Original 1024 sheets are ~1 MB POT 16-bit each
 and do not fit the 6.4/4.0 probe together with the guest block; 512 does.
 The nano GLES upload cap is 512 on a side (be_tex_image).
+
+PNG UI on the 1.0 IPA is RGBA8888. A 505x255 MENU decode is 515100 bytes, twice,
+plus a 16-bit convert, which does not fit the iPod OS heap after the guest
+block (c9880d1: largest 1 MB then 512 KB). Fruit Ninja ships PVR 16-bit and
+never allocates those buffers. Every PNG is rewritten as PVR RGBA4444 (POT
+padded) at convert time, and the sheet .dat filename MENU.png (8 bytes) is
+patched to MENU.pvr (same length). Ka3D picks PNG vs PVR from the extension
+(png_check_sig), not the bytes. No converted assets are committed.
 """
 from __future__ import annotations
 
@@ -59,6 +67,23 @@ def unpack_4444(px: bytes, w: int, h: int) -> list:
         v = px[2 * i] | (px[2 * i + 1] << 8)
         out.append(((v >> 12) * 17, ((v >> 8) & 15) * 17, ((v >> 4) & 15) * 17, (v & 15) * 17))
     return out
+
+
+def pot2(n: int) -> int:
+    p = 1
+    while p < n:
+        p <<= 1
+    return 1 if p < 1 else p
+
+
+def pad_rgba_pot(rgba, w: int, h: int):
+    pw, ph = pot2(w), pot2(h)
+    if pw == w and ph == h:
+        return rgba, w, h
+    out = [(0, 0, 0, 0)] * (pw * ph)
+    for y in range(h):
+        out[y * pw : y * pw + w] = rgba[y * w : (y + 1) * w]
+    return out, pw, ph
 
 
 def pack_4444(rgba, w: int, h: int) -> bytes:
@@ -180,6 +205,7 @@ def pvrtc_decode(data: bytes, w: int, h: int, bpp2: bool) -> list:
 
 
 def write_pvr_4444(path: Path, w: int, h: int, rgba) -> None:
+    rgba, w, h = pad_rgba_pot(rgba, w, h)
     payload = pack_4444(rgba, w, h)
     hdr = struct.pack(
         "<13I",
@@ -362,11 +388,9 @@ def convert_png(src: Path, dst: Path, shift: int, keep: int = MAX_KEEP) -> tuple
             break
         rgba, w, h = box_half(rgba, w, h)
         did = True
-    if did:
-        write_png(dst, rgba, w, h)
-    else:
-        dst.write_bytes(src.read_bytes())
-    return w, h, did
+    # Always 16-bit PVR so runtime never new[]s a 400-515 KB RGBA8 decode.
+    write_pvr_4444(dst, w, h, rgba)
+    return w, h, True
 
 
 def convert_tree(app: Path, dest: Path) -> dict:
@@ -403,7 +427,9 @@ def convert_tree(app: Path, dest: Path) -> dict:
             _, pw, ph = load_png(src.read_bytes())
             keep = keep_for(src.stem)
             need = needed_shift(pw, ph, keep)
-            w, h, did = convert_png(src, out, need, keep)
+            # Same-length name in the sheet .dat: MENU.png (8) -> MENU.pvr (8).
+            pvr = out.with_suffix(".pvr")
+            w, h, did = convert_png(src, pvr, need, keep)
             if did:
                 scaled[src.stem] = need
                 n_scale += 1
@@ -412,7 +438,10 @@ def convert_tree(app: Path, dest: Path) -> dict:
         elif suf == ".dat":
             # Keep original sprite pixel sizes so Image::draw dest quads stay
             # 480x320. UV wrap from the smaller PNG is undone in fngl using texscale.
-            out.write_bytes(src.read_bytes())
+            raw = src.read_bytes()
+            if b".png" in raw:
+                raw = raw.replace(b".png", b".pvr")
+            out.write_bytes(raw)
             n_copy += 1
         else:
             out.write_bytes(src.read_bytes())

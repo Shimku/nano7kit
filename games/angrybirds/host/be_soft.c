@@ -40,7 +40,28 @@ void be_tex_image(int h, int level, int w, int ht, uint32_t format, uint32_t typ
     be_stat_uncompressed++;
     if (getenv("FN_TEXLOG")) fprintf(stderr, "tex %d %dx%d fmt %x type %x\n", h, w, ht, format, type);
     put_rgba(t, w, ht);
-    if (!px) return;
+    if (!px) {
+        int y, x;
+        if (getenv("AB_REPRO_UNINIT")) {
+            /* Uninitialised GPU store: the nano left whatever was in the
+             * driver's buffer (rainbow on c9880d1). calloc would hide that. */
+            for (y = 0; y < ht; y++) for (x = 0; x < w; x++) {
+                uint8_t *d = t->rgba + 4 * (y * w + x);
+                d[0] = (uint8_t)(x * 37 + y * 19);
+                d[1] = (uint8_t)(x * 13 + 80);
+                d[2] = (uint8_t)(y * 29 + 40);
+                d[3] = 255;
+            }
+            return;
+        }
+        /* Never draw garbage: solid magenta, same as the nano fallback. */
+        be_stat_tex_fail++;
+        for (y = 0; y < ht; y++) for (x = 0; x < w; x++) {
+            uint8_t *d = t->rgba + 4 * (y * w + x);
+            d[0] = 255; d[1] = 0; d[2] = 255; d[3] = 255;
+        }
+        return;
+    }
     const uint8_t *s = px;
     for (int i = 0; i < w * ht; i++) {
         uint8_t *d = t->rgba + 4 * i;

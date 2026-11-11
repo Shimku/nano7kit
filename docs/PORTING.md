@@ -180,12 +180,16 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   (`px = 239-gy, py = gx`) so a landscape screenshot matches the iPod.
 - **Assets** (`tools/convert_assets.py`): wav/mp3 skipped; INGAME sheets keep
   max side 256. MENU, SPLASHES and TUTORIALS keep 512 (one fewer halve than
-  1024-class sheets at 256). MENU_1 (hills, 512x512 POT) and the other UI
-  sheets stay 256: host peak with those three at 512 is 2,105,344 bytes, which
-  is what fits after the 2 MB guest block on the 6.4/4.0 probe. Original 1024
-  sheets cannot upload (nano `be_tex_image` cap 512). Sprite `.dat` stays at
-  original pixels; UV wrap is undone from `texscale`. Lua 5.1 bytecode is copied
-  as-is.
+  1024-class sheets at 256). Every PNG is rewritten as a POT-padded PVR
+  RGBA4444 file (`MENU.png` -> `MENU.pvr`) and the sheet `.dat` filename is
+  patched in place (same 8-byte length). Ka3D picks PNG vs PVR from the
+  extension. That is so the runtime never allocates a 400-515 KB RGBA8
+  decode (c9880d1 OS heap after the guest block cannot). MENU_1 (hills) and
+  the other UI sheets stay 256 on a side. Original 1024 sheets cannot upload
+  (nano `be_tex_image` cap 512). Sprite `.dat` pixel sizes stay original;
+  UV wrap is undone from `texscale`.
+  Lua 5.1 bytecode is copied as-is. Converted files stay in ignored `build/`
+  and `Data/AngryBirds`; none are committed.
 - **Nano side** (`nano/`): most of the translated engine is Thumb + software
   float so the loaded image stays about 2.2 MiB (ARM+VFP for everything was
   3.2 MiB text). Box2D in `recomp_14.c`/`recomp_15.c` is ARM+softfp+VFP like
@@ -233,13 +237,32 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   `castleCameraData` so the castle intro cannot keep a wood-block close-up
   on L2+, and `AB_DEVICE_TEST` uses the map-select load (`ab_goto_level`)
   rather than `ab_load_lua_level`. A full `lua_gc` runs before each map load
-  so dead level tables do not fill the 2 MB heap by Level 9. Shape logs are
+  and on every `levelName` change (in-game `loadNextLevel` too) so dead level
+  tables do not fill the 2 MB heap by Level 9. Shape logs are
   type-aware (circle vs polygon); the old dump read every fixture as a
   polygon, so circles looked like a nonsense vertex count and NaN size.
   Guest malloc payload is 8-aligned (4-byte header, heap base 4-mod-8);
   LDRD/VLDR.64 targets are checked. Host `AB_DEVICE_TEST=1` plays L1 then L2,
-  L3, L1 again, then chapter 1, with a pinch out then in on every level, the
-  2 MB first-fit heap, 512 texture cap, and `docs/log.txt` plus `sync.txt`.
+  L3, L1 again, then chapter 1, with a pinch out then in on every level, a
+  one-finger pan while zoomed out, the device-like OS heap (3.86 MB free,
+  2 MB then 1 MB then 512 KB largest; allocs that do not fit return NULL),
+  512 texture cap, and `docs/log.txt` plus `sync.txt`. RECIPE 13 converts
+  IPA PNGs to PVR RGBA4444 (`.pvr` + `.dat` patch) at install so
+  SPLASHES/MENU never new[] 400-515 KB RGBA8 decode buffers (c9880d1 ran
+  out of the leftover 512 KB and uploaded uninitialised GPU memory: rainbow
+  menu and blocks, fail counter 0). Convert is one POT 16-bit store from
+  `plat_os_alloc`; a failed convert counts as fail and draws a solid
+  fallback. Host `AB_REPRO_UNINIT` plus original IPA PNGs still shows the
+  rainbow and the lying fail=0. Two-finger pinch latches down to
+  `minWorldScale` (whole level, or bird/castle span if lua min is stuck at
+  play scale); one-finger drag pans in game x. RECIPE 14 models both OS
+  heaps in `AB_DEVICE_TEST` (`AB_OS_HEAP=low` is c9880d1 with Bluetooth and
+  music: 3.86 MB free, 2 MB largest; `AB_OS_HEAP=clean` is the Fruit Ninja
+  clean boot: 6.01 MB free, 4 MB largest). Chapter 1 must pass on clean and
+  on low once textures are 4444. If start or a texture convert cannot fit,
+  the app draws the same red NOT ENOUGH MEMORY / CHECK LOG.TXT screen as
+  PvZ and never uploads uninitialised GPU memory. `AB_OS_HEAP=busy` is
+  below both (1 MB largest) and is the host red-screen check.
   `AB_GESTURE_TEST=1`
   checks a drag never moves the composited frame, a two-finger pinch changes
   worldScale, and L1 then L2 then L3 load in one session. VCMP

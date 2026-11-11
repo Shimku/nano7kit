@@ -4,9 +4,11 @@
  * short, so the iPod never runs into the OS allocator's out-of-memory reboot. */
 #include <stdint.h>
 #include <string.h>
-#include "gl.h"
 #include "notice.h"
+#ifndef NOTICE_NO_GL
+#include "gl.h"
 #include "gl_left.h"
+#endif
 
 /* 5x7 capitals, digits and . , / : - ( ); nano7kit's own (MIT) */
 static const char notice_chars[] = " (),-./0123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ";
@@ -59,7 +61,9 @@ static const uint8_t notice_font[44][7] = {
 
 #define TW 128
 #define TH 64
+#ifndef NOTICE_NO_GL
 static GLuint tex;
+#endif
 static uint16_t texels[TW * TH];
 
 static const uint8_t *glyph(char c) {
@@ -83,6 +87,36 @@ void notice_render(uint16_t *px, const char *const *lines, int n) {
         }
     }
 }
+void notice_fill_rgb(uint8_t *fb, int w, int h, int bpp, int stride, const char *const *lines, int n) {
+    int x, y, dw, dh, x0, y0;
+    if (!fb || w < 1 || h < 1 || bpp < 3 || stride < w * bpp) return;
+    notice_render(texels, lines, n);
+    for (y = 0; y < h; y++) {
+        uint8_t *row = fb + y * stride;
+        for (x = 0; x < w; x++) {
+            uint8_t *p = row + x * bpp;
+            p[0] = 76; p[1] = 10; p[2] = 10;
+            if (bpp >= 4) p[3] = 255;
+        }
+    }
+    dw = TW * 7 / 4;
+    dh = TH * 7 / 4;
+    x0 = (w - dw) / 2;
+    y0 = (h - dh) / 2;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    for (y = 0; y < dh && y0 + y < h; y++) {
+        int ty = y * TH / dh;
+        for (x = 0; x < dw && x0 + x < w; x++) {
+            uint8_t *p;
+            if (!texels[ty * TW + (x * TW / dw)]) continue;
+            p = fb + (y0 + y) * stride + (x0 + x) * bpp;
+            p[0] = p[1] = p[2] = 255;
+            if (bpp >= 4) p[3] = 255;
+        }
+    }
+}
+#ifndef NOTICE_NO_GL
 void notice_reset(void) { tex = 0; }
 void notice_draw(int w, int h, const char *const *lines, int n) {
     if (!tex) {
@@ -117,3 +151,4 @@ void notice_draw(int w, int h, const char *const *lines, int n) {
     glTexCoordPointer(2, GL_FLOAT, 0, uv);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 }
+#endif

@@ -13,7 +13,7 @@ int32_t plat_file_size(const char *name);              /* -1 if absent */
 int32_t plat_file_read(const char *name, uint32_t off, void *dst, uint32_t n);
 int plat_file_write(const char *name, const void *src, uint32_t n);
 void plat_trace(void);                                 /* host: print a backtrace; nano: no-op */
-void *plat_os_alloc(uint32_t n);                       /* nano: OS heap; host: calloc. Large GL scratch and image decode. */
+void *plat_os_alloc(uint32_t n);                       /* nano: hb_os_alloc; host: AB_OS_HEAP=low 3.86/2/1/0.5 MB or clean 6.01/4 MB, NULL if no fit */
 void plat_os_free(void *p);
-uint32_t plat_os_largest(void);                        /* largest contiguous OS-heap block (pure read on the nano) */
+uint32_t plat_os_largest(void);                        /* largest power-of-two OS free run (pure read on the nano) */
 #endif
