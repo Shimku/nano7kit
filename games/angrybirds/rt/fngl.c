@@ -523,7 +523,7 @@ IMP(_glGetIntegerv) {
     if (!r1) return 0;
     switch (r0) {
     case 0x0BA2: gw32(r1, (uint32_t)vx); gw32(r1 + 4, (uint32_t)vy); gw32(r1 + 8, (uint32_t)vw); gw32(r1 + 12, (uint32_t)vh); break;
-    case 0x0D33: gw32(r1, 1024); break;          /* GL_MAX_TEXTURE_SIZE */
+    case 0x0D33: gw32(r1, 512); break;           /* GL_MAX_TEXTURE_SIZE: nano be_tex_image cap */
     case 0x0DE1: gw32(r1, bound_tex); break;
     default: gw32(r1, 0); break;
     }

@@ -22,6 +22,17 @@ extern const uint32_t rt_import_slot_count;
 
 uint32_t g_imparea;                 /* 32 bytes per import name */
 static uint32_t heap_lo, heap_hi, stack_lo;
+static uint32_t align_faults, align_logged;
+void rt_check_align8(uint32_t a) {
+    if (a & 7u) {
+        align_faults++;
+        if (align_logged < 8) {
+            align_logged++;
+            rt_log("align8 %08x (LDRD/VLDR.64, Cortex-A5 needs 8)", a);
+        }
+    }
+}
+uint32_t rt_align_faults(void) { return align_faults; }
 
 void rt_log(const char *fmt, ...) {
     char buf[256];
@@ -53,9 +64,11 @@ void rt_watch_store(uint32_t a, uint32_t v) {
 #endif
 
 /* ---- heap: boundary tags, first fit with an address-ordered free list ---------------------
- * block: [u32 size|used][payload ...][u32 size|used]; size counts header+footer, 8-aligned.
- * free blocks keep next/prev free links in the payload. */
-#define HDR(p) ((p) - 4)
+ * block: [u32 size|used][payload ...][u32 size|used]. Header is 4 bytes; heap_lo is
+ * 4-mod-8 so the payload sits on an 8-byte boundary (Cortex-A5 LDRD / VLDR.64)
+ * without a pad word that ate 4 bytes of every live object. Size counts
+ * header+footer, 8-aligned. free blocks keep next/prev in the payload. */
+#define HEAP_HDR 4u
 static uint32_t free_head, used_bytes, peak_bytes;
 static uint32_t bsize(uint32_t b) { return gr32(b) & ~7u; }
 static int bused(uint32_t b) { return gr32(b) & 1; }
@@ -80,8 +93,11 @@ static void fpush(uint32_t b) {
     if (p) fset_next(p, b); else free_head = b;
 }
 static void heap_init(uint32_t lo, uint32_t hi) {
-    heap_lo = (lo + 7) & ~7u; heap_hi = hi & ~7u;
-    /* sentinels: a used 8-byte block at each end */
+    uint32_t a = (lo + 7u) & ~7u, top = hi & ~7u;
+    /* 4-mod-8 base: payload at block+4 is 8-aligned. */
+    heap_lo = a + 4u;
+    heap_hi = top > 4u ? top - 4u : top;
+    if (heap_hi < heap_lo + 32u) { heap_lo = a; heap_hi = top; }
     bset(heap_lo, 8, 1);
     bset(heap_hi - 8, 8, 1);
     uint32_t b = heap_lo + 8, size = heap_hi - 8 - b;
@@ -91,7 +107,7 @@ static uint32_t heap_largest_free(void) {
     uint32_t best = 0, b;
     for (b = free_head; b; b = fnext(b)) {
         uint32_t size = bsize(b);
-        uint32_t payload = size > 8 ? size - 8 : 0;
+        uint32_t payload = size > (HEAP_HDR + 4u) ? size - (HEAP_HDR + 4u) : 0;
         if (payload > best) best = payload;
     }
     return best;
@@ -243,7 +259,7 @@ uint32_t g_malloc(uint32_t n) {
         plat_trace();
     }
 #endif
-    uint32_t need = (n + 8 + 7) & ~7u;
+    uint32_t need = (n + HEAP_HDR + 4u + 7u) & ~7u;
     if (need < 16) need = 16;
     for (uint32_t b = free_head; b; b = fnext(b)) {
         uint32_t size = bsize(b);
@@ -255,7 +271,7 @@ uint32_t g_malloc(uint32_t n) {
         }
         bset(b, size, 1);
         used_bytes += size; if (used_bytes > peak_bytes) peak_bytes = used_bytes;
-        return b + 4;
+        return b + HEAP_HDR;
     }
     /* 8 KB+ sprite new[] can sit on the OS heap when the guest block is packed.
      * Tiny lua cells stay in-guest so the host outside table is not filled. */
@@ -275,7 +291,7 @@ uint32_t g_malloc(uint32_t n) {
 void g_free(uint32_t p) {
     if (!p) return;
     if (g_free_outside(p)) return;
-    uint32_t b = p - 4;
+    uint32_t b = p - HEAP_HDR;
     if (b < heap_lo || b >= heap_hi || !bused(b)) { rt_log("bad free %08x", p); return; }
     uint32_t size = bsize(b);
     used_bytes -= size;
@@ -293,7 +309,7 @@ uint32_t g_realloc(uint32_t p, uint32_t n) {
         if (n <= osz) return p;
         old = osz;
     } else {
-        old = bsize(p - 4) - 8;
+        old = bsize(p - HEAP_HDR) - (HEAP_HDR + 4u);
         if (n <= old) return p;
     }
     q = g_malloc(n);
@@ -368,6 +384,7 @@ int rt_init(void *block, uint32_t block_size) {
     stack_lo = g_hi - GUEST_STACK;
     if (heap + 65536u > stack_lo) { rt_log("guest block too small"); return -1; }
     used_bytes = peak_bytes = 0;
+    align_faults = align_logged = 0;
     memset(out_slot, 0, sizeof out_slot);
     out_used = out_peak = out_count = malloc_fail = 0;
     heap_init(heap, stack_lo);

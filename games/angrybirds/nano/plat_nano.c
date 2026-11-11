@@ -104,26 +104,38 @@ uint64_t plat_time_us(void) {
     return (uint64_t)t_high << 32 | now;
 }
 
-/* ---- log: kept in memory, appended to log.txt after start-up, each level load, every so
- * often and on a fatal. hb_fs_write truncates, so a flush that rewrote the whole buffer
- * after rotation dropped earlier LEVEL lines; append the unflushed tail instead. */
-#define LOG_CAP 32768u
+/* ---- log: kept in memory. Flush rewrites log.txt whole, then sync.txt (last line) after
+ * it, like PvZ: on this iPod the file written last before a reboot can come back empty, so
+ * sync.txt is the one that may be lost, not log.txt. LEVEL lines live in the buffer until
+ * rotation; rotation keeps the newest half so a 1-1, 1-2, 1-3 run still has LEVEL. */
+#define LOG_CAP 65536u
 /* the log and the archive chunk live in .bss, inside the app image the resident frees on
  * unload: an hb_os_alloc here would outlive the app (there is no quit callback) */
 static char log_store[LOG_CAP + SLACK] __attribute__((aligned(64)));
+static char sync_store[256 + SLACK] __attribute__((aligned(64)));
 static char *log_buf;
-static uint32_t log_len, log_dirty, log_disk;
+static uint32_t log_len, log_dirty;
+static void write_sync(void) {
+    uint32_t e = log_len, b, k;
+    while (e && log_buf[e - 1] == '\n') e--;
+    b = e;
+    while (b && log_buf[b - 1] != '\n') b--;
+    k = e - b;
+    if (k > 240) k = 240;
+    memcpy(sync_store, log_buf + b, k);
+    sync_store[k++] = '\n';
+    hb_fs_write(DATA_DIR "/sync.txt", sync_store, k);
+}
 void plat_log_line(const char *line) {
-    if (!log_buf) { log_buf = log_store; log_len = 0; log_disk = 0; }
-    uint32_t n = (uint32_t)strlen(line);
+    uint32_t n;
+    if (!log_buf) { log_buf = log_store; log_len = 0; }
+    n = (uint32_t)strlen(line);
     if (n > 200) n = 200;
     if (log_len + n + 1 > LOG_CAP) {
-        /* keep what is already on disk; drop only unflushed bytes from the front of
-         * the unwritten tail so a 1-1, 1-2, 1-3 run still appends LEVEL lines. */
-        if (log_disk > 0 && log_disk <= log_len) {
-            memmove(log_buf, log_buf + log_disk, log_len - log_disk);
-            log_len -= log_disk;
-            log_disk = 0;
+        uint32_t keep = LOG_CAP / 2;
+        if (log_len > keep) {
+            memmove(log_buf, log_buf + log_len - keep, keep);
+            log_len = keep;
         }
         if (log_len + n + 1 > LOG_CAP) return;
     }
@@ -131,44 +143,17 @@ void plat_log_line(const char *line) {
     log_dirty = 1;
 }
 void plat_log_flush(void) {
-    uint32_t extra, oldn = 0;
-    uint8_t *old = NULL;
-    void *ptrs[2];
-    uint32_t lens[2];
-    int nparts = 0;
     if (!log_buf || !log_dirty) return;
-    if (log_disk > log_len) log_disk = 0;
-    extra = log_len - log_disk;
-    if (!extra) { log_dirty = 0; return; }
     hb_fs_mkdir(DATA_DIR);
-    if (hb_fs_exists(DATA_DIR "/log.txt")) {
-        oldn = hb_fs_size(DATA_DIR "/log.txt");
-        if (oldn > 96u * 1024u) {
-            uint8_t *full = malloc(oldn);
-            uint32_t keep = 64u * 1024u;
-            if (full) {
-                uint32_t got = hb_fs_read(DATA_DIR "/log.txt", full, oldn);
-                if (got > keep) {
-                    old = malloc(keep);
-                    if (old) { memcpy(old, full + got - keep, keep); oldn = keep; }
-                    else oldn = 0;
-                } else {
-                    old = full; full = NULL; oldn = got;
-                }
-                free(full);
-            } else oldn = 0;
-        } else if (oldn) {
-            old = malloc(oldn);
-            if (old) oldn = hb_fs_read(DATA_DIR "/log.txt", old, oldn);
-            else oldn = 0;
-        }
-    }
-    if (old && oldn) { ptrs[nparts] = old; lens[nparts] = oldn; nparts++; }
-    ptrs[nparts] = log_buf + log_disk; lens[nparts] = extra; nparts++;
-    hb_fs_write_parts(DATA_DIR "/log.txt", ptrs, lens, nparts);
-    free(old);
-    log_disk = log_len;
+    hb_fs_write(DATA_DIR "/log.txt", log_buf, log_len);
+    write_sync();
     log_dirty = 0;
+}
+void plat_log_step(const char *what, uint32_t a) {
+    char b[160];
+    snprintf(b, sizeof b, "step %s %u", what ? what : "-", (unsigned)a);
+    plat_log_line(b);
+    plat_log_flush();
 }
 void plat_trace(void) {}
 extern void fn_nano_fatal(void);
@@ -221,4 +206,4 @@ uint32_t plat_load_image(void *dst, uint32_t size) {
     /* the guest block has the heap after the image, so the read may run past size by SLACK */
     return hb_fs_read(DATA_DIR "/guest.img", dst, size + SLACK) == size ? size : 0;
 }
-void plat_nano_reset(void) { host_in_guest = host_outside = host_outside_peak = host_outside_count = 0; t_last = t_high = 0; log_buf = NULL; log_len = log_dirty = log_disk = 0; }
+void plat_nano_reset(void) { host_in_guest = host_outside = host_outside_peak = host_outside_count = 0; t_last = t_high = 0; log_buf = NULL; log_len = log_dirty = 0; }

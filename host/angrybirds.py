@@ -31,7 +31,7 @@ IPA_SHA256_PREFIX = "cdea1290"
 CMD = "./start nabase add 'Angry Birds' --payload /path/to/AngryBirds.ipa"
 FAT_EXE = "/Apps/Executables/Angry Birds.hbapp"
 FAT_DATA = "/Apps/Data/AngryBirds"
-RECIPE = 9
+RECIPE = 12
 
 # Memory model. IMAGE_BYTES is the loaded .hbapp span (code + log in .bss).
 # The translated engine is Thumb + software float so this fits; runtime/GL stay ARM+VFP.
@@ -39,7 +39,7 @@ RECIPE = 9
 # (PC-relative pools are folded into C). Lua/Box2D live in the 2 MB guest block;
 # 256 KB+ image decode is OS heap.
 # Textures: MENU/SPLASHES/TUTORIALS keep 512, the rest 256 (see convert_assets).
-IMAGE_BYTES = 2_393_472 + 4096          # span of angrybirds.hbapp from mkrelocapp, plus align
+IMAGE_BYTES = 2_393_472 + 4096 + 32768  # hbapp span plus 64 KB log ring in .bss
 BLOCK_MAX = 0x200000
 BLOCK_MIN = 0x190000
 GL_KEEP = 0x180000

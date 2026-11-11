@@ -44,6 +44,14 @@ ROOT_NAMES = (
     "__ZN17IphoneOSInterface13setResolutionEii",
     "__ZN7GameApp7keyDownEN9framework3App7KeyTypeE",
     "__ZN7GameApp5keyUpEN9framework3App7KeyTypeE",
+    # Shell calls these on every level change. Const getTable was missing from
+    # the reachable set, so AB_LuaGetTable was 0 and setTheme never saw objects.theme.
+    "__ZNK3lua8LuaTable8getTableEPKc",
+    "__ZNK3lua8LuaTable9getNumberEPKc",
+    "__ZNK3lua8LuaTable9getStringEPKc",
+    "__ZN7GameLua8setThemeEN4lang6StringE",
+    "__ZN7GameLua9loadLevelEN4lang6StringE",
+    "__ZN3lua9LuaObject4callEPKc",
 )
 # silent: OpenAL is stubbed in the runtime; skip ObjC UIApplicationMain path
 STUBS = {
@@ -667,10 +675,10 @@ class Emitter:
             if h:
                 src_lo = "0x%xu" % (a + 8) if rd == 15 else REG[rd]
                 src_hi = "0x%xu" % (a + 8) if (rd + 1) == 15 else REG[rd + 1]
-                return "S32(%s,%s);S32((%s)+4,%s);%s" % (addr, src_lo, addr, src_hi, wb)
+                return "rt_check_align8(%s);S32(%s,%s);S32((%s)+4,%s);%s" % (addr, addr, src_lo, addr, src_hi, wb)
             lo = self.set_reg(rd, "L32(%s)" % addr, a)
             hi = self.set_reg(rd + 1, "L32((%s)+4)" % addr, a)
-            return lo + hi + wb
+            return "rt_check_align8(%s);" % addr + lo + hi + wb
         if l:
             if s_bit and h:
                 load = "(uint32_t)(int32_t)(int16_t)L16(%s)" % addr
@@ -959,9 +967,12 @@ class Emitter:
                         return "VS[%d]=0x%xu;" % (idx, bits)
             if dbl:
                 idx = vd | (d << 4)
+                if idx * 2 + 1 >= 32:
+                    self.stats["vfp_d16"] = self.stats.get("vfp_d16", 0) + 1
+                    return "rt_log(\"VFP d16-d31 VLDR/VSTR at 0x%x\");" % a
                 if l:
-                    return "VS[%d]=L32(%s);VS[%d]=L32((%s)+4);" % (idx * 2, addr, idx * 2 + 1, addr)
-                return "S32(%s,VS[%d]);S32((%s)+4,VS[%d]);" % (addr, idx * 2, addr, idx * 2 + 1)
+                    return "rt_check_align8(%s);VS[%d]=L32(%s);VS[%d]=L32((%s)+4);" % (addr, idx * 2, addr, idx * 2 + 1, addr)
+                return "rt_check_align8(%s);S32(%s,VS[%d]);S32((%s)+4,VS[%d]);" % (addr, addr, idx * 2, addr, idx * 2 + 1)
             idx = (vd << 1) | d
             if l:
                 return "VS[%d]=L32(%s);" % (idx, addr)
@@ -978,7 +989,12 @@ class Emitter:
         # Thumb image past the 4.0 MB largest-block budget. A short loop is the
         # same guest stores, much less C.
         vs0 = ((vd | (d << 4)) * 2) if dbl else ((vd << 1) | d)
+        if vs0 + max(n, 1) > 32:
+            self.stats["vfp_d16"] = self.stats.get("vfp_d16", 0) + 1
+            return "rt_log(\"VFP d16-d31 VLDM/VSTM at 0x%x\");" % a
         lines = ["{uint32_t a_=%s;" % start_e]
+        if dbl:
+            lines.append("rt_check_align8(a_);")
         if n > 0:
             if l:
                 lines.append("for(int i_=0;i_<%du;i_++)VS[%d+i_]=L32(a_+4u*(uint32_t)i_);" % (n, vs0))
@@ -1087,6 +1103,9 @@ class Emitter:
         # An earlier decode swapped VMLS and VNMLS. Image::draw then did
         # s6 = m00*tx - x (= -x with identity RS2D), so clip corners sheared.
         if dbl:
+            if dd >= 16 or dn >= 16 or dm >= 16:
+                self.stats["vfp_d16"] = self.stats.get("vfp_d16", 0) + 1
+                return "rt_log(\"VFP d16-d31 CDP at 0x%x\");" % a
             if op_hi == 0 and op_mid == 0 and not op2:
                 return Dset(dd, "%s*%s+%s" % (D(dn), D(dm), D(dd)))
             if op_hi == 0 and op_mid == 0 and op2:
@@ -1147,6 +1166,9 @@ class Emitter:
             # FMDRR / FMRRD: Dm in CRm+M (bits 3-0 and bit 5), ARM pair Rd,Rn
             idx = (w & 15) | (((w >> 5) & 1) << 4)
             rn = (w >> 16) & 15
+            if idx >= 16:
+                self.stats["vfp_d16"] = self.stats.get("vfp_d16", 0) + 1
+                return "rt_log(\"VFP d16-d31 FMDRR/FMRRD at 0x%x\");" % a
             if l:
                 return "%s=VS[%d];%s=VS[%d];" % (REG[rd], idx * 2, REG[rn], idx * 2 + 1)
             return "VS[%d]=%s;VS[%d]=%s;" % (idx * 2, REG[rd], idx * 2 + 1, REG[rn])
@@ -1271,7 +1293,8 @@ def main():
         "LuaSetNumber": "__ZN3lua8LuaTable9setNumberEPKcf",
         "LuaSetString": "__ZN3lua8LuaTable9setStringEPKcS2_",
         "LuaSetBool": "__ZN3lua8LuaTable10setBooleanEPKcb",
-        "LuaGetTable": "__ZN3lua8LuaTable8getTableEPKc",
+        "LuaGetTable": "__ZNK3lua8LuaTable8getTableEPKc",
+        "LuaGetNumber": "__ZNK3lua8LuaTable9getNumberEPKc",
         "LuaGetString": "__ZNK3lua8LuaTable9getStringEPKc",
         "LuaTableD1": "__ZN3lua8LuaTableD1Ev",
         "SetTheme": "__ZN7GameLua8setThemeEN4lang6StringE",

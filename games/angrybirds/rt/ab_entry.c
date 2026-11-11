@@ -20,13 +20,22 @@ static int started;
 static struct { int down, id; float x, y, gx, gy; } fed[AB_FINGERS];
 static int lbutton_held;
 static int pinch_on;
-static float pinch_d0, pinch_s0, pinch_cx, pinch_cy;
+static float pinch_d0, pinch_s0, pinch_cx, pinch_cy, pinch_play;
+static char watch_name[32], watch_pending[32];
+static int watch_wait, watch_dyn0, cam_hold;
+static float watch_x0;
+static uint32_t step_n;
 static int guest_ok(uint32_t a, uint32_t n);
 static uint32_t intern_str(const char *s);
 static void ab_lua_iphone_screen(void);
 static void ab_lua_set_number(const char *name, float v);
 static uint32_t game_lua(void);
 static void ab_apply_pinch(void);
+static void ab_reset_play_cam(void);
+static void ab_log_level(const char *name);
+static void ab_iphone_cameras(void);
+static void ab_apply_bird_cam(void);
+static void ab_lua_gc(void);
 
 static uint32_t mk_string(const char *s) {
     uint32_t o = g_malloc(16), p = g_strdup(s);
@@ -116,6 +125,7 @@ int ab_start(void) {
     rt_log("ab_start: ok, guest heap %u, ctx vtbl=%08x ref=%u present_cb=%08x",
            rt_heap_used(), ctx ? gr32(ctx) : 0, ctx ? gr32(ctx + 4) : 0,
            ctx ? gr32(ctx + 0x2d4u) : 0);
+    plat_log_step("ab_start", rt_heap_used());
 #ifdef RT_CHECK
     if (getenv("AB_WATCH")) rt_watch_addr = ctx;
 #endif
@@ -167,6 +177,17 @@ static void panel_to_game(float px, float py, float *gx, float *gy) {
 #ifndef AB_LuaGetTable
 #define AB_LuaGetTable 0x7ccf8u
 #endif
+#if !AB_LuaGetTable
+#undef AB_LuaGetTable
+#define AB_LuaGetTable 0x7ccf8u
+#endif
+#ifndef AB_LuaGetNumber
+#define AB_LuaGetNumber 0x7c858u
+#endif
+#if !AB_LuaGetNumber
+#undef AB_LuaGetNumber
+#define AB_LuaGetNumber 0x7c858u
+#endif
 #ifndef AB_LuaTableD1
 #define AB_LuaTableD1 0x77de8u
 #endif
@@ -175,6 +196,12 @@ static void panel_to_game(float px, float py, float *gx, float *gy) {
 #endif
 #ifndef AB_SetTheme
 #define AB_SetTheme 0x92b8u
+#endif
+#ifndef AB_StringCStr
+#define AB_StringCStr 0x4a89cu
+#endif
+#ifndef AB_StringD1
+#define AB_StringD1 0x4abf4u
 #endif
 #define AB_LBUTTON 57u
 /* GameLua::update copies App::touches().size() (App+628) into lua `touches`.
@@ -341,6 +368,7 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
         }
     }
     be_frame_end();
+    ab_watch_level();
     ab_apply_pinch();
 }
 
@@ -361,16 +389,9 @@ void ab_load_level(const char *name) {
      * would otherwise leave bodies frozen (or, on device, we force it on). */
     ab_phys_enable(1);
     ab_phys_log(name);
-    {
-        ab_phys_info i;
-        extern int be_stat_tex_fail;
-        ab_phys_snapshot(&i);
-        rt_log("LEVEL %s scale=%.3f left=%.1f top=%.1f ctx=%dx%d obj=%d vis=%d/%d tex=%d fail=%d heap=%u",
-               name, (double)i.world_scale, (double)i.cam_left, (double)i.cam_top,
-               i.ctx_w, i.ctx_h, i.obj_n, i.vis_all, i.bodies,
-               fe_stat_tex_count, be_stat_tex_fail, (unsigned)rt_heap_used());
-        plat_log_flush();
-    }
+    strncpy(watch_name, name, sizeof watch_name - 1);
+    watch_name[sizeof watch_name - 1] = 0;
+    ab_log_level(name);
 }
 
 /* lua::LuaObject::call(char const*): the menu's PLAY sprite is hit-tested at
@@ -420,14 +441,14 @@ static uint32_t game_lua(void) {
 }
 
 static uint32_t intern_str(const char *s) {
-    static const char *keys[64];
-    static uint32_t ptrs[64];
+    static const char *keys[96];
+    static uint32_t ptrs[96];
     static int n;
     int i;
     if (!s) return 0;
     for (i = 0; i < n; i++)
         if (keys[i] == s || (keys[i] && strcmp(keys[i], s) == 0)) return ptrs[i];
-    if (n >= 64) return g_strdup(s);
+    if (n >= 96) return g_strdup(s);
     keys[n] = s;
     ptrs[n] = g_strdup(s);
     return ptrs[n++];
@@ -493,12 +514,17 @@ static void ab_apply_pinch(void) {
         pinch_s0 = scale;
         pinch_cx = left + 0.5f * AB_VIEW_W / scale;
         pinch_cy = top + 0.5f * AB_VIEW_H / scale;
+        if (!(pinch_play > 0.22f && pinch_play < 1.05f)) pinch_play = scale;
         return;
     }
     ns = pinch_s0 * (pinch_d0 / d);
     minz = 0.22f;
-    maxz = pinch_s0 * 1.6f;
-    if (maxz < pinch_s0) maxz = pinch_s0;
+    if (AB_LuaGetNumber && glu) {
+        float mn = U2F(rt_call("getNumber", AB_LuaGetNumber, glu, intern_str("minWorldScale"), 0, 0, 0, 0));
+        if (mn > 0.10f && mn < 0.90f) minz = mn;
+    }
+    maxz = pinch_play > minz ? pinch_play : 0.70f;
+    if (maxz < minz + 0.02f) maxz = minz + 0.02f;
     if (maxz > 1.05f) maxz = 1.05f;
     if (ns < minz) ns = minz;
     if (ns > maxz) ns = maxz;
@@ -549,9 +575,259 @@ static void ab_lua_iphone_screen(void) {
     ab_lua_set_number("screenHeight", AB_VIEW_H);
 }
 
+static const char *ab_level_name(void) {
+    uint32_t glu = game_lua(), p;
+    static uint32_t slot;
+    if (!glu || !AB_LuaGetString) return "";
+    if (!slot) {
+        slot = g_malloc(16);
+        if (slot) memset(G8(slot), 0, 16);
+    }
+    if (!slot) return "";
+    if (gr32(slot) && AB_StringD1)
+        rt_call("StringD1", AB_StringD1, slot, 0, 0, 0, 0, 0);
+    memset(G8(slot), 0, 16);
+    rt_call("getString", AB_LuaGetString, slot, glu, intern_str("levelName"), 0, 0, 0);
+    p = AB_StringCStr ? rt_call("cstr", AB_StringCStr, slot, 0, 0, 0, 0, 0) : gr32(slot);
+    if (!p || !guest_ok(p, 1u)) return "";
+    return (const char *)G8(p);
+}
+
+static float cam_get_num(uint32_t tbl, const char *k) {
+    if (!tbl || !k || !AB_LuaGetNumber) return 0.f;
+    return U2F(rt_call("getNumber", AB_LuaGetNumber, tbl, intern_str(k), 0, 0, 0, 0));
+}
+
+/* Level files ship iPad tables (sx~2.25, screenHeight 1024). loadLevelInternal
+ * rescales by lua screenHeight / camera.screenHeight on the first map load,
+ * then lua screenHeight becomes 320. The next level's 1024 tables are then
+ * multiplied by 320/320 if lua copied camera.screenHeight back, or not
+ * rescaled at all if loadNextLevel skips that pass. Draw uses those tables:
+ * sx 2.25 on a 480x320 view is one slingshot filling the panel, the rest
+ * white (GL clear; sky tiles do not cover that zoom). Pinch overrides
+ * C++ worldScale after update, which is why zoom-out showed the real scene. */
+static int ab_iphone_cam_table(const char *which) {
+    uint32_t glu = game_lua(), objs, cam;
+    float sx, sy, sh, factor, nsx, nsy;
+    if (!glu || !which) return 0;
+    objs = lua_subtable(glu, "objects");
+    if (!objs) return 0;
+    cam = lua_subtable(objs, which);
+    if (!cam) return 0;
+    sx = cam_get_num(cam, "sx");
+    sy = cam_get_num(cam, "sy");
+    sh = cam_get_num(cam, "screenHeight");
+    if (!(sh > 400.f) && !(sx > 1.05f)) return 0;
+    factor = AB_VIEW_H / (sh > 1.f ? sh : 1024.f);
+    nsx = sx * factor;
+    nsy = (sy > 1e-4f ? sy : sx) * factor;
+    if (nsx < 0.22f) nsx = 0.22f;
+    if (nsx > 1.05f) nsx = 0.70f;
+    if (nsy < 0.22f) nsy = 0.22f;
+    if (nsy > 1.05f) nsy = nsx;
+    lua_table_set_num(cam, "sx", nsx);
+    lua_table_set_num(cam, "sy", nsy);
+    lua_table_set_num(cam, "screenWidth", AB_VIEW_W);
+    lua_table_set_num(cam, "screenHeight", AB_VIEW_H);
+    rt_log("cam %s iphone sx=%.3f->%.3f sh=%.0f->%d",
+           which, (double)sx, (double)nsx, (double)sh, (int)AB_VIEW_H);
+    return 1;
+}
+
+static void ab_iphone_cameras(void) {
+    ab_lua_iphone_screen();
+    ab_iphone_cam_table("castleCameraData");
+    ab_iphone_cam_table("birdCameraData");
+}
+
+static void ab_apply_bird_cam(void) {
+    uint32_t glu = game_lua(), objs, cam, castle, scr;
+    float sx, sy, px, py, left, top;
+    if (!glu) return;
+    objs = lua_subtable(glu, "objects");
+    if (!objs) return;
+    cam = lua_subtable(objs, "birdCameraData");
+    if (!cam) return;
+    sx = cam_get_num(cam, "sx");
+    sy = cam_get_num(cam, "sy");
+    px = cam_get_num(cam, "px");
+    py = cam_get_num(cam, "py");
+    if (sx > 1.05f || sy > 1.05f) {
+        float sh = cam_get_num(cam, "screenHeight");
+        float factor = AB_VIEW_H / (sh > 400.f ? sh : 1024.f);
+        if (!(sx > 0.20f) && sy > 0.20f) sx = sy;
+        sx *= factor;
+    } else if (!(sx > 0.20f && sx < 1.05f)) {
+        if (sy > 0.20f && sy < 1.05f) sx = sy;
+        else return;
+    }
+    if (sx < 0.22f) sx = 0.22f;
+    if (sx > 1.05f) sx = 0.70f;
+    castle = lua_subtable(objs, "castleCameraData");
+    if (castle) {
+        lua_table_set_num(castle, "sx", sx);
+        lua_table_set_num(castle, "sy", sx);
+        lua_table_set_num(castle, "px", px);
+        lua_table_set_num(castle, "py", py);
+    }
+    scr = lua_subtable(glu, "animationScreen");
+    if (scr) {
+        lua_table_set_num(scr, "x", px);
+        lua_table_set_num(scr, "y", py);
+    }
+    left = px - 0.5f * AB_VIEW_W / sx;
+    top = py - 0.5f * AB_VIEW_H / sx;
+    rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(sx), 0, 0, 0, 0);
+    rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(left), F2U(top), 0, 0, 0);
+    ab_lua_set_number("worldScale", sx);
+    ab_lua_set_number("currentZoomedScale", sx);
+    ab_lua_set_number("zoomLevel", sx);
+    ab_lua_set_number("oldZoomLevel", sx);
+    ab_lua_set_number("animationWorldScale", sx);
+    ab_lua_set_number("animationWorldScale2", sx);
+    pinch_play = sx;
+    {
+        static float lsx, lpx, lpy;
+        if (sx != lsx || px != lpx || py != lpy) {
+            lsx = sx; lpx = px; lpy = py;
+            rt_log("cam bird sx=%.3f px=%.0f py=%.0f left=%.0f top=%.0f",
+                   (double)sx, (double)px, (double)py, (double)left, (double)top);
+        }
+    }
+}
+
+static void ab_force_theme(void) {
+    uint32_t glu = game_lua(), objs, theme;
+    float tn;
+    char name[16];
+    static uint32_t theme_slot;
+    extern int be_stat_tex_fail;
+    if (!glu) return;
+    tn = U2F(rt_call("getNumber", AB_LuaGetNumber, glu, intern_str("currentThemeNumber"), 0, 0, 0, 0));
+    if (!(tn >= 1.f && tn <= 12.f)) tn = 1.f;
+    snprintf(name, sizeof name, "theme%.0f", (double)tn);
+    rt_log("setTheme %s tex=%d fail=%d", name, fe_stat_tex_count, be_stat_tex_fail);
+    /* Do not ping-pong theme2/theme1 here: each flip loads the other
+     * theme's Image tables into the 2 MB first-fit heap and chapter 1
+     * runs out of 80-byte holes by Level 9. C++ setTheme from objects.theme
+     * is enough; stale GL names are rebound when the Image is recreated. */
+    if (!theme_slot) {
+        theme_slot = g_malloc(16);
+        if (theme_slot) memset(G8(theme_slot), 0, 16);
+    }
+    theme = theme_slot;
+    objs = lua_subtable(glu, "objects");
+    if (theme) {
+        if (gr32(theme) && AB_StringD1)
+            rt_call("StringD1", AB_StringD1, theme, 0, 0, 0, 0, 0);
+        memset(G8(theme), 0, 16);
+    }
+    if (objs && theme && AB_LuaGetString)
+        rt_call("getString", AB_LuaGetString, theme, objs, intern_str("theme"), 0, 0, 0);
+    if (glu && theme && AB_SetTheme && gr32(theme))
+        rt_call("setTheme", AB_SetTheme, glu, theme, 0, 0, 0, 0);
+    rt_log("setTheme after tex=%d fail=%d", fe_stat_tex_count, be_stat_tex_fail);
+}
+
+static void ab_reset_play_cam(void) {
+    uint32_t glu;
+    ab_lua_iphone_screen();
+    ab_iphone_cameras();
+    ab_lua_set_bool("showBG", 1);
+    ab_lua_set_number("castleCameraTimer", 3.f);
+    ab_lua_set_number("cameraResetTimer", 0.f);
+    ab_lua_set_number("cameraAnimationSlider", 1.f);
+    ab_lua_set_number("cameraAnimationSliderTarget", 1.f);
+    ab_lua_set_bool("allowResetToBirdCamera", 1);
+    ab_call_lua("defaultCamera");
+    ab_apply_bird_cam();
+    ab_cam_fit_play();
+    glu = game_lua();
+    if (!(pinch_play > 0.22f && pinch_play < 1.05f))
+        pinch_play = glu ? U2F(gr32(glu + AB_CAM_SCALE)) : 0.60f;
+    if (!(pinch_play > 0.22f && pinch_play < 1.05f)) pinch_play = 0.60f;
+    ab_lua_set_number("worldScale", pinch_play);
+    ab_lua_set_number("currentZoomedScale", pinch_play);
+    ab_lua_set_number("zoomLevel", pinch_play);
+    ab_lua_set_number("oldZoomLevel", pinch_play);
+    pinch_on = 0;
+}
+
+static void ab_log_level(const char *name) {
+    ab_phys_info i;
+    extern int be_stat_tex_fail;
+    ab_phys_snapshot(&i);
+    {
+        uint32_t glu = game_lua();
+        float anim = glu ? U2F(rt_call("getNumber", AB_LuaGetNumber, glu, intern_str("animationWorldScale"), 0, 0, 0, 0)) : 0.f;
+        rt_log("LEVEL %s scale=%.3f anim=%.3f left=%.1f top=%.1f ctx=%dx%d obj=%d vis=%d/%d tex=%d fail=%d heap=%u hole=%u circ=%d poly=%d shapebad=%d align=%u draws=%d",
+               name ? name : "-", (double)i.world_scale, (double)anim, (double)i.cam_left, (double)i.cam_top,
+               i.ctx_w, i.ctx_h, i.obj_n, i.vis_all, i.bodies,
+               fe_stat_tex_count, be_stat_tex_fail, (unsigned)rt_heap_used(),
+               (unsigned)rt_heap_largest_free(), i.circles, i.polygons, i.shape_bad,
+               (unsigned)rt_align_faults(), fe_stat_draws);
+    }
+    plat_log_step(name ? name : "level", ++step_n);
+}
+
+void ab_watch_level(void) {
+    const char *name;
+    ab_phys_info i;
+    extern int be_stat_tex_fail;
+#ifndef FN_NANO
+    if (getenv("AB_NO_WATCH")) return;
+#endif
+    if (!started) return;
+    /* LuaTable::getString throws if the key is NIL. Menu/splash have no
+     * levelName yet; wait until a level has objects. */
+    if (!watch_name[0] && !watch_pending[0]) {
+        ab_phys_snapshot(&i);
+        if (i.dynamic_n < 1 && i.obj_n < 1) return;
+    }
+    name = ab_level_name();
+    if (!name || !name[0]) return;
+    if (!watch_pending[0] && watch_name[0] && strcmp(watch_name, name) == 0) return;
+    if (!watch_pending[0] || strcmp(watch_pending, name) != 0) {
+        strncpy(watch_pending, name, sizeof watch_pending - 1);
+        watch_pending[sizeof watch_pending - 1] = 0;
+        watch_wait = 0;
+        ab_phys_snapshot(&i);
+        watch_dyn0 = i.dynamic_n;
+        watch_x0 = i.sample_n > 0 ? i.sample_x[0] : 0.f;
+        rt_log("LEVEL-PRE %s heap=%u hole=%u tex=%d fail=%d dyn=%d",
+               name, (unsigned)rt_heap_used(), (unsigned)rt_heap_largest_free(),
+               fe_stat_tex_count, be_stat_tex_fail, i.dynamic_n);
+        plat_log_step("level-pre", rt_heap_used());
+    }
+    watch_wait++;
+    /* loadNextLevel only writes levelName; updateLoading creates Box2D on a
+     * later frame. defaultCamera/setTheme before that uses the previous
+     * level's objects and leaves L2+ white. The first level often already
+     * has bodies by the time levelName is readable. */
+    ab_phys_snapshot(&i);
+    if (i.dynamic_n < 1) return;
+    /* updateLoading fills camera tables a few frames after levelName.
+     * defaultCamera before that copies the previous iPad close-up. */
+    if (watch_wait < 16) return;
+    if (watch_name[0] && watch_dyn0 > 0 && watch_wait < 90 &&
+        i.dynamic_n == watch_dyn0 &&
+        i.sample_n > 0 && i.sample_x[0] == watch_x0)
+        return;
+    strncpy(watch_name, watch_pending, sizeof watch_name - 1);
+    watch_name[sizeof watch_name - 1] = 0;
+    watch_pending[0] = 0;
+    fe_reset_matrices();
+    ab_force_theme();
+    ab_reset_play_cam();
+    cam_hold = 128;
+    ab_phys_enable(1);
+    ab_log_level(watch_name);
+}
+
 void ab_load_lua_level(const char *name) {
     if (!name) return;
     cam_reset();
+    ab_lua_gc();
     ab_lua_iphone_screen();
     ab_lua_set_string("levelName", name);
     ab_lua_set_bool("loadingPageDrawn", 1);
@@ -559,46 +835,52 @@ void ab_load_lua_level(const char *name) {
     rt_log("ab_load_lua_level %s", name);
     fe_reset_matrices();
     ab_call_lua("updateLoading");
-    /* levelStartCamera keeps the castle shot while castleCameraTimer <= 2.
-     * RECIPE 7's AABB camera (device test 4) made that look like a floating
-     * plank in a void. Timer 0 restarts the hold; 3 skips it so the first
-     * playable frame is already heading at the bird/slingshot camera. */
-    ab_lua_set_number("castleCameraTimer", 3.f);
-    ab_lua_set_number("cameraResetTimer", 0.f);
-    ab_lua_set_number("cameraAnimationSlider", 1.f);
-    ab_lua_set_number("cameraAnimationSliderTarget", 1.f);
-    ab_lua_set_bool("allowResetToBirdCamera", 1);
-    ab_call_lua("defaultCamera");
+    /* lua setTheme no-ops if objects.theme is unchanged (L14 then L15
+     * are both theme1) and the previous sky tiles stay behind. C++ setTheme
+     * always rebuilds. castleCameraTimer 3 skips the castle intro. */
+    ab_force_theme();
+    ab_reset_play_cam();
     ab_phys_enable(1);
-    {
-        uint32_t glu = game_lua(), objs, theme;
-        static uint32_t theme_slot;
-        /* lua setTheme no-ops if objects.theme is unchanged (L14 then L15
-         * are both theme1) and the previous sky tiles stay behind. */
-        if (!theme_slot) {
-            theme_slot = g_malloc(16);
-            if (theme_slot) memset(G8(theme_slot), 0, 16);
-        }
-        theme = theme_slot;
-        objs = lua_subtable(glu, "objects");
-        if (theme) memset(G8(theme), 0, 16);
-        if (objs && theme && AB_LuaGetString)
-            rt_call("getString", AB_LuaGetString, theme, objs, intern_str("theme"), 0, 0, 0);
-        if (glu && theme && AB_SetTheme && gr32(theme))
-            rt_call("setTheme", AB_SetTheme, glu, theme, 0, 0, 0, 0);
-    }
-    ab_cam_fit_play();
+    strncpy(watch_name, name, sizeof watch_name - 1);
+    watch_name[sizeof watch_name - 1] = 0;
     ab_phys_log(name);
-    {
-        ab_phys_info i;
-        extern int be_stat_tex_fail;
-        ab_phys_snapshot(&i);
-        rt_log("LEVEL %s scale=%.3f left=%.1f top=%.1f ctx=%dx%d obj=%d vis=%d/%d tex=%d fail=%d heap=%u",
-               name, (double)i.world_scale, (double)i.cam_left, (double)i.cam_top,
-               i.ctx_w, i.ctx_h, i.obj_n, i.vis_all, i.bodies,
-               fe_stat_tex_count, be_stat_tex_fail, (unsigned)rt_heap_used());
-        plat_log_flush();
-    }
+    ab_log_level(name);
+}
+
+static void ab_lua_gc(void) {
+    uint32_t glu = game_lua(), st, L;
+    if (!glu || !guest_ok(glu, 12u)) return;
+    st = gr32(glu + 8u);
+    if (!st || !guest_ok(st, 12u)) return;
+    L = gr32(st + 8u);
+    if (!L || !guest_ok(L, 36u)) return;
+    /* lua_gc(L, LUA_GCCOLLECT, 0). Without this the 2 MB first-fit heap
+     * fills by Level 9 (used 1.82 MB, 28-byte hole) because lua keeps
+     * dead level tables until a full collect. */
+    rt_call("lua_gc", 0x7e48cu, L, 2u, 0, 0, 0, 0);
+}
+
+void ab_goto_level(const char *name) {
+    /* Same path as tapping a map button: set levelName and let lua
+     * updateLoading / loadLevelInternal spawn the world. ab_watch_level
+     * applies defaultCamera once the new bodies exist. */
+    if (!name) return;
+    cam_reset();
+    pinch_on = 0;
+    ab_lua_gc();
+    ab_lua_iphone_screen();
+    ab_lua_set_number("zoomLevel", 0.f);
+    ab_lua_set_number("oldZoomLevel", 0.f);
+    ab_lua_set_number("currentZoomedScale", 0.f);
+    ab_lua_set_string("levelName", name);
+    ab_lua_set_bool("loadingPageDrawn", 1);
+    ab_lua_set_bool("showBG", 1);
+    rt_log("ab_goto_level %s", name);
+    plat_log_step("goto", rt_heap_used());
+    fe_reset_matrices();
+    ab_call_lua("updateLoading");
+    ab_iphone_cameras();
+    ab_phys_enable(1);
 }
 
 void ab_phys_snapshot(ab_phys_info *o) {
@@ -678,10 +960,31 @@ void ab_phys_snapshot(ab_phys_info *o) {
             o->sample_x[k] = x;
             o->sample_y[k] = y;
         }
-        /* count the fixture list as well, in case m_fixtureCount is stale */
+        /* count the fixture list as well, in case m_fixtureCount is stale.
+         * Box2D 2.1: circle type 0 size 0x14 (radius +8); polygon type 1 size
+         * 0x98, m_vertexCount at +148. Reading every shape as a polygon made
+         * circles look like nvert garbage and NaN size on the device log. */
         fx = gr32(b + 108u);
         for (fi = 0; fx && fi < 32; fi++) {
-            if (!guest_ok(fx, 28u)) break;
+            uint32_t sh;
+            int st;
+            if (!guest_ok(fx, 32u)) break;
+            sh = gr32(fx + 28u);
+            if (sh && guest_ok(sh, 12u)) {
+                st = (int)gr32(sh + 4u);
+                if (st == 0) {
+                    float rad = U2F(gr32(sh + 8u));
+                    o->circles++;
+                    if (!(rad == rad) || rad <= 0.f || rad > 50.f) o->shape_bad++;
+                } else if (st == 1) {
+                    int nv = guest_ok(sh, 152u) ? (int)gr32(sh + 148u) : -1;
+                    float rad = U2F(gr32(sh + 8u));
+                    o->polygons++;
+                    if (nv < 3 || nv > 8 || !(rad == rad)) o->shape_bad++;
+                } else {
+                    o->shape_bad++;
+                }
+            }
             fx = gr32(fx + 20u);
         }
         if (nfix <= 0 && fi > 0) o->fixtures += fi;
@@ -747,16 +1050,18 @@ void ab_phys_log(const char *tag) {
         int n = snprintf(buf, sizeof buf, "phys %s fx", tag ? tag : "-");
         for (nwalk = 0; b && nwalk < 8 && n > 0 && n < (int)sizeof buf - 48; nwalk++) {
             uint32_t fx, sh;
+            int st, nv;
+            float rad;
             if (!guest_ok(b, 116u)) break;
             fx = gr32(b + 108u);
-            sh = fx && guest_ok(fx, 56u) ? gr32(fx + 28u) : 0;
+            sh = fx && guest_ok(fx, 32u) ? gr32(fx + 28u) : 0;
+            st = sh && guest_ok(sh, 8u) ? (int)gr32(sh + 4u) : -1;
+            rad = sh && guest_ok(sh, 12u) ? U2F(gr32(sh + 8u)) : 0.f;
+            nv = (st == 1 && sh && guest_ok(sh, 152u)) ? (int)gr32(sh + 148u) : (st == 0 ? 0 : -1);
             n += snprintf(buf + n, sizeof buf - (size_t)n,
-                          " t%d fl=%x prx=%d nvert=%d hx=%.2f hy=%.2f",
-                          (int)gr32(b), (unsigned)(gr32(b + 4u) & 0xffffu),
-                          fx && guest_ok(fx, 44u) ? (int)gr32(fx + 40u) : -2,
-                          sh && guest_ok(sh, 152u) ? (int)gr32(sh + 148u) : -1,
-                          sh && guest_ok(sh, 32u) ? (double)U2F(gr32(sh + 28u)) : -1.0,
-                          sh && guest_ok(sh, 44u) ? (double)U2F(gr32(sh + 40u)) : -1.0);
+                          " t%d sh=%d nvert=%d r=%.2f prx=%d",
+                          (int)gr32(b), st, nv, (double)rad,
+                          fx && guest_ok(fx, 44u) ? (int)gr32(fx + 40u) : -2);
             b = gr32(b + 104u);
         }
         rt_log("%s", buf);
@@ -812,21 +1117,48 @@ void ab_phys_log(const char *tag) {
  * looked like they were floating. iPhone tables are already sx~0.3..0.7
  * at 480x320; only iPad tables (sx>1, screenHeight 1024) need a rescale. */
 void ab_cam_fit_play(void) {
-    uint32_t glu = game_lua(), objs, cam;
+    uint32_t glu = game_lua();
     float scale, left, top, cx, cy, ns, factor;
+    ab_phys_info info;
     if (!glu) return;
     ab_lua_iphone_screen();
     ab_lua_set_bool("showBG", 1);
+    /* getTable(castleCameraData) throws on the menu. Only touch tables
+     * once a level has objects. */
+    ab_phys_snapshot(&info);
+    scale = U2F(gr32(glu + AB_CAM_SCALE));
+    if ((info.obj_n > 0 || info.dynamic_n > 0) && scale > 1.05f)
+        ab_iphone_cameras();
+    if (cam_hold > 0 && finger_down_count() == 0) {
+        /* loadLevelInternal resets castleCameraTimer; keep skipping the
+         * castle intro so L2+ is not a wood block in a white void. Fingers
+         * cancel this so pinch still sticks. */
+        static uint64_t hold_us;
+        uint64_t now = plat_time_us();
+        ab_lua_set_number("castleCameraTimer", 3.f);
+        ab_lua_set_number("cameraResetTimer", 0.f);
+        ab_lua_set_number("cameraAnimationSlider", 1.f);
+        ab_lua_set_number("cameraAnimationSliderTarget", 1.f);
+        ab_lua_set_number("levelStartTimer", 10.f);
+        ab_lua_set_bool("allowResetToBirdCamera", 1);
+        if (now != hold_us) {
+            hold_us = now;
+            cam_hold--;
+        }
+        ab_apply_bird_cam();
+    } else if (finger_down_count() > 0) {
+        cam_hold = 0;
+    }
     scale = U2F(gr32(glu + AB_CAM_SCALE));
     if (!(scale > 1.05f)) return;
     left = U2F(gr32(glu + AB_CAM_LEFT));
     top = U2F(gr32(glu + AB_CAM_TOP));
-    /* Level 1 birdCameraData is 1680x1024, sx~2.25. loadLevelInternal
-     * multiplies sx by lua screenHeight / camera.screenHeight; if that
-     * did not run, shrink around the same look-at. */
+    /* C++ worldScale still iPad after cameraFunction copied table sx.
+     * Shrink around the same look-at so this frame's numbers match draw
+     * on the next update. */
     factor = AB_VIEW_H / 1024.f;
     ns = scale * factor;
-    if (ns < 0.35f) ns = 0.35f;
+    if (ns < 0.22f) ns = 0.22f;
     if (ns > 0.90f) ns = 0.90f;
     cx = left + 0.5f * AB_VIEW_W / scale;
     cy = top + 0.5f * AB_VIEW_H / scale;
@@ -835,17 +1167,8 @@ void ab_cam_fit_play(void) {
     rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(ns), 0, 0, 0, 0);
     rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(left), F2U(top), 0, 0, 0);
     ab_lua_set_number("worldScale", ns);
-    objs = lua_subtable(glu, "objects");
-    cam = lua_subtable(objs, "castleCameraData");
-    lua_table_set_num(cam, "sx", ns);
-    lua_table_set_num(cam, "sy", ns);
-    lua_table_set_num(cam, "screenWidth", AB_VIEW_W);
-    lua_table_set_num(cam, "screenHeight", AB_VIEW_H);
-    cam = lua_subtable(objs, "birdCameraData");
-    lua_table_set_num(cam, "sx", ns);
-    lua_table_set_num(cam, "sy", ns);
-    lua_table_set_num(cam, "screenWidth", AB_VIEW_W);
-    lua_table_set_num(cam, "screenHeight", AB_VIEW_H);
+    ab_lua_set_number("currentZoomedScale", ns);
+    ab_lua_set_number("zoomLevel", ns);
     rt_log("cam iphone-rescale from %.3f to %.3f left=%.0f top=%.0f",
            (double)scale, (double)ns, (double)left, (double)top);
 }

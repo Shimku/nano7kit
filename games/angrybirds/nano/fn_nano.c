@@ -292,8 +292,16 @@ void fn_nano_frame(int w, int h, uint32_t n) {
     if (was_down || nq) w_down++;
     if (!nq && was_down) { w_dry++; if (++w_dry_run > w_dry_max) w_dry_max = w_dry_run; } else w_dry_run = 0;
     ab_frame_q(dt, q, nq);
-    if (frames == 0 || frames % 90u == 0)
-        ab_phys_log(frames == 0 ? "start" : "tick");
+    if (frames == 0 || frames % 90u == 0) {
+        ab_phys_info i;
+        extern int be_stat_tex_fail;
+        ab_phys_snapshot(&i);
+        logf_("nano7kit tick f=%u scale=%.3f vis=%d/%d tex=%d fail=%d heap=%u hole=%u shapebad=%d",
+              (unsigned)frames, (double)i.world_scale, i.vis_all, i.bodies,
+              fe_stat_tex_count, be_stat_tex_fail,
+              (unsigned)rt_heap_used(), (unsigned)rt_heap_largest_free(), i.shape_bad);
+        plat_log_flush();
+    }
     if (t_report) {
         t_report = 0;
         logf_("nano7kit press %u at %d,%d: %u samples from the OS list, %u from the mailbox, %u stale",
@@ -322,7 +330,13 @@ void fn_nano_frame(int w, int h, uint32_t n) {
               (unsigned)hb_os_heap_largest(), (unsigned)rt_heap_used(), (unsigned)rt_heap_largest_free(),
               be_stat_live_tex, be_stat_tex_fail,
               fe_stat_tex_bytes, (unsigned)rt_varch_reads, (unsigned)(rt_varch_bytes >> 10));
-        ab_phys_log("flush");
+        {
+            ab_phys_info i;
+            ab_phys_snapshot(&i);
+            logf_("nano7kit flush scale=%.3f vis=%d/%d heap=%u hole=%u shapebad=%d",
+                  (double)i.world_scale, i.vis_all, i.bodies,
+                  (unsigned)rt_heap_used(), (unsigned)rt_heap_largest_free(), i.shape_bad);
+        }
         if (host_outside_count)
             logf_("nano7kit front end outside the block: %u bytes now, %u peak, %u allocations",
                   (unsigned)host_outside, (unsigned)host_outside_peak, (unsigned)host_outside_count);

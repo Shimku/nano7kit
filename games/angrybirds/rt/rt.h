@@ -123,5 +123,7 @@ uint32_t rt_heap_used(void), rt_heap_peak(void), rt_heap_size(void);
 uint32_t rt_heap_largest_free(void);
 uint32_t rt_outside_used(void), rt_outside_peak(void), rt_outside_count(void);
 uint32_t rt_malloc_failures(void);
+uint32_t rt_align_faults(void);
+void rt_check_align8(uint32_t a);
 void rt_log(const char *fmt, ...);
 #endif

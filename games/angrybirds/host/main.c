@@ -17,13 +17,68 @@ extern int be_stat_pvrtc, be_stat_uncompressed, be_tex_peak_bytes, be_check_tiny
 extern int be_stat_tex_fail;
 static const char *data_dir, *img_path, *out_dir;
 static uint64_t fake_us;
-void plat_log_line(const char *l) { fprintf(stderr, "%s\n", l); }
-void plat_log_flush(void) {}
+#define HOST_LOG_CAP 65536u
+static char host_log[HOST_LOG_CAP];
+static uint32_t host_log_len, host_log_dirty;
+static void host_write_sync(void) {
+    char p[512], last[256];
+    uint32_t e = host_log_len, b, k;
+    FILE *f;
+    if (!out_dir) return;
+    while (e && host_log[e - 1] == '\n') e--;
+    b = e;
+    while (b && host_log[b - 1] != '\n') b--;
+    k = e - b;
+    if (k > 240) k = 240;
+    memcpy(last, host_log + b, k);
+    last[k++] = '\n';
+    snprintf(p, sizeof p, "%s/docs", out_dir);
+    mkdir(p, 0755);
+    snprintf(p, sizeof p, "%s/docs/sync.txt", out_dir);
+    f = fopen(p, "wb");
+    if (f) { fwrite(last, 1, k, f); fclose(f); }
+}
+void plat_log_line(const char *l) {
+    uint32_t n;
+    fprintf(stderr, "%s\n", l);
+    n = (uint32_t)strlen(l);
+    if (n > 200) n = 200;
+    if (host_log_len + n + 1 > HOST_LOG_CAP) {
+        uint32_t keep = HOST_LOG_CAP / 2;
+        if (host_log_len > keep) {
+            memmove(host_log, host_log + host_log_len - keep, keep);
+            host_log_len = keep;
+        }
+        if (host_log_len + n + 1 > HOST_LOG_CAP) return;
+    }
+    memcpy(host_log + host_log_len, l, n);
+    host_log_len += n;
+    host_log[host_log_len++] = '\n';
+    host_log_dirty = 1;
+}
+void plat_log_flush(void) {
+    char p[512];
+    FILE *f;
+    if (!host_log_dirty || !out_dir) return;
+    snprintf(p, sizeof p, "%s/docs", out_dir);
+    mkdir(p, 0755);
+    snprintf(p, sizeof p, "%s/docs/log.txt", out_dir);
+    f = fopen(p, "wb");
+    if (f) { fwrite(host_log, 1, host_log_len, f); fclose(f); }
+    host_write_sync();
+    host_log_dirty = 0;
+}
+void plat_log_step(const char *what, uint32_t a) {
+    char b[160];
+    snprintf(b, sizeof b, "step %s %u", what ? what : "-", (unsigned)a);
+    plat_log_line(b);
+    plat_log_flush();
+}
 void plat_trace(void) { void *b[24]; int n = backtrace(b, 24); char **s = backtrace_symbols(b, n);
     fprintf(stderr, "  at"); for (int i = 1; i < n; i++) { const char *p = strchr(s[i], '('); if (p && p[1] == 'F') fprintf(stderr, " %.*s", (int)(strcspn(p + 1, "+)")), p + 1); } fprintf(stderr, "\n"); }
 void *plat_os_alloc(uint32_t n) { return calloc(1, n ? n : 1); }
 void plat_os_free(void *p) { free(p); }
-uint32_t plat_os_largest(void) { return 8u << 20; }   /* host has plenty; the nano uses hb_os_heap_largest */
+uint32_t plat_os_largest(void) { return 4u << 20; }   /* iPod probe largest; the nano uses hb_os_heap_largest */
 void plat_fatal(const char *why) { fprintf(stderr, "FATAL: %s\n", why); plat_trace(); exit(3); }
 uint64_t plat_time_us(void) { return fake_us; }
 uint32_t plat_load_image(void *dst, uint32_t size) {
@@ -71,6 +126,18 @@ static int panel_black(void) {
         for (x = 0; x < 240; x++) {
             unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
             if (r < 12 && g < 12 && b < 12) n++;
+        }
+    }
+    return n;
+}
+static int panel_washed(void) {
+    /* Device white L2: almost the whole 240x432 is near-white / HUD-cyan. */
+    int n = 0, y, x;
+    for (y = 0; y < 432; y++) {
+        for (x = 0; x < 240; x++) {
+            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            if (r >= 210 && g >= 210 && b >= 210) n++;
+            else if (b > 190 && g > 170 && r < 190) n++;
         }
     }
     return n;
@@ -124,30 +191,45 @@ static int level_sane(const char *name, ab_phys_info *a) {
     if (a->dynamic_n < 1) bad = 1;
     if (a->vis_dyn < 1 || a->vis_all < 2) bad = 1;
     if (a->world_scale < 0.22f || a->world_scale > 1.05f) bad = 1;
-    if (pix < 800) bad = 1;
+    if (pix < 8000) bad = 1;
     if (blk > 240 * 432 / 12) bad = 1;
+    /* Device white L2 is ~93% near-white with one untextured wood strip
+     * (pix under 8000). Playable levels can have light sky over 90% wash
+     * and still show 40k+ game pixels. */
+    if (panel_washed() > 240 * 432 * 9 / 10 && pix < 20000) bad = 1;
     if (be_stat_tex_fail) bad = 1;
-    fprintf(stderr, "AB_GESTURE_TEST %s dyn=%d vis=%d/%d scale=%.3f pix=%d black=%d tex=%d fail=%d %s\n",
+    if (a->shape_bad) bad = 1;
+    fprintf(stderr, "AB_GESTURE_TEST %s dyn=%d vis=%d/%d scale=%.3f pix=%d black=%d wash=%d tex=%d fail=%d circ=%d poly=%d shapebad=%d %s\n",
             name, a->dynamic_n, a->vis_dyn, a->vis_all, (double)a->world_scale,
-            pix, blk, fe_stat_tex_count, be_stat_tex_fail, bad ? "FAIL" : "ok");
+            pix, blk, panel_washed(), fe_stat_tex_count, be_stat_tex_fail,
+            a->circles, a->polygons, a->shape_bad, bad ? "FAIL" : "ok");
     return !bad;
 }
-static void pinch_out(int frames) {
+static void pinch_spread(int frames, float from, float to) {
     int i;
-    ab_touch(0, 1, 80.f, 216.f);
-    ab_touch(1, 1, 160.f, 216.f);
+    ab_touch(0, 1, 120.f - from, 216.f);
+    ab_touch(1, 1, 120.f + from, 216.f);
     fake_us += 33333; ab_frame(1.f / 30.f);
     fake_us += 33333; ab_frame(1.f / 30.f);
     for (i = 1; i <= frames; i++) {
         float k = (float)i / (float)frames;
-        ab_touch(0, 1, 80.f - 50.f * k, 216.f);
-        ab_touch(1, 1, 160.f + 50.f * k, 216.f);
+        float h = from + (to - from) * k;
+        ab_touch(0, 1, 120.f - h, 216.f);
+        ab_touch(1, 1, 120.f + h, 216.f);
         fake_us += 33333; ab_frame(1.f / 30.f);
     }
     for (i = 0; i < 8; i++) { fake_us += 33333; ab_frame(1.f / 30.f); }
-    ab_touch(0, 0, 30.f, 216.f);
-    ab_touch(1, 0, 210.f, 216.f);
+    ab_touch(0, 0, 120.f - to, 216.f);
+    ab_touch(1, 0, 120.f + to, 216.f);
     fake_us += 33333; ab_frame(1.f / 30.f);
+}
+static void pinch_out(int frames) { pinch_spread(frames, 40.f, 90.f); }
+static void pinch_in(int frames) { pinch_spread(frames, 90.f, 30.f); }
+static void double_tap(float x, float y) {
+    tap_at(x, y);
+    fake_us += 80000; ab_frame(1.f / 30.f);
+    tap_at(x, y);
+    wait_frames(12);
 }
 int main(int argc, char **argv) {
     if (argc < 5) { fprintf(stderr, "usage: %s DATA_DIR guest.img OUT_DIR FRAMES [SHOT_EVERY] [script]\n", argv[0]); return 2; }
@@ -165,6 +247,18 @@ int main(int argc, char **argv) {
     if (getenv("AB_GUEST_BLOCK")) size = (uint32_t)strtoul(getenv("AB_GUEST_BLOCK"), 0, 0);
     void *block = malloc(size);
     if (!block) { fprintf(stderr, "host block %u failed\n", size); return 1; }
+    {
+        char p[512];
+        snprintf(p, sizeof p, "%s/docs", out_dir);
+        mkdir(p, 0755);
+        if (getenv("AB_BAD_SAVE")) {
+            FILE *sf;
+            snprintf(p, sizeof p, "%s/docs/highscores.lua", out_dir);
+            sf = fopen(p, "wb");
+            if (sf) { fwrite("\xff\x00{{{{not lua", 1, 16, sf); fclose(sf); }
+            fprintf(stderr, "AB_BAD_SAVE wrote garbage highscores.lua\n");
+        }
+    }
     if (rt_init(block, size)) return 1;
     if (ab_start()) return 1;
     fprintf(stderr, "init ok: guest block %u heap %u used %u peak %u\n",
@@ -401,6 +495,143 @@ int main(int argc, char **argv) {
         wait_frames(90);
         if (!level_sane("Level3", &a)) fail++;
         fprintf(stderr, "AB_GESTURE_TEST %s\n", fail ? "FAIL" : "PASS");
+        if (rt_malloc_failures()) {
+            fprintf(stderr, "FATAL: %u guest allocations failed\n", rt_malloc_failures());
+            return 3;
+        }
+        return fail ? 1 : 0;
+    }
+    if (getenv("AB_DEVICE_TEST")) {
+        /* iPod path: splash, PLAY, Level 1 from the map, then the map-select
+         * load (levelName + updateLoading) for Level2 / Level3. loadNextLevel
+         * follows lua levelOrder (Level1, Level57, ...) which is not 1-2-3.
+         * Pinch out then in on each level. L1 again, then chapter 1. */
+        int fail = 0, i, n, ch1_fail = 0;
+        ab_phys_info a, b;
+        float s0, s1, s2;
+        wait_frames(200);
+        tap_at(105.f, 216.f);
+        wait_frames(45);
+        tap_at(151.f, 32.f);
+        wait_frames(20);
+        for (i = 0; i < 600; i++) {
+            fake_us += 33333; ab_frame(1.f / 30.f);
+            ab_phys_snapshot(&a);
+            if (a.dynamic_n > 0) break;
+        }
+        for (i = 0; i < 8; i++) { tap_at(49.f, 324.f); tap_at(55.f, 333.f); }
+        wait_frames(40);
+        if (!level_sane("map-L1", &a)) fail++;
+        dump_panel("panel-l1");
+        s0 = a.world_scale;
+        pinch_out(16);
+        wait_frames(8);
+        ab_phys_snapshot(&b);
+        s1 = b.world_scale;
+        dump_panel("panel-l1-out");
+        fprintf(stderr, "AB_DEVICE_TEST L1 pinch-out %.3f -> %.3f\n", (double)s0, (double)s1);
+        if (!(s1 < s0 - 0.015f)) fail++;
+        pinch_in(16);
+        wait_frames(8);
+        ab_phys_snapshot(&b);
+        s2 = b.world_scale;
+        dump_panel("panel-l1-in");
+        fprintf(stderr, "AB_DEVICE_TEST L1 pinch-in %.3f -> %.3f\n", (double)s1, (double)s2);
+        if (!(s2 > s1 + 0.015f)) fail++;
+        double_tap(120.f, 200.f);
+        ab_phys_snapshot(&b);
+        fprintf(stderr, "AB_DEVICE_TEST L1 double-tap scale %.3f (play was %.3f)\n",
+                (double)b.world_scale, (double)s0);
+        if (b.world_scale < s0 - 0.08f || b.world_scale > s0 + 0.08f) fail++;
+        ab_goto_level("Level2");
+        wait_frames(90);
+        if (!level_sane("next-L2", &a)) fail++;
+        dump_panel("panel-l2");
+        s0 = a.world_scale;
+        pinch_out(16);
+        wait_frames(6);
+        ab_phys_snapshot(&b);
+        dump_panel("panel-l2-out");
+        s1 = b.world_scale;
+        pinch_in(16);
+        wait_frames(6);
+        ab_phys_snapshot(&b);
+        dump_panel("panel-l2-in");
+        s2 = b.world_scale;
+        fprintf(stderr, "AB_DEVICE_TEST L2 pinch %.3f -> %.3f -> %.3f vis %d/%d\n",
+                (double)s0, (double)s1, (double)s2, b.vis_all, b.bodies);
+        if (!(s1 < s0 - 0.010f) || !(s2 > s1 + 0.010f)) fail++;
+        tap_at(215.f, 24.f);
+        wait_frames(8);
+        dump_panel("panel-pause");
+        tap_at(215.f, 24.f);
+        wait_frames(8);
+        ab_goto_level("Level3");
+        wait_frames(90);
+        if (!level_sane("next-L3", &a)) fail++;
+        dump_panel("panel-l3");
+        pinch_out(12); pinch_in(12);
+        ab_goto_level("Level1");
+        wait_frames(40);
+        for (i = 0; i < 8; i++) { tap_at(49.f, 324.f); tap_at(55.f, 333.f); }
+        wait_frames(40);
+        if (!level_sane("again-L1", &a)) fail++;
+        {
+        int ch1_max = getenv("AB_DEVICE_CH1") ? atoi(getenv("AB_DEVICE_CH1")) : 21;
+        for (n = 2; n <= ch1_max; n++) {
+            char tag[24], file[28], lname[16];
+            snprintf(file, sizeof file, "Level%d.lua", n);
+            if (plat_file_size(file) < 0) continue;
+            snprintf(lname, sizeof lname, "Level%d", n);
+            ab_goto_level(lname);
+            wait_frames(90);
+            snprintf(tag, sizeof tag, "ch1-L%d", n);
+            if (n <= 3 || n == 15) {
+                char dump[24];
+                snprintf(dump, sizeof dump, "panel-ch1-l%d", n);
+                dump_panel(dump);
+            }
+            if (!level_sane(tag, &a)) {
+                char dump[28];
+                snprintf(dump, sizeof dump, "panel-ch1-l%d-fail", n);
+                dump_panel(dump);
+                fail++; ch1_fail++;
+            }
+            pinch_out(10); pinch_in(10);
+            ab_phys_snapshot(&b);
+            if (!(b.world_scale > 0.20f && b.world_scale < 1.06f)) fail++;
+        }
+        }
+        plat_log_flush();
+        {
+            char p[512];
+            FILE *lf;
+            char buf[512];
+            int saw_l1 = 0, saw_level = 0, saw_step = 0, saw_pre = 0;
+            snprintf(p, sizeof p, "%s/docs/log.txt", out_dir);
+            lf = fopen(p, "rb");
+            if (!lf) fail++;
+            else {
+                while (fgets(buf, sizeof buf, lf)) {
+                    if (strstr(buf, "LEVEL Level1")) saw_l1 = 1;
+                    if (!strncmp(buf, "LEVEL Level", 11)) saw_level++;
+                    if (!strncmp(buf, "LEVEL-PRE ", 10)) saw_pre = 1;
+                    if (!strncmp(buf, "step ", 5)) saw_step = 1;
+                }
+                fclose(lf);
+            }
+            snprintf(p, sizeof p, "%s/docs/sync.txt", out_dir);
+            lf = fopen(p, "rb");
+            if (!lf) fail++;
+            else fclose(lf);
+            fprintf(stderr, "AB_DEVICE_TEST log LEVEL L1=%d n=%d pre=%d step=%d\n",
+                    saw_l1, saw_level, saw_pre, saw_step);
+            if (!saw_l1 || saw_level < 2 || !saw_pre || !saw_step) fail++;
+        }
+        fprintf(stderr, "AB_DEVICE_TEST chapter1 extra fails %d heap %u hole %u texfail %d align %u shapebad last=%d\n",
+                ch1_fail, rt_heap_used(), rt_heap_largest_free(), be_stat_tex_fail,
+                rt_align_faults(), a.shape_bad);
+        fprintf(stderr, "AB_DEVICE_TEST %s\n", fail ? "FAIL" : "PASS");
         if (rt_malloc_failures()) {
             fprintf(stderr, "FATAL: %u guest allocations failed\n", rt_malloc_failures());
             return 3;

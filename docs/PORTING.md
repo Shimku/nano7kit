@@ -190,8 +190,12 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   float so the loaded image stays about 2.2 MiB (ARM+VFP for everything was
   3.2 MiB text). Box2D in `recomp_14.c`/`recomp_15.c` is ARM+softfp+VFP like
   Fruit Ninja. Runtime, GL and `setjmp` stay ARM+VFP. On-device log:
-  `/Apps/Data/AngryBirds/log.txt` (appended; each `LEVEL` line has name,
-  camera scale/bounds, textures loaded/failed; lua errors as `luaerr` / `game:`).
+  `/Apps/Data/AngryBirds/log.txt` (rewritten whole on each flush, then
+  `sync.txt` with the last line, like PvZ). `plat_log_step` flushes so a
+  LEVEL line is on disk before the next frame. Each `LEVEL` line has name,
+  camera scale/bounds, textures loaded/failed, heap used/hole; lua errors as
+  `luaerr` / `game:`. `ab_watch_level` writes those lines on every
+  `levelName` change (including in-game `loadNextLevel`).
   Guest.img maps only `__cstring` through DATA (~80 KB). The 240x432 picture
   is fixed like Fruit Ninja (`fe_scale` 0.75/0.9, `fe_off` 0); only the game's
   camera moves. Two fingers are ids 0 and 1 so native pinch zoom and double-tap
@@ -215,7 +219,28 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   the pause page. RECIPE 8 (device test 4) dropped the AABB and the extra
   `drawGame`. RECIPE 9 (device test 5) dropped the whole-frame pan/zoom from
   `62b2fb5` (`fe_off` / `view_zoom` moved HUD and pause with a drag) and
-  passes the second finger through so native pinch works. `AB_GESTURE_TEST=1`
+  passes the second finger through so native pinch works. RECIPE 10 made the
+  host fail the way the iPod did: after Level 1, the next level kept iPad
+  camera tables (sx about 2.25, screenHeight 1024), so draw showed one
+  slingshot filling the panel and white void around it. `ab_load_lua_level`
+  hid that by forcing `defaultCamera` after a rescale the game's own load
+  did not keep. RECIPE 11 rescales `castleCameraData` / `birdCameraData` to
+  480x320 before `cameraFunction` draws, clamps pinch to the play scale so
+  zoom goes both ways, and writes `LEVEL` plus a `sync.txt` last-step
+  marker from `ab_watch_level` (the device never calls the host-only
+  load helpers, which is why cef3060's LEVEL lines never reached
+  `/Apps/Data/AngryBirds/log.txt`). RECIPE 12 copies the bird camera onto
+  `castleCameraData` so the castle intro cannot keep a wood-block close-up
+  on L2+, and `AB_DEVICE_TEST` uses the map-select load (`ab_goto_level`)
+  rather than `ab_load_lua_level`. A full `lua_gc` runs before each map load
+  so dead level tables do not fill the 2 MB heap by Level 9. Shape logs are
+  type-aware (circle vs polygon); the old dump read every fixture as a
+  polygon, so circles looked like a nonsense vertex count and NaN size.
+  Guest malloc payload is 8-aligned (4-byte header, heap base 4-mod-8);
+  LDRD/VLDR.64 targets are checked. Host `AB_DEVICE_TEST=1` plays L1 then L2,
+  L3, L1 again, then chapter 1, with a pinch out then in on every level, the
+  2 MB first-fit heap, 512 texture cap, and `docs/log.txt` plus `sync.txt`.
+  `AB_GESTURE_TEST=1`
   checks a drag never moves the composited frame, a two-finger pinch changes
   worldScale, and L1 then L2 then L3 load in one session. VCMP
   writes FPSCR only (APSR via FMSTAT), matching ARM; the old immediate `n_=`

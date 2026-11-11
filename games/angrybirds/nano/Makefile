@@ -8,7 +8,7 @@ BUILD ?= build/nano
 # Runtime stays ARM+VFP (the firmware traps VFP from Thumb). The translated
 # engine is Thumb + software float so the .hbapp fits the ~2.25 MB image budget
 # (ARM+VFP was ~3.25 MB text and left no room for the guest block).
-ARCH := -marm -mcpu=cortex-a5 -mfloat-abi=softfp -mfpu=vfpv3-d16 -mword-relocations
+ARCH := -marm -mcpu=cortex-a5 -mfloat-abi=softfp -mfpu=vfpv4-d16 -mword-relocations
 ARCH_RECOMP := -mthumb -mcpu=cortex-a5 -mfloat-abi=soft -mword-relocations
 CCOMMON := -Os -ffp-contract=off -std=gnu99 -ffunction-sections -fdata-sections \
           -fno-common -fno-strict-aliasing -fwrapv -fno-unwind-tables -fno-asynchronous-unwind-tables -fno-exceptions -MMD -MP -DFN_NANO \
