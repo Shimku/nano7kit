@@ -75,7 +75,8 @@ class MenuTests(unittest.TestCase):
         for key in ("Mario 64", "Temple Run", "Fruit Ninja", "PvZ Portable"):
             self.assertEqual(by_name(key).group, "games")
             self.assertTrue(by_name(key).tested)
-        self.assertEqual({i.key for i in ITEMS if not i.tested}, {"Mario Kart 64", "Flappy Bird", "Doodle Jump"})
+        self.assertEqual({i.key for i in ITEMS if not i.tested},
+                         {"Mario Kart 64", "Flappy Bird", "Doodle Jump", "Angry Birds"})
         self.assertEqual(by_name("Paint folder").name, "Paint.nanoapp")
         self.assertEqual(by_name("Free RAM folder").name, "Free RAM.nanoapp")
 
@@ -179,7 +180,7 @@ class MenuTests(unittest.TestCase):
         self.assertIn("Paint folder     same app as Paint below", text)
         self.assertIn("Free RAM folder  same app as Free RAM below", text)
         untested = [l.split()[3] for l in text.splitlines() if l.endswith("(untested)")]
-        self.assertEqual(untested, ["Mario", "Flappy", "Doodle"])
+        self.assertEqual(untested, ["Mario", "Angry", "Flappy", "Doodle"])
         self.assertIn("Always included: Blocks, Game Boy, Probe.", text)
         self.assertIn("Home apps: 5 of 16", text)
         self.assertNotIn("\u2014", text)

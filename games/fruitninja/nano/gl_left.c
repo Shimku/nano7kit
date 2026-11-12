@@ -23,6 +23,8 @@
 static const char *const gll_records[] = {
     "/Apps/Data/FruitNinja/gl_names.txt",
     "/Apps/Data/TempleRun/gl_names.txt",
+    "/Apps/Data/PvZ/gl_names.txt",
+    "/Apps/Data/AngryBirds/gl_names.txt",
 };
 static const char *own;
 static uint32_t lo, hi, saved_lo, saved_hi;

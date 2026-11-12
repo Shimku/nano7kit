@@ -19,8 +19,9 @@ conversion, no erase, no Mac password. Mac-formatted and FAT32 disks both work.
 1. Install NanoApps 1.0: `./start nabase ipsw` downloads `NanoApps-2015-Model.ipsw`
    and checks its SHA-256. In Finder, select the iPod, hold Option, click
    **Check for Update** (not Restore) and pick that file.
-2. Put the iPod in Disk Mode and run `./install` (or double-click
-   `Install nano7kit.command`). Pick 1 when it asks which way to go.
+2. Plug the iPod in so Finder mounts it (usually `/Volumes/IPOD`). Disk Mode
+   is only needed if that volume is not mounted. Then run `./install` (or
+   double-click `Install nano7kit.command`). Pick 1 when it asks which way to go.
    If the iPod still has nano7-untethered files, run `./install --nanoapps`.
 3. Eject and restart the iPod.
 
@@ -82,11 +83,13 @@ with nano7-untethered's patch and nano7kit's Mid-2015 changes to it
 On this base use `./start nabase add` and `./start nabase remove` (or `./install`).
 `./start apps add` and `./start apps remove` are for the nano7-untethered layout.
 `nabase add` builds a game from your file first if it is not built yet or the
-source changed, then copies it, replacing the old copy:
+source changed, then copies it onto the mounted iPod volume, replacing the old
+copy. It asks for Disk Mode only when that volume is not mounted:
 
 ```sh
 ./start nabase backup
 ./start nabase add 'Fruit Ninja' --payload mygames/FruitNinja.ipa
+./start nabase add 'Angry Birds' --payload mygames/AngryBirds.ipa
 ```
 
 ## Commands

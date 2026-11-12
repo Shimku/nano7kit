@@ -640,7 +640,7 @@ def packages(root: Path, *, out=print) -> int:
 
 def status_lines(root: Optional[Path]) -> List[str]:
     if root is None:
-        return ["no mounted iPod: put it in Disk Mode"]
+        return ["no mounted iPod: plug it in so Finder shows /Volumes/IPOD (Disk Mode only if it is not mounted)"]
     st = launcher_state(root)
     lines = [f"volume    {root}", f"base      {detect_base(root)}",
              f"launcher  {st['kind']}" + (f" (version {st['version']})" if "version" in st else ""),

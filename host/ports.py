@@ -8,8 +8,9 @@ Temple Run, Flappy Bird and Doodle Jump live in separate GitHub repos.
 Those trees contain none of the original game files. This toolkit clones
 them on demand into build/ports/ and builds only when you pass --payload.
 
-Fruit Ninja 1.0 is a first-party pipeline in this tree (no olievans123
-repo). Original .ipa stays local; derived Data/FruitNinja is gitignored.
+Fruit Ninja 1.0 and Angry Birds 1.0 are first-party pipelines in this
+tree (no olievans123 repo). Original .ipa stays local; derived Data/
+trees are gitignored.
 
 Helvetica silver_resident (slot A) reads GL apps into a 576 KB staging
 slot (LV_SURFACE_MAX). Super Mario 64 is about 3 MB, so apps add for
@@ -92,12 +93,17 @@ PORT_DATA = {
         "fat": "/Apps/Data/PvZ",
         "required": True,
     },
+    "Angry Birds": {
+        "host": "artifacts/extra/Data/AngryBirds",
+        "fat": "/Apps/Data/AngryBirds",
+        "required": True,
+    },
 }
 
 # PocketJS MicroTS apps (nano7g): RAW_SURFACE, but 1 to 2.2 MB with baked fonts, so slot B too.
 POCKETJS_APPS = frozenset({"JS Hero", "JS Samples", "JS QuickJS"})
-LARGE_GL = frozenset({"Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "PvZ Portable"}) | POCKETJS_APPS
-NEEDS_PAYLOAD = frozenset({"Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "PvZ Portable"})
+LARGE_GL = frozenset({"Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "PvZ Portable", "Angry Birds"}) | POCKETJS_APPS
+NEEDS_PAYLOAD = frozenset({"Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "PvZ Portable", "Angry Birds"})
 NEEDS_ROM = frozenset({"Mario 64", "Mario Kart"})
 
 SLOT_B_FAT = "/Apps/Startup/resident-B.hbapp"
@@ -112,7 +118,7 @@ SKIP_DATA_NAMES = {
     "lastboot.txt",
     "thumbs.db",
 }
-SKIP_DATA_SUFFIX = {".wav", ".aif", ".caf"}
+SKIP_DATA_SUFFIX = {".wav", ".aif", ".caf", ".mp3"}
 # ports whose sound effects are WAV files played by the OS player: their audio is copied
 KEEP_AUDIO = frozenset({"PvZ Portable"})
 
@@ -126,15 +132,18 @@ DOODLE_CMD = "./start apps add 'Doodle Jump' --payload /path/to/DoodleJump.ipa"
 TEMPLE_CMD = "./start apps add TempleRun --ipa /path/to/TempleRun.ipa"
 FRUIT_CMD = "./start apps add 'Fruit Ninja' --ipa /path/to/FruitNinja.ipa"
 PVZP_CMD = "./start apps add 'PvZ Portable' --payload /path/to/pvz-goty"
+ANGRY_CMD = "./start nabase add 'Angry Birds' --payload /path/to/AngryBirds.ipa"
 
 # Original iOS bundle ids we will accept. Wrong game files are refused.
 # PvZ (com.popcap.PvZ) is research-only and has no apps add path. PvZ Portable (the PvZ-Portable engine with
 # the user's own PC GOTY files) is a different port with its own name.
 TEMPLE_BUNDLE_ID = "com.imangi.templerun"
 FRUIT_BUNDLE_ID = "com.Halfbrick.Fruit"
+ANGRY_BUNDLE_ID = "com.clickgamer.AngryBirds"
 PAYLOAD_BUNDLES = {
     "Temple Run": TEMPLE_BUNDLE_ID,
     "Fruit Ninja": FRUIT_BUNDLE_ID,
+    "Angry Birds": ANGRY_BUNDLE_ID,
 }
 
 OVERLAY_PLISTS = (
@@ -175,6 +184,15 @@ OVERLAY_PLISTS = (
         "glyph": "seedling",
         "color": "#4f9a2f",
         "executable_key": "pvz",
+    },
+    {
+        "folder": "angrybirds_rc",
+        "name": "Angry Birds",
+        "bundle_id": "org.nano7kit.angrybirds",
+        "kind": 2,
+        "glyph": "bomb",
+        "color": "#c0392b",
+        "executable_key": "angrybirds",
     },
 )
 
@@ -288,6 +306,14 @@ def missing_help(name: str) -> str:
             "with nano7kit's device layer (games/pvz_portable). Pass the folder holding your own PvZ GOTY "
             "main.pak and properties/ as the payload; nothing from the game is in git. Sound effects, no "
             f"music. Large GL, so it goes on slot B. Check first: {PVZP_CMD} --plan. Then: {PVZP_CMD}"
+        )
+    if name == "Angry Birds":
+        return (
+            "Angry Birds is nano7kit's own static recompile of the original iOS 1.0 "
+            "engine (games/angrybirds, olievans123-style; no game files in git). "
+            f"Pass your own decrypted Angry Birds 1.0 .ipa or unpacked .app as the payload (bundle "
+            f"{ANGRY_BUNDLE_ID}, ipa sha256 cdea1290...). Silent (no music). Large GL, "
+            f"so it goes on slot B like Fruit Ninja. On the NanoApps base: {ANGRY_CMD}"
         )
     return f"{name} is not built in this tree."
 
@@ -691,6 +717,14 @@ def prepare_for_add(
 
             build_pvzp(Path(payload))
         return {"name": name, "present": True, "built": payload is not None}
+    if name == "Angry Birds":
+        if payload is None and not ready:
+            raise Refused(missing_help(name))
+        if payload is not None:
+            from .angrybirds import build as build_angry
+
+            build_angry(Path(payload))
+        return {"name": name, "present": True, "built": payload is not None}
     if not present:
         folder = row.get("folder") or ""
         if folder and (root() / "nanoapps" / "apps" / folder / "Makefile").is_file():
@@ -710,7 +744,7 @@ def print_status() -> None:
     print("nano7kit third-party ports (olievans123)")
     print("Helvetica silver_resident / 39A10023. Pack cap 8 (grow_cache);")
     print("nogrow overlay raises host cap to 16 (./start apps cap enable).")
-    print("Large GL (Mario, Temple Run, Fruit Ninja, PvZ Portable) uses slot B, not the 576 KB slot A.")
+    print("Large GL (Mario, Temple Run, Fruit Ninja, PvZ Portable, Angry Birds) uses slot B, not the 576 KB slot A.")
     print("iOS-port repos state no OSS licence: credit, do not redistribute")
     print("derived game files. Original iOS apps and Nintendo ROMs stay local.")
     print()
