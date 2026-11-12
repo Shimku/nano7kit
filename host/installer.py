@@ -44,7 +44,7 @@ class Item:
     name: str             # ./start apps add NAME
     group: str            # apps | games | pocketjs
     needs: str = ""       # one line: what you supply ("" = nothing)
-    kind: str = "none"    # none | rom | ipa | folder
+    kind: str = "none"    # none | rom | ipa | folder | jar
     tested: bool = True   # run on a real nano
     blurb: str = ""
     bundle: str = ""      # iOS bundle id for kind == ipa
@@ -86,6 +86,9 @@ ITEMS: Tuple[Item, ...] = (
          bundle="com.Halfbrick.Fruit", version="1.0"),
     Item("PvZ Portable", "PvZ Portable", "games",
          "your PC Plants vs. Zombies GOTY folder (main.pak + properties/)", "folder"),
+    Item("Gravity Defied", "Gravity Defied", "games",
+         "your 2004 Codebrew Gravity Defied J2ME .jar (or a folder / levels.mrg)", "jar",
+         tested=False),
     Item("Flappy Bird", "Flappy Bird", "games", "your Flappy Bird 1.2 .ipa", "ipa", tested=False,
          version="1.2"),
     Item("Doodle Jump", "Doodle Jump", "games", "your Doodle Jump 1.0 .ipa", "ipa", tested=False,
@@ -520,6 +523,14 @@ def check_file(item: Item, path: Path) -> Tuple[bool, str]:
         if item.version and facts["version"] and facts["version"] != item.version and not facts["version"].startswith(item.version + "."):
             return False, f"this is {item.key} {facts['version']}; the port needs {item.version}"
         return True, f"{item.key} {facts['version'] or '?'} .ipa (decryption is checked when it builds)"
+    if item.kind == "jar":
+        from .gravity_defied import inspect_payload
+
+        facts = inspect_payload(p)
+        if facts["ok"]:
+            n = sum(len(lg) for lg in facts["header"].get("leagues", []))
+            return True, f"Gravity Defied {facts['kind']}, {n} tracks"
+        return False, " ".join(facts["problems"]) or "not a Gravity Defied jar, folder or levels.mrg"
     return True, ""
 
 
@@ -534,6 +545,12 @@ def scan_drop_dir(item: Item, folder: Path = DROP_DIR) -> Optional[Path]:
         elif item.kind == "ipa" and (p.suffix.lower() in (".ipa", ".app")):
             cands.append(p)
         elif item.kind == "folder" and p.is_dir() and (p / "main.pak").exists():
+            cands.append(p)
+        elif item.kind == "jar" and (
+            (p.is_file() and p.suffix.lower() in {".jar", ".zip", ".mrg"})
+            or p.name.lower() == "levels.mrg"
+            or (p.is_dir() and list(p.glob("levels.mrg")))
+        ):
             cands.append(p)
     for p in cands:
         ok, _ = check_file(item, p)
@@ -593,7 +610,7 @@ def build_na_plan(state: NanoState, selected: Sequence[str], files: Dict[str, Pa
         argv = ["nabase", "add", item.name]
         if item.kind == "rom":
             argv += ["--rom", str(files[item.key])]
-        elif item.kind in ("ipa", "folder"):
+        elif item.kind in ("ipa", "folder", "jar"):
             argv += ["--payload", str(files[item.key])]
         title = f"Copy {item.name} into /Apps" if item.name.endswith(".nanoapp") else f"Add {item.key}"
         step = Step(title, argv, kind="na", root=False, check=item.key)
@@ -654,7 +671,7 @@ def build_plan(state: NanoState, selected: Sequence[str], files: Dict[str, Path]
         argv = ["apps", "add", item.name, "--skip-wait"]
         if item.kind == "rom":
             argv += ["--rom", str(files[item.key])]
-        elif item.kind in ("ipa", "folder"):
+        elif item.kind in ("ipa", "folder", "jar"):
             argv += ["--payload", str(files[item.key])]
         step = Step(f"Add {item.key}", argv, check=item.key)
         if item.name == "JS QuickJS":

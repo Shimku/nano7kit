@@ -310,6 +310,30 @@ def _nabase_root(args):
     return root
 
 
+def _nabase_add_plan(args) -> int:
+    """nabase add NAME --plan: read-only. Gravity Defied, Temple Run, Fruit Ninja, PvZ Portable."""
+    from .apps import normalize_selection
+    from .templerun import parse_size
+
+    names = list(getattr(args, "names", []) or [])
+    selected = normalize_selection(names, default_all=False, allow_extra=True)
+    payload = getattr(args, "payload", None)
+    heap_free = parse_size(getattr(args, "heap_free", None))
+    largest = parse_size(getattr(args, "largest", None))
+    if selected == ["Gravity Defied"]:
+        from .gravity_defied import plan_lines
+
+        lines = plan_lines(Path(payload).expanduser() if payload else None, heap_free, largest)
+        print("\n".join(lines))
+        return 0 if lines and lines[-1] == "PLAN_OK" else 1
+    if selected in (["Temple Run"], ["Fruit Ninja"], ["PvZ Portable"]):
+        return _apps_add_plan(args, names, payload)
+    raise Refused(
+        "nabase add --plan is for one port at a time and covers Gravity Defied, Temple Run, "
+        "Fruit Ninja and PvZ Portable: ./start nabase add 'Gravity Defied' --payload /path/to/GDTR.jar --plan"
+    )
+
+
 def cmd_nabase(args) -> int:
     """nano7kit on the NanoApps 1.0 base: file copies only, no firmware, no root."""
     from . import nabase
@@ -324,6 +348,8 @@ def cmd_nabase(args) -> int:
         print("In Finder, select the iPod, hold Option and click Check for Update, then pick this file.")
         print("Do not click Restore.")
         return 0
+    if sub == "add" and (getattr(args, "plan", False) or getattr(args, "dry_run", False)):
+        return _nabase_add_plan(args)
     root = _nabase_root(args)
     if sub == "status":
         print("\n".join(nabase.status_lines(root)))
@@ -1721,9 +1747,10 @@ def _apps_add_plan(args, names, payload) -> int:
     from .apps import normalize_selection
 
     selected = normalize_selection(names, default_all=False, allow_extra=True)
-    if selected not in (["Temple Run"], ["Fruit Ninja"], ["PvZ Portable"]):
+    if selected not in (["Temple Run"], ["Fruit Ninja"], ["PvZ Portable"], ["Gravity Defied"]):
         raise Refused(
-            "apps add --plan is for one port at a time and covers Temple Run, Fruit Ninja, PvZ and PvZ Portable: "
+            "apps add --plan is for one port at a time and covers Temple Run, Fruit Ninja, PvZ, "
+            "PvZ Portable and Gravity Defied: "
             "./start apps add TempleRun --ipa /path/to/TempleRun.ipa --plan"
         )
     from .templerun import parse_size, plan_lines
@@ -1739,6 +1766,12 @@ def _apps_add_plan(args, names, payload) -> int:
 
         def plan_lines(payload, **kw):  # noqa: F811 - same call shape as Temple Run's
             return pvzp_plan_lines(payload, kw.pop("heap_free"), kw.pop("largest"), **kw)
+
+    if selected == ["Gravity Defied"]:
+        from .gravity_defied import plan_lines as gd_plan_lines
+
+        def plan_lines(payload, **kw):  # noqa: F811 - same call shape as Temple Run's
+            return gd_plan_lines(payload, kw.pop("heap_free"), kw.pop("largest"), **kw)
 
     heap_free = parse_size(getattr(args, "heap_free", None))
     largest = parse_size(getattr(args, "largest", None))
@@ -2364,7 +2397,22 @@ def build_parser() -> argparse.ArgumentParser:
         x.add_argument("names", nargs="+")
         x.add_argument("--volume", default=None)
         x.add_argument("--rom", default=None)
-        x.add_argument("--payload", "--ipa", dest="payload", default=None)
+        x.add_argument(
+            "--payload",
+            "--ipa",
+            dest="payload",
+            default=None,
+            help="J2ME .jar / folder / levels.mrg for Gravity Defied; iOS .ipa or GOTY folder for the other ports",
+        )
+        if name == "add":
+            x.add_argument(
+                "--plan",
+                action="store_true",
+                help="Gravity Defied / Temple Run / Fruit Ninja / PvZ Portable: check files, tools and memory; write nothing",
+            )
+            x.add_argument("--dry-run", action="store_true", help="same as --plan")
+            x.add_argument("--heap-free", default=None, help="--plan: Probe's 'heap free'")
+            x.add_argument("--largest", default=None, help="--plan: Probe's 'largest block'")
     iu = sub.add_parser(
         "install-untether",
         help="copy /Apps only (fsync, unmount, remount rehash; no firmware, no DFU)",
@@ -2761,13 +2809,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="payload",
         default=None,
         help="original iOS .ipa or unpacked .app for Temple Run / Flappy Bird / Doodle Jump / Fruit Ninja; "
-        "for PvZ Portable the folder with your own PvZ GOTY main.pak and properties/",
+        "for PvZ Portable the folder with your own PvZ GOTY main.pak and properties/; "
+        "for Gravity Defied the 2004 Codebrew J2ME .jar (or a folder / levels.mrg)",
     )
     ap_add.add_argument(
         "--plan",
         action="store_true",
-        help="Temple Run / Fruit Ninja / PvZ / PvZ Portable: check the game files, host tools, Home pack and memory; "
-        "build and write nothing",
+        help="Temple Run / Fruit Ninja / PvZ / PvZ Portable / Gravity Defied: check the game files, host tools, "
+        "Home pack and memory; build and write nothing",
     )
     ap_add.add_argument("--dry-run", action="store_true", help="same as --plan")
     ap_add.add_argument(

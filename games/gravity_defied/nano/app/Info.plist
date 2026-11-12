@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>org.nano7kit.gravitydefied</string>
+<key>CFBundleName</key><string>Gravity Defied</string>
+<key>CFBundleExecutable</key><string>gd</string>
+<key>HBAppKind</key><integer>1</integer>
+<key>HBIconGlyph</key><string>motorcycle</string>
+<key>HBIconColor</key><string>#c45c26</string>
+</dict></plist>

@@ -1,0 +1,16 @@
+Gravity Defied for nano7kit
+===========================
+
+This folder is GPL-2.0. It is nano7kit's device layer for
+rgimad/gravity_defied_cpp (GPL-2.0).
+
+  Engine (fetched at build, not in git)
+    https://github.com/rgimad/gravity_defied_cpp
+    pin 91bd283959b96a7ea07e1c4c0040460334c85458
+    Authors: rgimad, AntonEvmenenko, Max Logaev
+    Original J2ME game: Codebrew (Tors, Set, Per), 2004
+
+  dlmalloc 2.8.6 (fetched at build)
+    Doug Lea, public domain / CC0
+
+nano7kit's own code outside this folder stays MIT.

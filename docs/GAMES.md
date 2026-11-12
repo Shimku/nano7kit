@@ -13,6 +13,7 @@ nano7kit has no game data and never downloads any. You supply a file you own,
 | Mario Kart 64 | Mario Kart 64 (USA) `.z64` | md5 `3a67d9986f54eb282924fca4cd5f6dff` | olievans123 | untested |
 | Flappy Bird | iOS `.ipa` | version 1.2 | olievans123 | untested |
 | Doodle Jump | iOS `.ipa` | version 1.0 | olievans123 | untested |
+| Gravity Defied | 2004 Codebrew J2ME `.jar` (often `GDTR.jar`), or a folder / bare `levels.mrg` | classic 3x10 `levels.mrg` plus sprite PNGs | rgimad/gravity_defied_cpp (GPL-2.0) with nano7kit's framebuffer layer | untested |
 
 Temple Run is the same port NanoApps offers as experimental. nano7kit changes how it
 takes memory so it gets past the loading screen with music on the iPod: it asks for
@@ -30,8 +31,11 @@ Without the installer, in Disk Mode:
 ./start nabase add 'Mario 64' --rom mygames/sm64.z64
 ./start nabase add 'Fruit Ninja' --payload mygames/FruitNinja.ipa
 ./start nabase add 'PvZ Portable' --payload mygames/pvz-goty
+./start nabase add 'Gravity Defied' --payload mygames/GDTR.jar
 ```
 
 On the nano7-untethered layout use `./start apps add` with the same names
 (`--ipa` for the iOS games). `./start apps add NAME --ipa FILE --plan` checks your
 file, the tools and the memory on either layout and writes nothing.
+`./start nabase add 'Gravity Defied' --payload FILE --plan` does the same for the
+J2ME jar.

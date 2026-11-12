@@ -161,6 +161,7 @@ CATEGORIES = {
         "Doodle Jump",
         "Fruit Ninja",
         "PvZ Portable",
+        "Gravity Defied",
     ),
     "needs-rom": ("Mario Kart", "Mario 64"),
 }
@@ -189,6 +190,11 @@ AUTHORS = {
     "PvZ Portable": (
         "PvZ-Portable engine by wszqkzqk (LGPL-3.0-or-later, fetched at build time) with nano7kit's device "
         "layer; dlmalloc by Doug Lea (CC0); your own PopCap PvZ GOTY files, not in git"
+    ),
+    "Gravity Defied": (
+        "gravity_defied_cpp by rgimad, AntonEvmenenko and Max Logaev (GPL-2.0, fetched at a pinned commit) "
+        "with nano7kit's framebuffer layer; original J2ME game by Codebrew (Tors, Set, Per), 2004; "
+        "dlmalloc by Doug Lea (CC0); your own J2ME .jar, not in git"
     ),
     "Lap": "nano7kit first-party (MIT); NanoApps SDK (MIT)",
     "Free RAM": "nano7kit first-party LVGL memory probe (MIT); NanoApps SDK (MIT)",
@@ -248,6 +254,12 @@ ALIASES = {
     "pvzportable": "PvZ Portable",
     "pvz-portable": "PvZ Portable",
     "pvz_portable": "PvZ Portable",
+    "gd": "Gravity Defied",
+    "gdtr": "Gravity Defied",
+    "gravity": "Gravity Defied",
+    "gravitydefied": "Gravity Defied",
+    "gravity-defied": "Gravity Defied",
+    "gravity_defied": "Gravity Defied",
     "tictactoe": "Tictactoe",
     "tic-tac-toe": "Tictactoe",
     "lap": "Lap",
@@ -352,6 +364,7 @@ _RISK_BY_NAME = {
     "Doodle Jump": 6,
     "Fruit Ninja": 6,
     "PvZ Portable": 6,
+    "Gravity Defied": 6,
     "Lap": 1,
     "JS Hello": 1,
     "JS Hero": 5,

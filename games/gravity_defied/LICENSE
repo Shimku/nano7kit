@@ -1,0 +1,10 @@
+Everything under games/gravity_defied/ is GPL-2.0, the licence of the
+gravity_defied_cpp engine it builds on (rgimad, with work by
+AntonEvmenenko and Max Logaev; original J2ME game by Codebrew).
+
+Full GPL-2.0 text: engine/LICENSE-gravity_defied_cpp (copied from
+rgimad/gravity_defied_cpp at pin 91bd283).
+
+The engine itself is fetched at that pin during the build and is not
+in git. Game data (levels.mrg, sprites) comes from the user's own
+J2ME .jar at install time and is never committed.

@@ -71,7 +71,7 @@ See [POCKETJS.md](POCKETJS.md).
    textures a game created outlive it. Record your texture names and delete what an
    earlier port left behind (`games/fruitninja/nano/gl_left.c`).
 6. **Check before writing.** `./start apps add 'Fruit Ninja' --ipa FILE --plan`
-   (also Temple Run and PvZ Portable with `--payload`) checks the file, the tools and
+   (also Temple Run, PvZ Portable and Gravity Defied with `--payload`) checks the file, the tools and
    the memory, and writes nothing. `./start port budget FILE.hbapp` checks the size.
 
 ### Mario 64 (N64, olievans123's port)
@@ -159,6 +159,26 @@ olievans123's Temple Run port; none of its code is used.
   position, and a lift is registered even when an earlier entry in the queue was a down.
   The host harness showed the blade dying; `tests/test_fruitninja_rc.py` checks the fix.
 - **Writes:** `Fruit Ninja.hbapp` (about 920 KB) and `/Apps/Data/FruitNinja` (about 9.2 MB).
+
+### Gravity Defied (J2ME, rgimad/gravity_defied_cpp)
+
+Files: `games/gravity_defied` (GPL-2.0), `host/gravity_defied.py`.
+
+- **Engine:** [gravity_defied_cpp](https://github.com/rgimad/gravity_defied_cpp) by rgimad,
+  AntonEvmenenko and Max Logaev at `91bd283`, GPL-2.0, fetched at build. Original
+  J2ME game by Codebrew (Tors, Set, Per), 2004. Game data (`levels.mrg`, sprites)
+  comes from your own jar and is never committed.
+- **Device layer:** RAW_SURFACE framebuffer (240x432 XRGB8888), a 56 px touch bar
+  (brake, lean, menu, gas), accelerometer lean, dlmalloc arena in `HB_APP_AUX_BLOCK`,
+  a small bitmap font, silent. Float code is built in ARM state (`-marm`, VFPv4-D16).
+- **Upstream edits at pin:** cap the bike-part loop in `GamePhysics::method_39`,
+  `RecordEnumerationImpl::destroy()` is a no-op so progress saves, menu `TextRender`
+  objects are deleted, blocking `Micro::run` / `goalLoop` / `MenuManager::method_201`
+  wait loops become ticks, exceptions and `std::filesystem` are removed.
+- **Pre-flight:** the same NOT ENOUGH MEMORY screen as Fruit Ninja, without malloc.
+  Dry run: `./start nabase add 'Gravity Defied' --payload FILE --plan`.
+- **Writes:** `Gravity Defied.hbapp` and `/Apps/Data/GravityDefied` (converted sprites,
+  `levels.mrg`, `log.txt`, RMS saves).
 
 ## Adding a game to nano7kit
 

@@ -87,6 +87,7 @@ source changed, then copies it, replacing the old copy:
 ```sh
 ./start nabase backup
 ./start nabase add 'Fruit Ninja' --payload mygames/FruitNinja.ipa
+./start nabase add 'Gravity Defied' --payload mygames/GDTR.jar
 ```
 
 ## Commands

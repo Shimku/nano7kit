@@ -47,6 +47,8 @@ class PortCatalogTests(unittest.TestCase):
         self.assertEqual(resolve_name("flappy"), "Flappy Bird")
         self.assertEqual(resolve_name("temple"), "Temple Run")
         self.assertEqual(resolve_name("doodle"), "Doodle Jump")
+        self.assertEqual(resolve_name("gd"), "Gravity Defied")
+        self.assertEqual(resolve_name("gravity-defied"), "Gravity Defied")
 
     def test_catalog_lists_olievans_ports(self):
         rows = {r["name"]: r for r in catalog()}

@@ -92,12 +92,17 @@ PORT_DATA = {
         "fat": "/Apps/Data/PvZ",
         "required": True,
     },
+    "Gravity Defied": {
+        "host": "artifacts/extra/Data/GravityDefied",
+        "fat": "/Apps/Data/GravityDefied",
+        "required": True,
+    },
 }
 
 # PocketJS MicroTS apps (nano7g): RAW_SURFACE, but 1 to 2.2 MB with baked fonts, so slot B too.
 POCKETJS_APPS = frozenset({"JS Hero", "JS Samples", "JS QuickJS"})
 LARGE_GL = frozenset({"Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "PvZ Portable"}) | POCKETJS_APPS
-NEEDS_PAYLOAD = frozenset({"Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "PvZ Portable"})
+NEEDS_PAYLOAD = frozenset({"Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "PvZ Portable", "Gravity Defied"})
 NEEDS_ROM = frozenset({"Mario 64", "Mario Kart"})
 
 SLOT_B_FAT = "/Apps/Startup/resident-B.hbapp"
@@ -126,6 +131,7 @@ DOODLE_CMD = "./start apps add 'Doodle Jump' --payload /path/to/DoodleJump.ipa"
 TEMPLE_CMD = "./start apps add TempleRun --ipa /path/to/TempleRun.ipa"
 FRUIT_CMD = "./start apps add 'Fruit Ninja' --ipa /path/to/FruitNinja.ipa"
 PVZP_CMD = "./start apps add 'PvZ Portable' --payload /path/to/pvz-goty"
+GD_CMD = "./start nabase add 'Gravity Defied' --payload /path/to/GDTR.jar"
 
 # Original iOS bundle ids we will accept. Wrong game files are refused.
 # PvZ (com.popcap.PvZ) is research-only and has no apps add path. PvZ Portable (the PvZ-Portable engine with
@@ -175,6 +181,15 @@ OVERLAY_PLISTS = (
         "glyph": "seedling",
         "color": "#4f9a2f",
         "executable_key": "pvz",
+    },
+    {
+        "folder": "gravity_defied",
+        "name": "Gravity Defied",
+        "bundle_id": "org.nano7kit.gravitydefied",
+        "kind": 1,
+        "glyph": "motorcycle",
+        "color": "#c45c26",
+        "executable_key": "gd",
     },
 )
 
@@ -288,6 +303,13 @@ def missing_help(name: str) -> str:
             "with nano7kit's device layer (games/pvz_portable). Pass the folder holding your own PvZ GOTY "
             "main.pak and properties/ as the payload; nothing from the game is in git. Sound effects, no "
             f"music. Large GL, so it goes on slot B. Check first: {PVZP_CMD} --plan. Then: {PVZP_CMD}"
+        )
+    if name == "Gravity Defied":
+        return (
+            "Gravity Defied is rgimad/gravity_defied_cpp (GPL-2.0, fetched at a pinned commit) with "
+            "nano7kit's framebuffer layer (games/gravity_defied). Pass your own 2004 Codebrew J2ME "
+            ".jar (often GDTR.jar) as the payload; a folder or bare levels.mrg also works. Game data "
+            f"is not in git. Silent. Check first: {GD_CMD} --plan. Then: {GD_CMD}"
         )
     return f"{name} is not built in this tree."
 
@@ -691,6 +713,14 @@ def prepare_for_add(
 
             build_pvzp(Path(payload))
         return {"name": name, "present": True, "built": payload is not None}
+    if name == "Gravity Defied":
+        if payload is None and not ready:
+            raise Refused(missing_help(name))
+        if payload is not None:
+            from .gravity_defied import build as build_gd
+
+            build_gd(Path(payload))
+        return {"name": name, "present": True, "built": payload is not None}
     if not present:
         folder = row.get("folder") or ""
         if folder and (root() / "nanoapps" / "apps" / folder / "Makefile").is_file():
@@ -722,6 +752,7 @@ def print_status() -> None:
         "Doodle Jump",
         "Fruit Ninja",
         "PvZ Portable",
+        "Gravity Defied",
     )
     by = {row["name"]: row for row in catalog()}
     for name in wanted:
@@ -734,4 +765,5 @@ def print_status() -> None:
     print("Mario (exact): " + MARIO_CMD)
     print("Fruit Ninja:   " + FRUIT_CMD)
     print("PvZ Portable:  " + PVZP_CMD)
+    print("Gravity Defied: " + GD_CMD)
     print("Disk Mode (Do not disconnect). One extra per reboot.")

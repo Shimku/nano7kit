@@ -75,7 +75,8 @@ class MenuTests(unittest.TestCase):
         for key in ("Mario 64", "Temple Run", "Fruit Ninja", "PvZ Portable"):
             self.assertEqual(by_name(key).group, "games")
             self.assertTrue(by_name(key).tested)
-        self.assertEqual({i.key for i in ITEMS if not i.tested}, {"Mario Kart 64", "Flappy Bird", "Doodle Jump"})
+        self.assertEqual({i.key for i in ITEMS if not i.tested},
+                         {"Mario Kart 64", "Flappy Bird", "Doodle Jump", "Gravity Defied"})
         self.assertEqual(by_name("Paint folder").name, "Paint.nanoapp")
         self.assertEqual(by_name("Free RAM folder").name, "Free RAM.nanoapp")
 
@@ -179,7 +180,7 @@ class MenuTests(unittest.TestCase):
         self.assertIn("Paint folder     same app as Paint below", text)
         self.assertIn("Free RAM folder  same app as Free RAM below", text)
         untested = [l.split()[3] for l in text.splitlines() if l.endswith("(untested)")]
-        self.assertEqual(untested, ["Mario", "Flappy", "Doodle"])
+        self.assertEqual(untested, ["Mario", "Gravity", "Flappy", "Doodle"])
         self.assertIn("Always included: Blocks, Game Boy, Probe.", text)
         self.assertIn("Home apps: 5 of 16", text)
         self.assertNotIn("\u2014", text)
@@ -219,13 +220,19 @@ class PlanTests(unittest.TestCase):
         self.assertIn("Golf", [i.key for i in ITEMS if i.group == "more"])
 
     def test_games_pass_the_file_and_need_tools(self):
-        files = {"Mario 64": Path("/x/sm64.z64"), "Fruit Ninja": Path("/x/fn.ipa"), "PvZ Portable": Path("/x/pvz")}
-        steps = build_plan(installed(), ["PvZ Portable", "Mario 64", "Fruit Ninja"], files)
+        files = {
+            "Mario 64": Path("/x/sm64.z64"),
+            "Fruit Ninja": Path("/x/fn.ipa"),
+            "PvZ Portable": Path("/x/pvz"),
+            "Gravity Defied": Path("/x/GDTR.jar"),
+        }
+        steps = build_plan(installed(), ["PvZ Portable", "Mario 64", "Fruit Ninja", "Gravity Defied"], files)
         self.assertEqual(steps[0].kind, "tools")
         argvs = [s.argv for s in steps[1:]]
         self.assertEqual(argvs[0], ["apps", "add", "Mario 64", "--skip-wait", "--rom", "/x/sm64.z64"])
         self.assertEqual(argvs[1], ["apps", "add", "Fruit Ninja", "--skip-wait", "--payload", "/x/fn.ipa"])
         self.assertEqual(argvs[2], ["apps", "add", "PvZ Portable", "--skip-wait", "--payload", "/x/pvz"])
+        self.assertEqual(argvs[3], ["apps", "add", "Gravity Defied", "--skip-wait", "--payload", "/x/GDTR.jar"])
 
     def test_pocketjs_adds_packages_in_the_same_session(self):
         steps = build_plan(installed(), ["JS QuickJS", "JS Hero"], {})
@@ -371,6 +378,19 @@ class FileCheckTests(unittest.TestCase):
         self.assertEqual(scan_drop_dir(by_name("Fruit Ninja"), self.dir).name, "fn.ipa")
         self.assertIsNone(scan_drop_dir(by_name("Temple Run"), self.dir))
         self.assertIsNone(scan_drop_dir(by_name("Temple Run"), self.dir / "missing"))
+
+    def test_gravity_defied_jar(self):
+        from host.gravity_defied import make_test_jar
+
+        junk = self.dir / "nope.jar"
+        junk.write_bytes(b"not a zip")
+        ok, msg = check_file(by_name("Gravity Defied"), junk)
+        self.assertFalse(ok)
+        jar = make_test_jar(self.dir / "GDTR.jar")
+        ok, msg = check_file(by_name("Gravity Defied"), jar)
+        self.assertTrue(ok, msg)
+        self.assertIn("tracks", msg)
+        self.assertEqual(scan_drop_dir(by_name("Gravity Defied"), self.dir).name, "GDTR.jar")
 
     def test_clean_path_from_drag_and_drop(self):
         self.assertEqual(clean_path("/Users/you/My\\ Games/sm64.z64 "), "/Users/you/My Games/sm64.z64")

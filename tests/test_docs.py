@@ -56,7 +56,8 @@ class ReleaseDocsTests(unittest.TestCase):
     def test_credits(self):
         text = (ROOT / "CREDITS.md").read_text(encoding="utf-8")
         for needle in ("wInd3x", "ipod_sun", "NanoApps", "nano7-untethered", "olievans123",
-                       "PvZ-Portable", "LGPL", "PocketJS", "6ca9f914", "MIT", "yui540", "Inter", "OFL"):
+                       "PvZ-Portable", "LGPL", "PocketJS", "6ca9f914", "MIT", "yui540", "Inter", "OFL",
+                       "gravity_defied_cpp", "rgimad", "Codebrew"):
             self.assertIn(needle, text)
         for port in ("Mario 64", "Mario Kart 64", "Game Boy", "Temple Run", "Flappy Bird", "Doodle Jump", "none stated"):
             self.assertIn(port, text)
@@ -68,6 +69,10 @@ class ReleaseDocsTests(unittest.TestCase):
         notice = (ROOT / "NOTICE").read_text(encoding="utf-8")
         self.assertIn("games/pvz_portable/          LGPL-3.0-or-later", notice)
         self.assertIn("LGPL-3.0-or-later", (ROOT / "games" / "pvz_portable" / "LICENSE").read_text(encoding="utf-8"))
+        self.assertIn("games/gravity_defied/        GPL-2.0", notice)
+        gd_lic = (ROOT / "games" / "gravity_defied" / "LICENSE").read_text(encoding="utf-8")
+        self.assertIn("GPL-2.0", gd_lic)
+        self.assertIn("91bd283", (ROOT / "games" / "gravity_defied" / "NOTICE").read_text(encoding="utf-8"))
 
     def test_no_private_strings(self):
         """No owner names, device serials, private commit ids or build paths. Needles are hashed or split."""

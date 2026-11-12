@@ -9,6 +9,7 @@ JS QuickJS, JS Hello) and the installer.
 Exceptions:
 
   games/pvz_portable/          LGPL-3.0-or-later (PvZ-Portable engine)
+  games/gravity_defied/        GPL-2.0 (rgimad/gravity_defied_cpp device layer)
   nanoapps/sdk/, nanoapps/vendor/, nanoapps/tools/,
   nanoapps/system/silver_resident_na/
                                NanoApps (nfzerox), MIT; the launcher fork
@@ -35,6 +36,8 @@ you install or build:
                                    firmware builder runs it on your Mac
   wInd3x (freemyipod)              GPL-2.0, built from source
   PvZ-Portable (wszqkzqk)          LGPL-3.0-or-later
+  gravity_defied_cpp (rgimad, AntonEvmenenko, Max Logaev)
+                                   GPL-2.0; original J2ME game by Codebrew, 2004
   PocketJS (pocket-nexus)          MIT
   Temple Run, Flappy Bird and Doodle Jump ports (olievans123), no licence
   stated, fetched only when you build that game

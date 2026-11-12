@@ -39,3 +39,10 @@ PvZ-Portable
   url=https://github.com/wszqkzqk/PvZ-Portable
   commit=98b659380014c89c3553fbb2839f5e5a84d6df3d
   licence=LGPL-3.0-or-later
+
+gravity_defied_cpp
+  url=https://github.com/rgimad/gravity_defied_cpp
+  commit=91bd283959b96a7ea07e1c4c0040460334c85458
+  licence=GPL-2.0
+  original=Codebrew Gravity Defied (J2ME, 2004)
+  fetched=yes, only when you build Gravity Defied; game data is never committed

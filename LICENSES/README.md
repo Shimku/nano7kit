@@ -16,4 +16,4 @@ Inter OFL-1.1 is also next to the shipped font:
 
 Home icons in `untether/artifacts/extra/Icons/` are drawn from Font Awesome 7 Free Solid-900.otf. That font file is SIL OFL 1.1. Font Awesome Free also licences SVG/JS icons as CC BY 4.0 and non-font/non-icon code as MIT. The full 7.2.0 notice is Font-Awesome-Free.txt.
 
-dlmalloc 2.8.6 is fetched at build for JS QuickJS and PvZ Portable. It is not vendored in git.
+dlmalloc 2.8.6 is fetched at build for JS QuickJS, PvZ Portable and Gravity Defied. It is not vendored in git.
