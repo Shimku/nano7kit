@@ -112,6 +112,12 @@ void be_frame_end(void) { flush(); }
 int be_tex_create(void) { GLuint t = 0; glGenTextures(1, &t); if (t) { be_stat_live_tex++; gll_note(t); } return (int)t; }
 void be_tex_delete(int h) { GLuint t = (GLuint)h; if (t) { glDeleteTextures(1, &t); be_stat_live_tex--; } }
 void be_set_theme_ground(int theme, int h) { (void)theme; (void)h; }
+void be_set_sky_tex(int h) { (void)h; }
+int be_sky_has_rgb(unsigned r, unsigned g, unsigned b) { (void)r; (void)g; (void)b; return 0; }
+int be_sky_explains_run(unsigned r, unsigned g, unsigned b, int h) {
+    (void)r; (void)g; (void)b; (void)h;
+    return 0;
+}
 void be_tex_param(int h, uint32_t p, uint32_t v) {
     if (!h) return;
     if (p == GL_TEXTURE_MIN_FILTER && v != GL_NEAREST) v = GL_LINEAR;   /* no mip chains are uploaded */

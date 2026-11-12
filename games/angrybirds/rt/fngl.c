@@ -44,9 +44,11 @@ static char texshift_last_stem[40];
 int fe_sky_quad, fe_ground_wrap, fe_wrap_hold, fe_atlas_uv, fe_skip_draw, fe_theme_n = 1;
 int fe_rot_sky_quad;
 float fe_ground_uw = 1.f, fe_ground_vh = 1.f;
-static int pending_ground_theme, pending_ui;
+static int pending_ground_theme, pending_ui, pending_sky;
+int fe_tex_clamp;
 static uint32_t fe_theme_ground_gl[4];
 static uint8_t fe_ui_tex[MAXTEX];
+static uint8_t fe_bg_sky[MAXTEX]; /* INGAME_2 LAYER_4 */
 static uint32_t sky_tex_gl;
 static int texh[MAXTEX];
 void fe_queue_tex_shift(int sh, const char *stem) {
@@ -66,6 +68,9 @@ void fe_note_sheet(const char *stem) {
     if (!strcmp(stem, "INGAME_6")) pending_ground_theme = 1;
     else if (!strcmp(stem, "INGAME_7")) pending_ground_theme = 2;
     else if (!strcmp(stem, "INGAME_8")) pending_ground_theme = 3;
+    /* INGAME_2 is BACKGROUND_*_LAYER_4. GLES default wrap-repeat and a
+     * leftover pinch-out tile smeared that sheet into zenith bars. */
+    if (!strcmp(stem, "INGAME_2")) pending_sky = 1;
     if (!strncmp(stem, "MENU", 4)) pending_ui = 1;
 }
 static int take_tex_shift(void) {
@@ -92,6 +97,17 @@ static void apply_tex_shift(uint32_t n, int w, int h) {
         if (n < MAXTEX && texh[n]) be_set_theme_ground(pending_ground_theme, texh[n]);
         rt_log("theme-ground %d gl=%u %dx%d", pending_ground_theme, n, w, h);
         pending_ground_theme = 0;
+    }
+    if (pending_sky && n && n < MAXTEX && (w >= 128 || h >= 128)) {
+        sky_tex_gl = n;
+        fe_bg_sky[n] = 1;
+        if (texh[n]) {
+            be_set_sky_tex(texh[n]);
+            /* GL_CLAMP_TO_EDGE: pinch-out UVs past 1 must not tile LAYER_4. */
+            be_tex_param(texh[n], 0x2802u, 0x812Fu);
+            be_tex_param(texh[n], 0x2803u, 0x812Fu);
+        }
+        pending_sky = 0;
     }
     if (pending_ui && n && n < MAXTEX && (w >= 128 || h >= 128)) {
         fe_ui_tex[n] = 1;
@@ -219,7 +235,17 @@ IMP(_glBindTexture) {
     if (bound_tex && tex_named[bound_tex]) en_tex = 1;
     /* LAYER_4 binds here while fe_sky_quad is still 1; glDraw may run after
      * a nested Image::draw cleared the flag. */
-    if (fe_sky_quad && bound_tex >= 2 && bound_tex <= 10) sky_tex_gl = bound_tex;
+    if (fe_sky_quad && bound_tex >= 2 && bound_tex <= 10) {
+        sky_tex_gl = bound_tex;
+        if (bound_tex < MAXTEX) {
+            fe_bg_sky[bound_tex] = 1;
+            if (texh[bound_tex]) {
+                be_tex_param(texh[bound_tex], 0x2802u, 0x812Fu);
+                be_tex_param(texh[bound_tex], 0x2803u, 0x812Fu);
+                be_set_sky_tex(texh[bound_tex]);
+            }
+        }
+    }
     return 0;
 }
 static void atlas_free(uint32_t n);
@@ -655,6 +681,19 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
             if (!(en_tex && bound_tex) && area > 80.f && same_c &&
                 sv[0].c[0] < 48 && sv[0].c[1] < 48 && sv[0].c[2] < 48)
                 return;
+            /* Leftover pinch-out wrap tiles: LAYER_4 clip leaves a sliver
+             * of U (~0.49-0.62, atlas padding) stretched across ~220 px;
+             * LAYER_1 (INGAME_3) is a grey slab at the zenith. Drop the
+             * extra tile; do not recolor. Thin fillRect strips (bh 2-48)
+             * are the same leftover after camera xf. */
+            if (fe_in_level && !fe_drop_fullscreen &&
+                bound_tex >= 2 && bound_tex <= 10 &&
+                bw > 80.f && maxy > 400.f && miny > 250.f && maxx > 170.f)
+                return;
+            if (fe_in_level && !fe_drop_fullscreen &&
+                bh >= 2.f && bh <= 48.f && bw > 70.f &&
+                miny > 250.f && maxx > 170.f)
+                return;
         }
         if (fe_sky_quad && bound_tex >= 2 && bound_tex <= 10) sky_tex_gl = bound_tex;
         if (getenv("AB_DUMP_DARK") && bw > 50.f && bh > 80.f && minx > 60.f) {
@@ -683,10 +722,10 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         if (fe_in_level && bound_tex >= 11 && bw > 80.f && bh > 80.f &&
             minx > 40.f && minx < 160.f && !fe_drop_fullscreen)
             return;
-        /* Rotated untextured or THEME_GROUND-wrapped quad in the sky.
-         * StaticBlockTheme*_04/05 keep the lua 2x2 and atlas UVs, so a
-         * real ramp is textured (not flat). Wrap/untextured diamonds
-         * that still cover 8% of the panel are the old opaque squares. */
+        /* Rotated untextured quad in the sky. StaticBlockTheme*_04/05
+         * wrap THEME_GROUND along the lua 2x2, so a real ramp is
+         * textured dirt. Untextured diamonds that still cover 8% of
+         * the panel are leftover opaque squares. */
         {
             float dx01 = sv[1].x - sv[0].x, dy01 = sv[1].y - sv[0].y;
             int vi, same_c = 1, rot, sky, flat, hud;
@@ -696,7 +735,7 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
             rot = (dx01 > 8.f && dy01 > 8.f) || (dx01 < -8.f && dy01 < -8.f) ||
                   (dx01 > 8.f && dy01 < -8.f) || (dx01 < -8.f && dy01 > 8.f);
             sky = minx > 70.f;
-            flat = (!(en_tex && bound_tex) && same_c) || fe_ground_wrap;
+            flat = !(en_tex && bound_tex) && same_c;
             hud = miny < 40.f && minx > 175.f;
             /* Triangle area is half the quad. 8% of the panel as a single
              * rotated quad => triangle area 4%. */
@@ -757,16 +796,16 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
             int t;
             for (t = 1; t <= 3; t++) if (fe_theme_ground_gl[t]) { gln = fe_theme_ground_gl[t]; break; }
         }
-        /* 04/05 slopes use the sprite's atlas UVs. THEME_GROUND wrap
-         * overwrote those and painted an opaque square. */
-        if (fe_atlas_uv) {
-            wrap = 0;
-            fe_ground_wrap = 0;
-            fe_wrap_hold = 0;
+        /* 04/05 keep wrap: INGAME_1 atlas UVs collapse to one texel
+         * after texshift. THEME_GROUND along the rotated quad matches
+         * the ground strip. A mixed batch (pinch-out) can include
+         * birds; remapping that as one GROUND_BLOCK smears the scene.
+         * One quad is 4-6; several 04/05 may batch, so slopes allow 24. */
+        if (fe_atlas_uv && gln && gln < MAXTEX && texh[gln])
+            wrap = 1;
+        if (wrap && count > (fe_atlas_uv ? 24 : 8)) {
+            wrap = 0; fe_ground_wrap = 0; fe_wrap_hold = 0;
         }
-        /* A mixed batch (pinch-out) can include birds; remapping that
-         * as one GROUND_BLOCK smears the whole scene. One quad is 4-6. */
-        if (wrap && count > 8) { wrap = 0; fe_ground_wrap = 0; fe_wrap_hold = 0; }
         if (fe_wrap_hold && wrap) fe_wrap_hold = 0;
         if (wrap && gln && gln < MAXTEX && texh[gln]) {
             st.tex = texh[gln];
@@ -798,6 +837,12 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
     /* Sheets pad with a=0. Discard those even if the engine left ALPHA_TEST off,
      * or a 194x196 static block is a white rectangle over the pigs. */
     st.alpha_test = en_alpha || st.tex != 0; st.alpha_ref = 0;
+    fe_tex_clamp = fe_sky_quad || (bound_tex < MAXTEX && fe_bg_sky[bound_tex]);
+    if (fe_tex_clamp && st.tex) {
+        be_tex_param(st.tex, 0x2802u, 0x812Fu);
+        be_tex_param(st.tex, 0x2803u, 0x812Fu);
+        be_set_sky_tex(st.tex);
+    }
     cv w[3]; int k = 0;
     cv stored[64];
     int nstore = 0, wrap = fe_ground_wrap;
@@ -868,32 +913,47 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
     }
     if (wrap && nstore >= 3) {
         float uw = fe_ground_uw, vh = fe_ground_vh;
-        int i;
+        int i, base, chunk = nstore;
         /* Sprite UVs of a GROUND_BLOCK collapse to one texel after
-         * texshift. Map THEME_GROUND across the quad in clip space so
-         * the dirt is locked to the body (not the collapsed UV). */
-        {
-            float xmin = 1e9f, xmax = -1e9f, ymin = 1e9f, ymax = -1e9f, dx, dy;
-            for (i = 0; i < nstore; i++) {
-                float iw = stored[i].p[3] != 0.f ? 1.f / stored[i].p[3] : 1.f;
-                float nx = stored[i].p[0] * iw, ny = stored[i].p[1] * iw;
-                if (nx < xmin) xmin = nx;
-                if (nx > xmax) xmax = nx;
-                if (ny < ymin) ymin = ny;
-                if (ny > ymax) ymax = ny;
+         * texshift. Map THEME_GROUND along each quad's edges (not the
+         * clip AABB) so a +-pi/4 04/05 ramp keeps dirt on the body. */
+        if (nstore >= 8 && (nstore % 4) == 0) chunk = 4;
+        else if (nstore >= 12 && (nstore % 6) == 0) chunk = 6;
+        if (uw < 0.15f) uw = 0.15f;
+        if (vh < 0.15f) vh = 0.15f;
+        for (base = 0; base + 2 < nstore; base += chunk) {
+            int n = chunk, kbest = 2;
+            float ox, oy, e1x, e1y, e2x = 0.f, e2y = 0.f, d1, d2, best = -1.f, iw;
+            if (base + n > nstore) n = nstore - base;
+            if (n < 3) break;
+            iw = stored[base].p[3] != 0.f ? 1.f / stored[base].p[3] : 1.f;
+            ox = stored[base].p[0] * iw; oy = stored[base].p[1] * iw;
+            iw = stored[base + 1].p[3] != 0.f ? 1.f / stored[base + 1].p[3] : 1.f;
+            e1x = stored[base + 1].p[0] * iw - ox;
+            e1y = stored[base + 1].p[1] * iw - oy;
+            for (i = 2; i < n; i++) {
+                float ex, ey, cr;
+                iw = stored[base + i].p[3] != 0.f ? 1.f / stored[base + i].p[3] : 1.f;
+                ex = stored[base + i].p[0] * iw - ox;
+                ey = stored[base + i].p[1] * iw - oy;
+                cr = e1x * ey - e1y * ex;
+                if (cr < 0.f) cr = -cr;
+                if (cr > best) { best = cr; kbest = i; e2x = ex; e2y = ey; }
             }
-            dx = xmax - xmin; dy = ymax - ymin;
-            if (dx < 1e-6f) dx = 1.f;
-            if (dy < 1e-6f) dy = 1.f;
-            if (uw < 0.15f) uw = 0.15f;
-            if (vh < 0.15f) vh = 0.15f;
-            for (i = 0; i < nstore; i++) {
-                float iw = stored[i].p[3] != 0.f ? 1.f / stored[i].p[3] : 1.f;
-                float nx = stored[i].p[0] * iw, ny = stored[i].p[1] * iw;
-                stored[i].u = (nx - xmin) / dx * uw;
-                stored[i].v = (ny - ymin) / dy * vh;
-                stored[i].c[0] = stored[i].c[1] = stored[i].c[2] = 1.f;
-                stored[i].c[3] = 1.f;
+            (void)kbest;
+            d1 = e1x * e1x + e1y * e1y;
+            d2 = e2x * e2x + e2y * e2y;
+            if (d1 < 1e-12f) d1 = 1.f;
+            if (d2 < 1e-12f) d2 = 1.f;
+            for (i = 0; i < n; i++) {
+                float px, py;
+                iw = stored[base + i].p[3] != 0.f ? 1.f / stored[base + i].p[3] : 1.f;
+                px = stored[base + i].p[0] * iw - ox;
+                py = stored[base + i].p[1] * iw - oy;
+                stored[base + i].u = (px * e1x + py * e1y) / d1 * uw;
+                stored[base + i].v = (px * e2x + py * e2y) / d2 * vh;
+                stored[base + i].c[0] = stored[base + i].c[1] = stored[base + i].c[2] = 1.f;
+                stored[base + i].c[3] = 1.f;
             }
         }
         k = 0;
@@ -912,6 +972,13 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
         }
     }
     flush_out();
+    fe_tex_clamp = 0;
+    /* Wrap is for this glDraw only (Image::draw already returned).
+     * Leaving fe_atlas_uv set remaps the next LAYER_4 tile to
+     * THEME_GROUND and a dirt square sits in the pinch-out zenith. */
+    fe_ground_wrap = 0;
+    fe_wrap_hold = 0;
+    fe_atlas_uv = 0;
 }
 IMP(_glDrawArrays) { UNUSED; draw(r0, (int)r1, (int)r2, 0, 0); return 0; }
 IMP(_glDrawElements) { UNUSED; draw(r0, 0, (int)r1, r2, r3); return 0; }
@@ -993,8 +1060,11 @@ void fngl_reset(void) {
     texshift_last_stem[0] = 0;
     pending_ground_theme = 0;
     pending_ui = 0;
+    pending_sky = 0;
+    fe_tex_clamp = 0;
     memset(fe_theme_ground_gl, 0, sizeof fe_theme_ground_gl);
     memset(fe_ui_tex, 0, sizeof fe_ui_tex);
+    memset(fe_bg_sky, 0, sizeof fe_bg_sky);
     sky_tex_gl = 0;
     fe_sky_quad = 0;
     fe_ground_wrap = 0;

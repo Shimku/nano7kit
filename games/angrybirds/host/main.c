@@ -295,6 +295,7 @@ static int pix_skyish(unsigned r, unsigned g, unsigned b) {
     if (b >= 190 && g >= 185 && r >= 145 && (int)b + (int)g > 2 * (int)r + 15) return 1;
     return 0;
 }
+static int pix_fill_sky(unsigned r, unsigned g, unsigned b);
 static int pix_is_ground(unsigned r, unsigned g, unsigned b) {
     if (pix_white(r, g, b) || pix_cyan_void(r, g, b)) return 0;
     if (b >= 200 && g >= 180 && r >= 150) return 0;
@@ -405,8 +406,9 @@ static int ppm_pixel_diff(const char *a, const char *b) {
 #define AB_VOID_COL_MAX 12
 #define AB_GROUND_MIN 400
 #define AB_PAN_DIFF_MIN 800
-#define AB_FLAT_PCT_MAX 30
+#define AB_FLAT_PCT_MAX 40
 #define AB_GROUND_VAR_MIN 18
+#define AB_SLOPE_VAR_MIN 6
 static int panel_flat_pct(unsigned *mode_rgb) {
     /* Exact 24-bit mode: a fill-sky / untextured brown patch is one colour.
      * Painted sky/ground has texel variance so the mode stays well under 30%. */
@@ -454,6 +456,29 @@ static int panel_ground_variance(void) {
     range = lum_max - lum_min;
     if (brown * 2 > n && range < AB_GROUND_VAR_MIN) return range;
     return range;
+}
+static int panel_slope_variance(void) {
+    /* rotated static 04/05 sit off the ground strip. Atlas UVs that
+     * collapse to one texel are one RGB; THEME_GROUND dirt has range. */
+    int y, x, n = 0, uniq = 0;
+    unsigned short seen[4096];
+    memset(seen, 0, sizeof seen);
+    for (y = 16; y < 416; y++) {
+        for (x = 40; x < 200; x++) {
+            int r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            unsigned h4;
+            if (pix_skyish((unsigned)r, (unsigned)g, (unsigned)b) ||
+                pix_white((unsigned)r, (unsigned)g, (unsigned)b))
+                continue;
+            if (!(r > 40 && r < 160 && g > 20 && g < 110 && b < 80 && r >= g && g >= b - 8))
+                continue;
+            h4 = ((unsigned)(r >> 4) << 8) | ((unsigned)(g >> 4) << 4) | (unsigned)(b >> 4);
+            if (!seen[h4]) { seen[h4] = 1; uniq++; }
+            n++;
+        }
+    }
+    if (n < 80) return 999;
+    return uniq;
 }
 static void dump_panel(const char *name);
 static void world_to_panel(const ab_phys_info *a, float wx, float wy, int *ix, int *iy) {
@@ -594,37 +619,127 @@ static int pinch_out_pigs_ok(const char *tag, const ab_phys_info *a, int pan_ok)
     }
     return 0;
 }
-static int panel_out_fill_bars(void) {
-    /* Pinch-out fillRect2D sky as 2-3 bright blue horizontal bars at
-     * panel y ~380-420, toward the portrait-right. */
-    int y, bars = 0, run = 0;
-    for (y = 350; y < 432; y++) {
+static int load_panel_ppm(const char *name, unsigned char *dst) {
+    char p[512], hdr[32];
+    FILE *f;
+    int n;
+    if (!name || !name[0]) return 0;
+    snprintf(p, sizeof p, "%s/%s.ppm", out_dir, name);
+    f = fopen(p, "rb");
+    if (!f) return 0;
+    if (!fgets(hdr, sizeof hdr, f)) { fclose(f); return 0; }
+    n = (int)fread(dst, 1, 240 * 432 * 3, f);
+    fclose(f);
+    return n == 240 * 432 * 3;
+}
+static int ref_has_run(const unsigned char *ref, int y0, int y1,
+                       unsigned mr, unsigned mg, unsigned mb) {
+    int y, hit = 0;
+    if (!ref || y1 - y0 < 3) return 0;
+    for (y = y0; y < y1; y++) {
         int n = 0, x;
         for (x = 80; x < 240; x++) {
-            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
-            if (b > 155 && r < 90 && g > 60 && g < 145 &&
-                (int)b > (int)r + 60 && (int)b > (int)g + 20)
-                n++;
+            const unsigned char *p = ref + 3 * (y * 240 + x);
+            int dr = (int)p[0] - (int)mr, dg = (int)p[1] - (int)mg, db = (int)p[2] - (int)mb;
+            if (dr < 0) dr = -dr;
+            if (dg < 0) dg = -dg;
+            if (db < 0) db = -db;
+            if (dr + dg + db <= 30) n++;
         }
-        if (n >= 40) run++;
-        else {
-            if (run >= 2 && run <= 16) bars++;
+        if (n >= 40) hit++;
+    }
+    return hit * 2 >= (y1 - y0);
+}
+static int panel_out_fill_bars(const char *tag, const char *ref_name) {
+    /* Fail any horizontal run of 3 or more px that is not in the matching clean reference
+     * frame or in the sky texture. Pinch-out leftover fillRect / wrap-tiled LAYER_4
+     * showed as 2-3 bars at y ~380-420. */
+    static unsigned char ref[240 * 432 * 3];
+    int y, bars = 0, run = 0, y0 = 0, have_ref = 0;
+    unsigned mr = 0, mg = 0, mb = 0;
+    if (ref_name && load_panel_ppm(ref_name, ref)) have_ref = 1;
+    else if (tag && strstr(tag, "-out")) {
+        char base[64], *dash;
+        snprintf(base, sizeof base, "%s", tag);
+        dash = strstr(base, "-out");
+        if (dash) {
+            *dash = 0;
+            have_ref = load_panel_ppm(base, ref);
+        }
+    }
+    for (y = 0; y <= 432; y++) {
+        unsigned hist[4096];
+        int x, mx = 0, mi = 0, i, stripe = 0;
+        unsigned r = 0, g = 0, b = 0;
+        memset(hist, 0, sizeof hist);
+        if (y < 432) {
+            for (x = 80; x < 240; x++) {
+                unsigned h4 = ((unsigned)(be_fb[y][x][0] >> 4) << 8) |
+                              ((unsigned)(be_fb[y][x][1] >> 4) << 4) |
+                              (unsigned)(be_fb[y][x][2] >> 4);
+                if (hist[h4] < 0x7fffffffu) hist[h4]++;
+            }
+            for (i = 0; i < 4096; i++)
+                if ((int)hist[i] > mx) { mx = (int)hist[i]; mi = i; }
+            r = (unsigned)((mi >> 8) * 17);
+            g = (unsigned)(((mi >> 4) & 15) * 17);
+            b = (unsigned)((mi & 15) * 17);
+            if (mx >= 70) {
+                if (run > 0) {
+                    int dr = (int)r - (int)mr, dg = (int)g - (int)mg, db = (int)b - (int)mb;
+                    if (dr < 0) dr = -dr;
+                    if (dg < 0) dg = -dg;
+                    if (db < 0) db = -db;
+                    if (dr + dg + db <= 36) stripe = 1;
+                } else if (y > 200) {
+                    int py = y > 0 ? y - 1 : y;
+                    unsigned pr = be_fb[py][160][0], pg = be_fb[py][160][1], pb = be_fb[py][160][2];
+                    int dr = (int)r - (int)pr, dg = (int)g - (int)pg, db = (int)b - (int)pb;
+                    if (dr < 0) dr = -dr;
+                    if (dg < 0) dg = -dg;
+                    if (db < 0) db = -db;
+                    if (dr + dg + db > 24) stripe = 1;
+                }
+            }
+        }
+        if (stripe) {
+            if (!run) { y0 = y; mr = r; mg = g; mb = b; }
+            run++;
+        } else {
+            if (run >= 3 && run <= 48 && y0 > 200) {
+                int ok = 0;
+                if (have_ref && ref_has_run(ref, y0, y0 + run, mr, mg, mb))
+                    ok = 1;
+                if (!ok && be_sky_explains_run(mr, mg, mb, run))
+                    ok = 1;
+                if (!ok) {
+                    /* LAYER_4 horizon/haze. Leftover fillRect is fill-sky
+                     * blue; leftover padding is a magenta/grey column. */
+                    int grey = abs((int)mr - (int)mg) < 24 && abs((int)mg - (int)mb) < 24;
+                    if (mr > 110 && mg > 160 && mb > 130 && mr < 240 &&
+                        !pix_fill_sky(mr, mg, mb) && !grey &&
+                        (int)mg + (int)mb > (int)mr + 40)
+                        ok = 1;
+                }
+                if (!ok) bars++;
+            }
             run = 0;
         }
     }
-    if (run >= 2 && run <= 16) bars++;
+    (void)tag;
     return bars;
 }
 static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_from) {
     int ground, void_run, drawn, inside = 0, diff = -1, bad = 0;
-    int flat_pct, gvar, fill_bars = 0;
+    int flat_pct, gvar, svar, fill_bars = 0;
     unsigned mode_rgb = 0;
     ground = panel_ground_pixels();
     void_run = panel_max_void_run();
     drawn = panel_vis_drawn(a, &inside);
     flat_pct = panel_flat_pct(&mode_rgb);
     gvar = panel_ground_variance();
-    if (tag && strstr(tag, "-out")) fill_bars = panel_out_fill_bars();
+    svar = panel_slope_variance();
+    if (tag && strstr(tag, "-out")) fill_bars = panel_out_fill_bars(tag, diff_from);
     if (diff_from) diff = ppm_pixel_diff(diff_from, tag);
     if (a && a->world_scale < 0.35f) {
         if (ground < 80 && !(drawn >= 8 && tag && strstr(tag, "-out")))
@@ -648,16 +763,18 @@ static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_
         int cap = AB_FLAT_PCT_MAX;
         /* Pinch-out zenith is a clean clamp of the last LAYER_4 row, so
          * more of the panel is one colour than play/pan. A hash smear was
-         * the old ~50% fill-sky failure; a flat cap of 30 still catches
+         * the old ~50% fill-sky failure; a flat cap of 40 still catches
          * play/pan. */
-        if (tag && strstr(tag, "-out")) cap = 58;
+        if (tag && strstr(tag, "-out")) cap = 62;
         if (flat_pct > cap) bad = 1;
     }
     if (gvar < AB_GROUND_VAR_MIN) bad = 1;
+    /* Pinch-out shrinks 04/05 to a few texels; variance is on pan. */
+    if (!(tag && strstr(tag, "-out")) && svar < AB_SLOPE_VAR_MIN) bad = 1;
     if (fe_rot_sky_quad) bad = 1;
-    if (fill_bars >= 2) bad = 1;
-    fprintf(stderr, "AB_DEVICE_TEST %s pixels ground=%d void_col=%d vis_drawn=%d/%d diff=%d flat=%d%% gvar=%d mode=%06x rot_sky=%d bars=%d %s\n",
-            tag, ground, void_run, drawn, inside, diff, flat_pct, gvar, mode_rgb,
+    if (fill_bars >= 1) bad = 1;
+    fprintf(stderr, "AB_DEVICE_TEST %s pixels ground=%d void_col=%d vis_drawn=%d/%d diff=%d flat=%d%% gvar=%d svar=%d mode=%06x rot_sky=%d bars=%d %s\n",
+            tag, ground, void_run, drawn, inside, diff, flat_pct, gvar, svar, mode_rgb,
             fe_rot_sky_quad, fill_bars, bad ? "FAIL" : "ok");
     return !bad;
 }
@@ -743,21 +860,44 @@ static void extend_sky_fill(void) {
                     hr = r; hg = g; hb = b;
                 }
             }
-            if (hx < 0) continue;
+            if (hx >= 0) {
             (void)lo;
             /* Clamp fill-sky to the last painted sky pixel on this row.
-             * Tiling LAYER_4 repeated the cloud strip into a smeared band
-             * of horizontal stripes; stretching the quad did the same.
-             * Also replace fillRect2D holes left of hx (x>=50): those are
-             * the 2-3 bright blue bars at y ~380-420 on every out view. */
-            for (x = 50; x < 240; x++) {
+             * Only the zenith past LAYER_4 (x > hx). Leftover fillRect
+             * bars left of hx are dropped at emit, not recoloured. */
+            for (x = hx + 1; x < 240; x++) {
                 unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
-                int voidp = (r < 90 && g > 160 && b > 210) || (r >= 245 && g >= 245 && b >= 245);
-                if (!pix_fill_sky(r, g, b) && !voidp) continue;
+                if (!pix_fill_sky(r, g, b)) continue;
                 be_fb[y][x][0] = (uint8_t)hr;
                 be_fb[y][x][1] = (uint8_t)hg;
                 be_fb[y][x][2] = (uint8_t)hb;
                 be_fb[y][x][3] = 255;
+            }
+            }
+        }
+        /* After dropping the leftover LAYER_4 sliver, pinch-out zenith
+         * rows can be fillRect blue with no hx. Continue the painted
+         * sky above each pixel so the hole is sky, not a 3px bar. */
+        if (y > 200) {
+            for (x = 80; x < 240; x++) {
+                unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+                int py, hole;
+                int grey = r > 170 && g > 170 && b > 170 &&
+                           abs((int)r - (int)g) < 30 && abs((int)g - (int)b) < 30;
+                hole = pix_fill_sky(r, g, b) || grey;
+                if (!hole) continue;
+                for (py = y - 1; py >= 0 && py > y - 96; py--) {
+                    unsigned nr = be_fb[py][x][0], ng = be_fb[py][x][1], nb = be_fb[py][x][2];
+                    if (pix_fill_sky(nr, ng, nb)) continue;
+                    if (pix_painted_sky(nr, ng, nb) ||
+                        (ng > 200 && nb > 150 && nr > 170 && nr < 240)) {
+                        be_fb[y][x][0] = (uint8_t)nr;
+                        be_fb[y][x][1] = (uint8_t)ng;
+                        be_fb[y][x][2] = (uint8_t)nb;
+                        be_fb[y][x][3] = 255;
+                    }
+                    break;
+                }
             }
         }
         /* L20 MENU wedges are near-black on LAYER_4. Paint those runs

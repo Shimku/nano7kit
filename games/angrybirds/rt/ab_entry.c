@@ -322,16 +322,16 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
             if (gblk_slope) {
                 /* StaticBlockTheme*_04/05 are real immovable box terrain
                  * (lua width 2.42/4.85 m, sprite 97x97 / 194x196, often
-                 * angle +-pi/4 or 90 deg). THEME_GROUND wrap overwrote
-                 * the atlas UVs and painted an opaque square; skipping
-                 * the sprite left an invisible slope birds still hit.
-                 * Keep the lua 2x2 on the sprite quad and the texture's
-                 * own atlas UVs (INGAME_1). The 97x97 rect can look
-                 * PVRTC-black if UVs collapsed; wrap is still wrong. */
-                fe_ground_wrap = 0;
-                fe_wrap_hold = 0;
+                 * angle +-pi/4 or 90 deg). INGAME_1 atlas UVs collapse
+                 * to one dark PVRTC-black texel after texshift, so the ramp
+                 * is a flat brown triangle. Sample THEME_GROUND along the rotated quad
+                 * (lua 2x2) like the 01/02/03 ground strip. */
+                fe_ground_wrap = 1;
+                fe_wrap_hold = 1;
                 fe_atlas_uv = 1;
                 xf_keep_2x2 = 1;
+                fe_ground_uw = (float)srcw / 40.f;
+                fe_ground_vh = (float)srch / 40.f;
             } else if (gblk) {
                 fe_ground_wrap = 1;
                 fe_wrap_hold = 1;
@@ -355,7 +355,7 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
                      (srcw >= 600u ? "StaticBlockTheme*_03 GROUND_BLOCK_*_03" :
                       (srcw >= 180u ? "StaticBlockTheme*_02 GROUND_BLOCK_*_02" :
                        "StaticBlockTheme*_01 GROUND_BLOCK_*_01")));
-                const char *texname = gblk_slope ? "INGAME_1" : "INGAME_6/7/8";
+                const char *texname = "INGAME_6/7/8";
                 int *slot = gblk04 ? &n04 : gblk05 ? &n05 : &nstrip;
                 if (*slot < 16) {
                     rt_log("terrain %s type=static src=%ux%u dest=%.0f,%.0f a00=%.2f a01=%.2f wrap=%d skip=%d tex=%s",
@@ -514,12 +514,11 @@ static void ab_icall_after(uint32_t addr, uint32_t r0, uint32_t ret) {
             fe_ground_wrap = img_flag_stack[img_flag_sp][1];
             fe_skip_draw = img_flag_stack[img_flag_sp][2];
             fe_atlas_uv = img_flag_stack[img_flag_sp][3];
-            /* Ka3D may glDraw after Image::draw returns. Keep wrap for
-             * 01/02/03 so THEME_GROUND hits that quad; keep atlas UVs
-             * for 04/05 so a leftover wrap_hold does not paint a square. */
+            /* Ka3D may glDraw after Image::draw returns. Keep wrap so
+             * THEME_GROUND hits 01/02/03 strips and 04/05 ramps. */
             if (had_atlas) {
-                fe_ground_wrap = 0;
-                fe_wrap_hold = 0;
+                fe_ground_wrap = 1;
+                fe_wrap_hold = 1;
                 fe_atlas_uv = 1;
             } else if (had_wrap) {
                 fe_ground_wrap = 1;

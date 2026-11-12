@@ -10,7 +10,7 @@
 #define PH 432
 uint8_t be_fb[PH][PW][4];
 static float zb[PH][PW];
-typedef struct { int used, w, h, fmt_seen; uint8_t *rgba; uint32_t format, type; } tex;
+typedef struct { int used, w, h, fmt_seen, clamp_uv; uint8_t *rgba; uint32_t format, type; } tex;
 #define MAXT 512
 static tex T[MAXT];
 int be_stat_pvrtc, be_stat_uncompressed, be_tex_peak_bytes, be_tex_bytes;
@@ -18,13 +18,88 @@ static int theme_ground_be[4];
 void be_set_theme_ground(int theme, int h) {
     if (theme >= 1 && theme <= 3 && h > 0 && h < MAXT) theme_ground_be[theme] = h;
 }
+static uint8_t sky_rgb_bits[512];
+static uint16_t sky_rgb_n[4096];
+static uint16_t sky_row_mode[512];
+static uint8_t sky_row_frac[512];
+static int sky_tw, sky_th;
+static void sky_bit_set(unsigned r, unsigned g, unsigned b) {
+    unsigned i = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+    sky_rgb_bits[i >> 3] |= (uint8_t)(1u << (i & 7));
+}
+void be_set_sky_tex(int h) {
+    int y, x;
+    if (h <= 0 || h >= MAXT || !T[h].rgba || T[h].w < 8 || T[h].h < 8) return;
+    memset(sky_rgb_bits, 0, sizeof sky_rgb_bits);
+    memset(sky_rgb_n, 0, sizeof sky_rgb_n);
+    memset(sky_row_mode, 0, sizeof sky_row_mode);
+    memset(sky_row_frac, 0, sizeof sky_row_frac);
+    sky_tw = T[h].w;
+    sky_th = T[h].h;
+    if (sky_th > 512) sky_th = 512;
+    for (y = 0; y < sky_th; y++) {
+        unsigned short hist[4096];
+        int mx = 0, mi = 0, i, n = T[h].w;
+        memset(hist, 0, sizeof hist);
+        for (x = 0; x < T[h].w; x++) {
+            const uint8_t *p = T[h].rgba + 4 * (y * T[h].w + x);
+            unsigned h4 = ((unsigned)(p[0] >> 4) << 8) | ((unsigned)(p[1] >> 4) << 4) | (unsigned)(p[2] >> 4);
+            sky_bit_set(p[0], p[1], p[2]);
+            if (sky_rgb_n[h4] < 65535) sky_rgb_n[h4]++;
+            if (hist[h4] < 65535) hist[h4]++;
+        }
+        for (i = 0; i < 4096; i++)
+            if ((int)hist[i] > mx) { mx = (int)hist[i]; mi = i; }
+        sky_row_mode[y] = (uint16_t)mi;
+        sky_row_frac[y] = (uint8_t)(n > 0 ? mx * 255 / n : 0);
+    }
+}
+int be_sky_has_rgb(unsigned r, unsigned g, unsigned b) {
+    unsigned i = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4);
+    return (sky_rgb_bits[i >> 3] >> (i & 7)) & 1;
+}
+int be_sky_explains_run(unsigned r, unsigned g, unsigned b, int h) {
+    /* A leftover padding column is not a sky-texture row mode. LAYER_4
+     * bands (horizon, haze) are: the panel run can be taller than the
+     * matching texture run once the tile is stretched. Raster 4-bit
+     * bins can sit next to the texture bin. */
+    unsigned br = r >> 4, bg = g >> 4, bb = b >> 4;
+    int dr, dg, db, y, run, best, near;
+    (void)h;
+    if (!sky_th) return 0;
+    best = 0;
+    near = 0;
+    for (dr = -1; dr <= 1; dr++) for (dg = -1; dg <= 1; dg++) for (db = -1; db <= 1; db++) {
+        int rr = (int)br + dr, rg = (int)bg + dg, rb = (int)bb + db;
+        unsigned want;
+        if (rr < 0 || rr > 15 || rg < 0 || rg > 15 || rb < 0 || rb > 15) continue;
+        want = ((unsigned)rr << 8) | ((unsigned)rg << 4) | (unsigned)rb;
+        run = 0;
+        for (y = 0; y < sky_th; y++) {
+            if (sky_row_mode[y] == want && sky_row_frac[y] > 60) run++;
+            else {
+                if (run > best) best = run;
+                run = 0;
+            }
+        }
+        if (run > best) best = run;
+        if (sky_rgb_n[want] >= 120) near = 1;
+    }
+    if (best >= 1) return 1;
+    return near;
+}
 int be_stat_tex_fail, be_stat_live_tex;
 int be_check_tiny;           /* triangles under 2 square pixels (the nano driver rule) */
 int be_frame_tris, be_frame_tris_max, be_frame_big, be_frame_big_max;   /* big: what the nano draws */
 
 int be_tex_create(void) { for (int i = 1; i < MAXT; i++) if (!T[i].used) { memset(&T[i], 0, sizeof T[i]); T[i].used = 1; return i; } return 0; }
 void be_tex_delete(int h) { if (h > 0 && h < MAXT) { if (T[h].rgba) { be_tex_bytes -= T[h].w * T[h].h * 2; free(T[h].rgba); } T[h].used = 0; T[h].rgba = 0; } }
-void be_tex_param(int h, uint32_t p, uint32_t v) { (void)h; (void)p; (void)v; }
+void be_tex_param(int h, uint32_t p, uint32_t v) {
+    if (h <= 0 || h >= MAXT || !T[h].used) return;
+    /* GL_TEXTURE_WRAP_S/T. GL_CLAMP_TO_EDGE keeps LAYER_4 from tiling. */
+    if (p == 0x2802u || p == 0x2803u)
+        T[h].clamp_uv = (v == 0x812Fu);
+}
 static void put_rgba(tex *t, int w, int h) {
     if (t->rgba) { be_tex_bytes -= t->w * t->h * 2; free(t->rgba); }
     t->w = w; t->h = h; t->rgba = calloc((size_t)w * h, 4);
@@ -274,8 +349,14 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
             for (int k = 0; k < 4; k++) col[k] = (w0 * a->c[k] + w1 * b->c[k] + w2 * c->c[k]) / 255.f;
             if (t) {
                 int tx = (int)floorf(u * (float)t->w), ty = (int)floorf(vv * (float)t->h);
-                tx %= t->w; if (tx < 0) tx += t->w;
-                ty %= t->h; if (ty < 0) ty += t->h;
+                int clamp = t->clamp_uv || fe_tex_clamp;
+                if (clamp) {
+                    if (tx < 0) tx = 0; else if (tx >= t->w) tx = t->w - 1;
+                    if (ty < 0) ty = 0; else if (ty >= t->h) ty = t->h - 1;
+                } else {
+                    tx %= t->w; if (tx < 0) tx += t->w;
+                    ty %= t->h; if (ty < 0) ty += t->h;
+                }
                 const uint8_t *tp = t->rgba + 4 * (ty * t->w + tx);
                 for (int k = 0; k < 4; k++) col[k] *= tp[k] / 255.f;
             }
@@ -299,14 +380,14 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
                         if (!sky && !haze && !dirt) continue;
                     }
                 }
-                /* GROUND_BLOCK 01/02/03 often miss wrap (glDraw after
-                 * Image::draw pops the flag) and are one muddy texel.
-                 * Wrap can also land on THEME_GROUND with a collapsed UV,
-                 * which is still one brown colour - retile in panel space.
-                 * 04/05 keep atlas UVs: do not retile or clip those. */
+                /* GROUND_BLOCK often miss wrap (glDraw after Image::draw
+                 * pops the flag) and are one muddy texel. Wrap can also
+                 * land on THEME_GROUND with a collapsed UV. Retile in
+                 * panel space. 04/05 slopes wrap along the rotated quad;
+                 * do not clip those out of the castle (x>92). */
                 {
                     int wide = (x1 - x0) > 40 && (y1 - y0) > 40;
-                    int th, gth;
+                    int th, gth, rot, collapsed;
                     tex *gt = NULL;
                     gth = fe_theme_n;
                     if (gth < 1 || gth > 3) gth = 1;
@@ -318,12 +399,17 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
                                 gt = &T[theme_ground_be[th]];
                                 break;
                             }
-                    /* Only retile wrapped strips that touch the ground
-                     * band (x0 < 60). */
-                    int terrain = x0 < 60;
-                    if (fe_ground_wrap && x > 92 && wide)
+                    rot = (fabsf(b->x - a->x) > 8.f && fabsf(b->y - a->y) > 8.f) ||
+                          (fabsf(c->x - a->x) > 8.f && fabsf(c->y - a->y) > 8.f);
+                    collapsed = fabsf(a->u - b->u) + fabsf(a->v - b->v) +
+                                fabsf(a->u - c->u) + fabsf(a->v - c->v) < 0.08f;
+                    /* Axis-aligned wrap leaking into the sky. Slopes sit
+                     * in the castle at x>92. */
+                    int terrain = x0 < 60 || fe_atlas_uv || rot;
+                    if (fe_ground_wrap && x > 92 && wide && !fe_atlas_uv && !rot)
                         continue;
-                    if (fe_ground_wrap && (dirt || (mud && x < 50)) && wide && terrain && gt && fabsf(area) > 400.f) {
+                    if (fe_ground_wrap && (dirt || (mud && x < 50)) && wide && terrain && gt &&
+                        fabsf(area) > 400.f && (collapsed || x0 < 60)) {
                         /* x*2 so a 150px ramp covers more than one 256 tile
                          * and cave holes stay visible. */
                         int tx = (x * 2) % gt->w, ty = (y * 2) % gt->h;
