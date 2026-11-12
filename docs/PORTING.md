@@ -300,6 +300,13 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   on so rotated ice still emits, and drops tall pause-page screenshot
   quads plus huge unsifted THEME_GROUND blits so pinch-out is not a
   pebble rectangle over the pigs.
+  RECIPE 20 skips every Image::draw clip AABB branch (the generated
+  `(n_!=v_)` / `(n_==v_)` forms RECIPE 19 missed), saves/restores
+  MaskedImage's 2D xf around nested draws, never bakes already-scaled
+  pixels (that warped theme-2/3 backgrounds at min zoom), and counts
+  live pig bodies by piglette restitution (0.05) so StoneBlock8 / helmet
+  extras are not pigs. GESTURE/DEVICE pan and pinch-out every chapter-1
+  level that exists.
   `AB_GESTURE_TEST=1`
   checks a drag never moves the composited frame, a two-finger pinch changes
   worldScale, L1 then L2 then L3 load in one session, and the L1/L2 panel

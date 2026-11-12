@@ -16,6 +16,7 @@ float fe_scale, fe_scale_y, fe_off_x, fe_off_y, fe_fb_h;
 int fe_view_h = 480;
 int fe_stat_tris, fe_stat_draws, fe_stat_tex_bytes;
 int fe_stat_ingame_ok, fe_stat_ingame_clip, fe_stat_castle_img;
+int fe_drop_fullscreen;
 
 typedef struct { float m[16]; } mat;
 static mat stk[3][16];
@@ -568,13 +569,10 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         if (bw < 0.f) bw = -bw;
         if (bh < 0.f) bh = -bh;
         if (!(en_tex && bound_tex) && area > 2000.f) return;
-        /* THEME_GROUND / pause screenshot are unsifted. First-tri area can
-         * be a sliver of a huge quad, so use the clipped bbox too. */
-        if (bound_tex && bound_tex < MAXTEX && !uv_div[bound_tex] &&
-            (area > 14000.f || bw * bh > 35000.f))
-            return;
-        /* Theme 2/3 pause page, or THEME_GROUND covering the pigs at min zoom. */
-        if (bound_tex && bw * bh > 36000.f && bh > 150.f)
+        /* Pause page composites a near-full screenshot over the menu.
+         * Theme 2/3 BACKGROUND/THEME_GROUND fill the same portrait size
+         * during play, so only drop it while the pause overlay is up. */
+        if (fe_drop_fullscreen && bound_tex && bw > 190.f && bh > 280.f)
             return;
     }
     if (en_cull && cullmode != 0x408) {
@@ -728,6 +726,10 @@ void fe_reset_matrices(void) {
     mode = 0;
     color[0] = color[1] = color[2] = color[3] = 1.f;
     vx = 0; vy = 0; vw = 480; vh = 320;
+    en_blend = 0; en_tex = 1; en_depth = 0; en_cull = 0; en_alpha = 0;
+    bound_tex = 0; bound_buf = 0;
+    va_.on = ta_.on = ca_.on = 0;
+    sf = 1; df = 0;
 }
 
 void fngl_reset(void) {

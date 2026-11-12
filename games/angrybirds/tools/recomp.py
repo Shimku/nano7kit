@@ -415,7 +415,9 @@ class Emitter:
         if t in self.funcs:
             # Static terrain draw: the runtime patches the 2D xf so a swipe
             # is not the iPad castle close-up. Direct CALLQ skips rt_icall.
-            if t in (0x130268, 0x130a48, 0x6c1b4):
+            # Image::draw dest bake + MaskedImage xf restore need rt_icall.
+            # Direct CALLQ skips the runtime patch (L3 ice/pigs stay FBO-local).
+            if t in (0x130268, 0x130a48, 0x6c1b4, 0xb15c4):
                 return "SP=sp;CALLQ(rt_icall(0x%xu,r0,r1,r2,r3));" % t
             return "SP=sp;CALLQ(%s(r0,r1,r2,r3));" % self.fn(t)
         self.missing_calls[t] += 1
@@ -1222,9 +1224,25 @@ def main():
         # Image::draw clip AABB rejects L2 ice/pigs when the 2x2 is not identity.
         # Keep the draw path (L_b1870); RECIPE rebuild must not restore the clip.
         if 0xb15c4 in part:
-            text = text.replace("if(n_){goto L_b1860;}", "if(0&&n_){goto L_b1860;}")
-            text = text.replace("if(n_==v_){goto L_b1860;}", "if(0&&n_==v_){goto L_b1860;}")
-            text = text.replace("if(n_!=v_){goto L_b1870;}", "if(1||n_!=v_){goto L_b1870;}")
+            # Patch only Image::draw. The file also has other n_!=v_ branches;
+            # generated compares use extra parens (n_!=v_) so a whole-file
+            # replace of the unparenthesized form was a no-op (L3 ice clipped).
+            start = text.find("uint64_t F_b15c4(")
+            end = text.find("\nuint64_t F_", start + 10) if start >= 0 else -1
+            if start >= 0:
+                if end < 0:
+                    end = len(text)
+                body = text[start:end]
+                for a, b in (
+                    ("if(n_){goto L_b1860;}", "if(0&&n_){goto L_b1860;}"),
+                    ("if((n_)){goto L_b1860;}", "if(0&&(n_)){goto L_b1860;}"),
+                    ("if(n_==v_){goto L_b1860;}", "if(0&&n_==v_){goto L_b1860;}"),
+                    ("if((n_==v_)){goto L_b1860;}", "if(0&&(n_==v_)){goto L_b1860;}"),
+                    ("if(n_!=v_){goto L_b1870;}", "if(1||n_!=v_){goto L_b1870;}"),
+                    ("if((n_!=v_)){goto L_b1870;}", "if(1||(n_!=v_)){goto L_b1870;}"),
+                ):
+                    body = body.replace(a, b)
+                text = text[:start] + body + text[end:]
         with open(os.path.join(outdir, "recomp_%02d.c" % c), "w") as fh:
             fh.write(text)
     imps = sorted({n for n in em.used_imports if n} | {n for (k, n) in img.m.imports.values() if n})
