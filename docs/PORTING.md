@@ -270,6 +270,36 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   `AB_DEVICE_TEST` then fails if a captured panel has no ground pixels, if
   vis-object projections land on sky/void, if a pan dump matches the
   pinch-out dump, or if a white/cyan void column is wider than 12 pixels.
+  RECIPE 16 latched pinch/pan into `setTopLeft` but lua `cameraFunction`
+  still drew the slingshot view, so L2/L3 pan dumps were grass and sky
+  while the checks used the latched camera. RECIPE 17 writes the swipe
+  camera into GameLua+368 before `drawGame`, puts it back after lua
+  `setTopLeft`, and discards sprite-sheet padding (a=0) so L2's 194x196
+  static block is not a white rectangle over the pigs. A one-finger swipe
+  on empty space pans at play scale (the slingshot still grabs the bird)
+  until the camera hits the level's right limit, so every pig is on screen
+  and drawn. Pan and pinch are not forwarded as LBUTTON. Full pinch-out
+  uses lua `minWorldScale` (or a fit of slingshot-to-pigs) and fills cyan
+  past the sky tiles with sky colour instead of raising the zoom floor.
+  The host fails unless each live pig projects inside the panel with lime
+  pig pixels at that spot (grass is not a pig), pinch-out also shows the
+  slingshot birds, and a structure block is drawn. L1, L2, L3, L8 and L21
+  run pinch then pan then pinch-in.
+  RECIPE 18 patches the Ka3D 2D transform Image::draw actually reads
+  (the pointer getRenderState2D returns, not only EGL_Context+0x10C) so a
+  swipe moves the pigs and castle. World sprite x,y are baked to
+  (world-left, world-top) and leftover xf+48/xf+32 translations from the
+  opening camera are cleared, otherwise L2 pigs at world ~1100 clip past
+  NDC +1. MaskedImage FBO compositing keeps its own xf. The right pan
+  limit is the live pig/block span (no 430 look-at cap). Pinch-out frames
+  slingshot and every pig; cyan past the sky tiles is filled with the
+  theme sky colour. Image::draw's clip AABB is skipped so rotated ice
+  still emits. Checks look for real pig-green pixels at each projected
+  body (no debug tint).
+  RECIPE 19 forces Image::draw's remaining clip (`n_!=v_` to L_b1870)
+  on so rotated ice still emits, and drops tall pause-page screenshot
+  quads plus huge unsifted THEME_GROUND blits so pinch-out is not a
+  pebble rectangle over the pigs.
   `AB_GESTURE_TEST=1`
   checks a drag never moves the composited frame, a two-finger pinch changes
   worldScale, L1 then L2 then L3 load in one session, and the L1/L2 panel

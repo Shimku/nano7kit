@@ -331,21 +331,32 @@ uint32_t rt_outside_count(void) { return out_count; }
 uint32_t rt_malloc_failures(void) { return malloc_fail; }
 
 /* ---- dispatch ------------------------------------------------------------------------------ */
+rt_icall_patch_fn rt_icall_patch;
+rt_icall_after_fn rt_icall_after;
 static uint32_t missing_seen[64];
 uint64_t rt_icall(uint32_t addr, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3) {
+    uint64_t q;
+    if (rt_icall_patch) rt_icall_patch(addr, &r0, &r1, &r2, &r3);
     if (addr >= g_imparea && addr < g_imparea + 32u * rt_import_count) {
         uint32_t i = (addr - g_imparea) / 32u;
-        if (rt_import_fns[i]) return rt_import_fns[i](r0, r1, r2, r3);
-        rt_log("call to unimplemented import %s", rt_import_names[i]);
-        return 0;
+        if (rt_import_fns[i]) q = rt_import_fns[i](r0, r1, r2, r3);
+        else {
+            rt_log("call to unimplemented import %s", rt_import_names[i]);
+            q = 0;
+        }
+        if (rt_icall_after) rt_icall_after(addr, r0, (uint32_t)q);
+        return q;
     }
     uint32_t a = addr & ~1u, lo = 0, hi = rt_fn_count;
     while (lo < hi) {
         uint32_t mid = (lo + hi) / 2;
         if (rt_fn_table[mid].addr < a) lo = mid + 1; else hi = mid;
     }
-    if (lo < rt_fn_count && rt_fn_table[lo].addr == a)
-        return rt_fn_table[lo].fn(r0, r1, r2, r3);
+    if (lo < rt_fn_count && rt_fn_table[lo].addr == a) {
+        q = rt_fn_table[lo].fn(r0, r1, r2, r3);
+        if (rt_icall_after) rt_icall_after(addr, r0, (uint32_t)q);
+        return q;
+    }
     for (int i = 0; i < 64; i++) {
         if (missing_seen[i] == a) return 0;
         if (!missing_seen[i]) { missing_seen[i] = a; break; }

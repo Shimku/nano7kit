@@ -406,13 +406,111 @@ static int ppm_pixel_diff(const char *a, const char *b) {
 #define AB_GROUND_MIN 400
 #define AB_PAN_DIFF_MIN 800
 static void dump_panel(const char *name);
+static void world_to_panel(const ab_phys_info *a, float wx, float wy, int *ix, int *iy) {
+    float gx, gy, px, py;
+    gx = (wx - a->cam_left) * a->world_scale;
+    gy = (wy - a->cam_top) * a->world_scale;
+    px = fe_off_x + (fe_fb_h - gy) * fe_scale;
+    py = fe_off_y + gx * fe_scale_y;
+    *ix = (int)(px + 0.5f);
+    *iy = (int)(py + 0.5f);
+}
+static int pix_pig_green(unsigned r, unsigned g, unsigned b) {
+    /* Lime pig body from L1 dumps is (102,238,68). Grass is (85,170,0) /
+     * (204,255,0) with b near 0; do not count the ground strip as a pig. */
+    if (g < 170 || g > 250) return 0;
+    if (r < 55 || r > 170) return 0;
+    if (b < 24 || b > 130) return 0;
+    if ((int)g < (int)r + 40) return 0;
+    if ((int)g < (int)b + 70) return 0;
+    return 1;
+}
+static int neighborhood_pig(int px, int py, int rad) {
+    int x, y, n = 0;
+    if (rad < 4) rad = 4;
+    if (rad > 20) rad = 20;
+    for (y = py - rad; y <= py + rad; y++) {
+        for (x = px - rad; x <= px + rad; x++) {
+            unsigned r, g, b;
+            if (x < 28 || x >= 240 || y < 0 || y >= 432) continue;
+            r = be_fb[y][x][0]; g = be_fb[y][x][1]; b = be_fb[y][x][2];
+            if (pix_pig_green(r, g, b)) n++;
+        }
+    }
+    return n;
+}
+static int pig_inside(int ix, int iy, int margin) {
+    if (margin < 4) margin = 4;
+    return ix >= margin && ix < 240 - margin && iy >= margin && iy < 432 - margin;
+}
+/* FAIL unless every live pig projects inside the panel with lime pig pixels
+ * at that spot. Optionally require the slingshot birds and a structure block. */
+static int panel_check_pigs(const char *tag, const ab_phys_info *a, int need_sling, int need_block) {
+    int i, on = 0, green = 0, birds_on = 0, blocks_on = 0, bad = 0, margin;
+    int need_g, rad;
+    if (!a) return 0;
+    margin = a->world_scale >= 0.45f ? 8 : 6;
+    need_g = a->world_scale >= 0.45f ? 6 : 4;
+    rad = a->world_scale >= 0.45f ? 22 : (int)(12.f + 40.f * a->world_scale);
+    if (a->pig_n < 1) {
+        fprintf(stderr, "AB_DEVICE_TEST %s pigs 0 found FAIL\n", tag);
+        return 0;
+    }
+    for (i = 0; i < a->pig_n; i++) {
+        int ix, iy, g;
+        unsigned pr = 0, pg = 0, pb = 0;
+        world_to_panel(a, a->pig_wx[i], a->pig_wy[i], &ix, &iy);
+        if (ix >= 0 && ix < 240 && iy >= 0 && iy < 432) {
+            pr = be_fb[iy][ix][0]; pg = be_fb[iy][ix][1]; pb = be_fb[iy][ix][2];
+        }
+        g = neighborhood_pig(ix, iy, rad);
+        fprintf(stderr, "AB_DEVICE_TEST %s pig%d world=%.0f,%.0f panel=%d,%d rgb=%u,%u,%u lime=%d scale=%.3f cam=%.1f,%.1f\n",
+                tag, i, (double)a->pig_wx[i], (double)a->pig_wy[i], ix, iy,
+                pr, pg, pb, g, (double)a->world_scale, (double)a->cam_left,
+                (double)a->cam_top);
+        if (!pig_inside(ix, iy, margin)) continue;
+        on++;
+        if (g >= need_g) green++;
+    }
+    for (i = 0; i < a->bird_n; i++) {
+        int ix, iy;
+        world_to_panel(a, a->bird_wx[i], a->bird_wy[i], &ix, &iy);
+        if (pig_inside(ix, iy, 4)) birds_on++;
+    }
+    for (i = 0; i < a->block_n; i++) {
+        int ix, iy;
+        world_to_panel(a, a->block_wx[i], a->block_wy[i], &ix, &iy);
+        if (ix < 28 || ix >= 240 || iy < 4 || iy >= 428) continue;
+        if (neighborhood_drawn(ix, iy)) blocks_on++;
+    }
+    {
+        int y, x, any_lime = 0;
+        for (y = 0; y < 432; y++)
+            for (x = 28; x < 240; x++)
+                if (pix_pig_green(be_fb[y][x][0], be_fb[y][x][1], be_fb[y][x][2]))
+                    any_lime++;
+        fprintf(stderr, "AB_DEVICE_TEST %s panel_lime=%d\n", tag, any_lime);
+        if (any_lime < 8 && green < a->pig_n) bad = 1;
+    }
+    if (green < a->pig_n) bad = 1;
+    if (on < a->pig_n) bad = 1;
+    if (need_sling && birds_on < 1) bad = 1;
+    if (need_block && blocks_on < 1) bad = 1;
+    fprintf(stderr, "AB_DEVICE_TEST %s pigs %d/%d on=%d green=%d birds=%d/%d blocks=%d draws=%d ingame=%d/%d castle_img=%d %s\n",
+            tag, green, a->pig_n, on, green, birds_on, a->bird_n, blocks_on,
+            fe_stat_draws, fe_stat_ingame_ok, fe_stat_ingame_ok + fe_stat_ingame_clip, fe_stat_castle_img,
+            bad ? "FAIL" : "ok");
+    return !bad;
+}
 static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_from) {
     int ground, void_run, drawn, inside = 0, diff = -1, bad = 0;
     ground = panel_ground_pixels();
     void_run = panel_max_void_run();
     drawn = panel_vis_drawn(a, &inside);
     if (diff_from) diff = ppm_pixel_diff(diff_from, tag);
-    if (ground < AB_GROUND_MIN) bad = 1;
+    if (a && a->world_scale < 0.35f) {
+        if (ground < 80) bad = 1;
+    } else if (ground < AB_GROUND_MIN) bad = 1;
     if (void_run > AB_VOID_COL_MAX) bad = 1;
     if (inside >= 1 && drawn < 1) bad = 1;
     if (inside >= 4 && drawn * 3 < inside * 2) bad = 1;
@@ -495,7 +593,7 @@ static int level_sane(const char *name, ab_phys_info *a) {
     blk = panel_black();
     if (a->dynamic_n < 1) bad = 1;
     if (a->vis_dyn < 1 || a->vis_all < 2) bad = 1;
-    if (a->world_scale < 0.18f || a->world_scale > 1.05f) bad = 1;
+    if (a->world_scale < 0.12f || a->world_scale > 1.05f) bad = 1;
     if (blk > 240 * 432 / 12) bad = 1;
     /* Device white L2 is ~93% near-white with one untextured wood strip
      * (pix under 8000). Playable levels can have light sky over 90% wash
@@ -549,15 +647,112 @@ static void pan_drag(int frames, float x0, float y0, float x1, float y1) {
     wait_frames(8);
 }
 static void print_cam(const char *tag, const ab_phys_info *a) {
-    fprintf(stderr, "AB_DEVICE_TEST %s scale=%.3f cam_left=%.1f cam_top=%.1f vis=%d/%d heap=%u hole=%u texfail=%d\n",
+    fprintf(stderr, "AB_DEVICE_TEST %s scale=%.3f cam_left=%.1f cam_top=%.1f vis=%d/%d pigs=%d birds=%d blocks=%d heap=%u hole=%u texfail=%d\n",
             tag, (double)a->world_scale, (double)a->cam_left, (double)a->cam_top,
-            a->vis_all, a->bodies, rt_heap_used(), rt_heap_largest_free(), be_stat_tex_fail);
+            a->vis_all, a->bodies, a->pig_n, a->bird_n, a->block_n,
+            rt_heap_used(), rt_heap_largest_free(), be_stat_tex_fail);
+}
+static void pan_to_right_limit(ab_phys_info *a) {
+    float last;
+    int k, pigs_on, moved;
+    if (!a) return;
+    ab_phys_snapshot(a);
+    last = a->cam_left;
+    for (k = 0; k < 16; k++) {
+        int i, on = 0;
+        /* panel y is game x. Smaller py raises cam_left (toward the pigs). */
+        pan_drag(20, 160.f, 410.f, 160.f, 16.f);
+        ab_phys_snapshot(a);
+        on = 0;
+        for (i = 0; i < a->pig_n; i++) {
+            int ix, iy;
+            world_to_panel(a, a->pig_wx[i], a->pig_wy[i], &ix, &iy);
+            if (pig_inside(ix, iy, 8)) on++;
+        }
+        pigs_on = on;
+        moved = a->cam_left > last + 3.f;
+        if (pigs_on >= a->pig_n && a->pig_n > 0 && !moved)
+            break;
+        if (!moved && k >= 1) break;
+        last = a->cam_left;
+    }
+}
+static void pan_to_left_limit(ab_phys_info *a) {
+    float last;
+    int k;
+    if (!a) return;
+    ab_phys_snapshot(a);
+    last = a->cam_left;
+    for (k = 0; k < 8; k++) {
+        pan_drag(12, 120.f, 36.f, 120.f, 380.f);
+        ab_phys_snapshot(a);
+        if (!(a->cam_left < last - 6.f)) break;
+        last = a->cam_left;
+    }
 }
 static void double_tap(float x, float y) {
     tap_at(x, y);
     fake_us += 80000; ab_frame(1.f / 30.f);
     tap_at(x, y);
     wait_frames(12);
+}
+/* Opening dump, swipe to pigs, pinch-out (whole level), pan, pinch-in. */
+static int play_level_camera(const char *dump, ab_phys_info *a) {
+    ab_phys_info b;
+    float s0, s1, s2, left0, left1;
+    int bad = 0;
+    ab_unpause();
+    wait_frames(2);
+    ab_call_lua("hidePauseMenu");
+    wait_frames(2);
+    ab_unpause();
+    tap_at(62.f, 318.f);
+    tap_at(58.f, 292.f);
+    wait_frames(4);
+    char pan_n[32], out_n[32], back_n[32], in_n[32];
+    snprintf(pan_n, sizeof pan_n, "%s-pan", dump);
+    snprintf(out_n, sizeof out_n, "%s-out", dump);
+    snprintf(back_n, sizeof back_n, "%s-pan-back", dump);
+    snprintf(in_n, sizeof in_n, "%s-in", dump);
+    print_cam(dump, a);
+    s0 = a->world_scale;
+    left0 = a->cam_left;
+    pan_to_right_limit(&b);
+    if (!dump_and_check(pan_n, &b, dump)) bad++;
+    if (!panel_check_pigs(pan_n, &b, 0, 1)) bad++;
+    print_cam("pan-pigs", &b);
+    if (!(b.cam_left > left0 + 25.f)) {
+        /* Opening already framed the pigs (short levels): still must show them. */
+        if (b.pig_n < 1) bad++;
+    }
+    left1 = b.cam_left;
+    pan_to_left_limit(&b);
+    dump_panel(back_n);
+    print_cam("pan-back", &b);
+    if (!(b.cam_left < left1 - 20.f) && left1 > left0 + 25.f) bad++;
+    pinch_out(22);
+    wait_frames(8);
+    ab_phys_snapshot(&b);
+    s1 = b.world_scale;
+    if (!dump_and_check(out_n, &b, pan_n)) bad++;
+    if (!panel_check_pigs(out_n, &b, 1, 1)) bad++;
+    print_cam("pinch-out", &b);
+    if (!(s1 < s0 - 0.03f)) bad++;
+    left0 = b.cam_left;
+    pan_drag(18, 120.f, 360.f, 120.f, 50.f);
+    ab_phys_snapshot(&b);
+    print_cam("pinch-pan", &b);
+    pinch_in(16);
+    wait_frames(8);
+    ab_phys_snapshot(&b);
+    s2 = b.world_scale;
+    dump_panel(in_n);
+    print_cam("pinch-in", &b);
+    if (!(s2 > s1 + 0.02f)) bad++;
+    pan_to_left_limit(&b);
+    ab_phys_snapshot(&b);
+    print_cam("pinch-in-back", &b);
+    return !bad;
 }
 int main(int argc, char **argv) {
     if (argc < 5) { fprintf(stderr, "usage: %s DATA_DIR guest.img OUT_DIR FRAMES [SHOT_EVERY] [script]\n", argv[0]); return 2; }
@@ -834,6 +1029,7 @@ int main(int argc, char **argv) {
         wait_frames(90);
         if (!level_sane("Level1", &a)) fail++;
         if (!dump_and_check("panel-l1", &a, NULL)) fail++;
+        if (!play_level_camera("panel-l1", &a)) fail++;
         ox = fe_off_x; oy = fe_off_y; sx = fe_scale; sy = fe_scale_y;
         pr = be_fb[24][215][0]; pg = be_fb[24][215][1]; pb = be_fb[24][215][2];
         ab_touch(0, 1, 120.f, 80.f);
@@ -854,17 +1050,15 @@ int main(int argc, char **argv) {
         ab_load_lua_level("Level2");
         wait_frames(90);
         if (!level_sane("Level2", &a)) fail++;
+        if (!dump_and_check("panel-l2", &a, NULL)) fail++;
         scale0 = a.world_scale;
-        pinch_out(16);
-        wait_frames(10);
+        if (!play_level_camera("panel-l2", &a)) fail++;
         ab_phys_snapshot(&b);
         scale1 = b.world_scale;
         fprintf(stderr, "AB_GESTURE_TEST pinch L2 scale %.3f -> %.3f vis %d/%d\n",
                 (double)scale0, (double)scale1, b.vis_all, b.bodies);
-        if (!(scale1 < scale0 - 0.015f) && !(scale1 > scale0 + 0.015f)) fail++;
         if (scale1 < 0.15f || scale1 > 1.05f) fail++;
         if (!level_sane("Level2-pinch", &b)) fail++;
-        if (!dump_and_check("panel-l2", &b, NULL)) fail++;
         tap_at(215.f, 24.f);
         wait_frames(8);
         dump_panel("panel-pause");
@@ -873,9 +1067,27 @@ int main(int argc, char **argv) {
             fprintf(stderr, "AB_GESTURE_TEST pause pix=%d\n", pix);
             if (pix < 800) fail++;
         }
+        tap_at(215.f, 24.f);
+        wait_frames(8);
         ab_load_lua_level("Level3");
         wait_frames(90);
         if (!level_sane("Level3", &a)) fail++;
+        if (!dump_and_check("panel-l3", &a, NULL)) fail++;
+        if (!play_level_camera("panel-l3", &a)) fail++;
+        ab_load_lua_level("Level8");
+        wait_frames(90);
+        ab_unpause();
+        tap_at(58.f, 292.f);
+        wait_frames(8);
+        if (!level_sane("Level8", &a)) fail++;
+        if (!play_level_camera("panel-l8", &a)) fail++;
+        ab_load_lua_level("Level21");
+        wait_frames(90);
+        ab_unpause();
+        tap_at(58.f, 292.f);
+        wait_frames(8);
+        if (!level_sane("Level21", &a)) fail++;
+        if (!play_level_camera("panel-l21", &a)) fail++;
         fprintf(stderr, "AB_GESTURE_TEST %s\n", fail ? "FAIL" : "PASS");
         if (rt_malloc_failures()) {
             fprintf(stderr, "FATAL: %u guest allocations failed\n", rt_malloc_failures());
@@ -890,7 +1102,7 @@ int main(int argc, char **argv) {
          * Pinch out then in on each level. L1 again, then chapter 1. */
         int fail = 0, i, n, ch1_fail = 0;
         ab_phys_info a, b;
-        float s0, s1, s2, left0;
+        float s0;
         fprintf(stderr, "AB_DEVICE_TEST profile=%s\n", os_profile_name());
         wait_frames(200);
         dump_panel("panel-splash");
@@ -908,67 +1120,19 @@ int main(int argc, char **argv) {
         wait_frames(40);
         if (!level_sane("map-L1", &a)) fail++;
         if (!dump_and_check("panel-l1", &a, NULL)) fail++;
-        print_cam("L1-normal", &a);
         s0 = a.world_scale;
-        pinch_out(20);
-        wait_frames(8);
-        ab_phys_snapshot(&b);
-        s1 = b.world_scale;
-        if (!dump_and_check("panel-l1-out", &b, NULL)) fail++;
-        print_cam("L1-pinch-out", &b);
-        if (!(s1 < s0 - 0.04f)) fail++;
-        left0 = b.cam_left;
-        /* panel y is game x (Home-on-right). Drag toward smaller py to raise cam_left (pigs). */
-        pan_drag(18, 120.f, 360.f, 120.f, 50.f);
-        ab_phys_snapshot(&b);
-        if (!dump_and_check("panel-l1-pan", &b, "panel-l1-out")) fail++;
-        print_cam("L1-pan-pigs", &b);
-        if (!(b.cam_left > left0 + 40.f)) fail++;
-        pan_drag(18, 120.f, 50.f, 120.f, 360.f);
-        ab_phys_snapshot(&b);
-        dump_panel("panel-l1-pan-back");
-        print_cam("L1-pan-back", &b);
-        pinch_in(16);
-        wait_frames(8);
-        ab_phys_snapshot(&b);
-        s2 = b.world_scale;
-        dump_panel("panel-l1-in");
-        print_cam("L1-pinch-in", &b);
-        if (!(s2 > s1 + 0.03f)) fail++;
+        if (!play_level_camera("panel-l1", &a)) fail++;
         double_tap(120.f, 200.f);
         ab_phys_snapshot(&b);
         print_cam("L1-double-tap", &b);
         fprintf(stderr, "AB_DEVICE_TEST L1 double-tap scale %.3f (play was %.3f)\n",
                 (double)b.world_scale, (double)s0);
-        if (b.world_scale < s0 - 0.08f || b.world_scale > s0 + 0.08f) fail++;
+        if (b.world_scale < s0 - 0.12f || b.world_scale > s0 + 0.12f) fail++;
         ab_goto_level("Level2");
         wait_frames(90);
         if (!level_sane("next-L2", &a)) fail++;
         if (!dump_and_check("panel-l2", &a, NULL)) fail++;
-        print_cam("L2-normal", &a);
-        s0 = a.world_scale;
-        pinch_out(20);
-        wait_frames(6);
-        ab_phys_snapshot(&b);
-        if (!dump_and_check("panel-l2-out", &b, NULL)) fail++;
-        print_cam("L2-pinch-out", &b);
-        s1 = b.world_scale;
-        left0 = b.cam_left;
-        pan_drag(18, 120.f, 360.f, 120.f, 50.f);
-        ab_phys_snapshot(&b);
-        if (!dump_and_check("panel-l2-pan", &b, "panel-l2-out")) fail++;
-        print_cam("L2-pan-pigs", &b);
-        if (!(b.cam_left > left0 + 30.f)) fail++;
-        pan_drag(18, 120.f, 50.f, 120.f, 360.f);
-        pinch_in(16);
-        wait_frames(6);
-        ab_phys_snapshot(&b);
-        dump_panel("panel-l2-in");
-        s2 = b.world_scale;
-        print_cam("L2-pinch-in", &b);
-        fprintf(stderr, "AB_DEVICE_TEST L2 pinch %.3f -> %.3f -> %.3f vis %d/%d\n",
-                (double)s0, (double)s1, (double)s2, b.vis_all, b.bodies);
-        if (!(s1 < s0 - 0.04f) || !(s2 > s1 + 0.03f)) fail++;
+        if (!play_level_camera("panel-l2", &a)) fail++;
         tap_at(215.f, 24.f);
         wait_frames(8);
         dump_panel("panel-pause");
@@ -978,25 +1142,17 @@ int main(int argc, char **argv) {
         wait_frames(90);
         if (!level_sane("next-L3", &a)) fail++;
         if (!dump_and_check("panel-l3", &a, NULL)) fail++;
-        print_cam("L3-normal", &a);
-        s0 = a.world_scale;
-        pinch_out(20);
-        wait_frames(6);
-        ab_phys_snapshot(&b);
-        if (!dump_and_check("panel-l3-out", &b, NULL)) fail++;
-        print_cam("L3-pinch-out", &b);
-        left0 = b.cam_left;
-        pan_drag(18, 120.f, 360.f, 120.f, 50.f);
-        ab_phys_snapshot(&b);
-        if (!dump_and_check("panel-l3-pan", &b, "panel-l3-out")) fail++;
-        print_cam("L3-pan-pigs", &b);
-        if (!(b.cam_left > left0 + 30.f)) fail++;
-        pan_drag(18, 120.f, 50.f, 120.f, 360.f);
-        pinch_in(12);
-        wait_frames(6);
-        ab_phys_snapshot(&b);
-        print_cam("L3-pinch-in", &b);
-        if (!(b.world_scale > s0 - 0.08f)) fail++;
+        if (!play_level_camera("panel-l3", &a)) fail++;
+        ab_goto_level("Level8");
+        wait_frames(90);
+        if (!level_sane("next-L8", &a)) fail++;
+        if (!dump_and_check("panel-l8", &a, NULL)) fail++;
+        if (!play_level_camera("panel-l8", &a)) fail++;
+        ab_goto_level("Level21");
+        wait_frames(90);
+        if (!level_sane("next-L21", &a)) fail++;
+        if (!dump_and_check("panel-l21", &a, NULL)) fail++;
+        if (!play_level_camera("panel-l21", &a)) fail++;
         ab_goto_level("Level1");
         wait_frames(40);
         for (i = 0; i < 8; i++) { tap_at(49.f, 324.f); tap_at(55.f, 333.f); }

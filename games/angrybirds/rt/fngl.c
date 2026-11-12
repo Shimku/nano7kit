@@ -15,6 +15,7 @@ static uint32_t stackarg(int i) { return gr32(SP + 4u * (uint32_t)i); }
 float fe_scale, fe_scale_y, fe_off_x, fe_off_y, fe_fb_h;
 int fe_view_h = 480;
 int fe_stat_tris, fe_stat_draws, fe_stat_tex_bytes;
+int fe_stat_ingame_ok, fe_stat_ingame_clip, fe_stat_castle_img;
 
 typedef struct { float m[16]; } mat;
 static mat stk[3][16];
@@ -33,6 +34,41 @@ int fe_pending_tex_shift;
 int fe_lowmem;
 char fe_lowmem_why[160];
 static uint8_t uv_div[MAXTEX];
+#define TEXSHIFT_Q 32
+static uint8_t texshift_q[TEXSHIFT_Q];
+static int texshift_qn, texshift_qh;
+static char texshift_last_stem[40];
+void fe_queue_tex_shift(int sh, const char *stem) {
+    if (sh < 1 || sh > 7) return;
+    /* Size/header fopen then data fopen of the same PVR must not queue twice
+     * or INGAME_1 inherits MENU's shift and the 194x196 ground block wraps. */
+    if (stem && texshift_last_stem[0] && !strcmp(texshift_last_stem, stem)) {
+        fe_pending_tex_shift = sh;
+        return;
+    }
+    if (stem) snprintf(texshift_last_stem, sizeof texshift_last_stem, "%s", stem);
+    if (texshift_qn < TEXSHIFT_Q) texshift_q[texshift_qn++] = (uint8_t)sh;
+    fe_pending_tex_shift = sh;
+}
+static int take_tex_shift(void) {
+    int sh = 0;
+    if (texshift_qh < texshift_qn) sh = (int)texshift_q[texshift_qh++];
+    else if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) sh = fe_pending_tex_shift;
+    fe_pending_tex_shift = 0;
+    if (texshift_qh >= texshift_qn) texshift_qh = texshift_qn = 0;
+    return sh;
+}
+static void apply_tex_shift(uint32_t n, int w, int h) {
+    int sh = 0;
+    /* Sheet uploads are the 128-256 texscale PVRs. Tiny atlas icons must
+     * not steal a queued divide or INGAME_1 UVs wrap into a white mosaic. */
+    if (w >= 128 || h >= 128) sh = take_tex_shift();
+    if (n && n < MAXTEX && sh > 0) {
+        uv_div[n] = (uint8_t)sh;
+        rt_log("texshift gl=%u %dx%d div=%d leftover=%d", n, w, h, sh,
+               texshift_qn - texshift_qh);
+    }
+}
 static int texh[MAXTEX];
 static uint32_t bound_tex;
 static int en_blend, en_tex, en_depth, en_cull, en_alpha;
@@ -65,7 +101,20 @@ IMP(_glPopMatrix) { UNUSED; if (top[mode] > 0) top[mode]--; return 0; }
 IMP(_glViewport) { UNUSED; vx = (int)r0; vy = (int)r1; vw = (int)r2; vh = (int)r3;
     if (getenv("AB_DUMP_V")) fprintf(stderr, "glViewport %d %d %d %d\n", vx, vy, vw, vh);
     return 0; }
-IMP(_glClearColor) { UNUSED; clear_rgba[0] = U2F(r0); clear_rgba[1] = U2F(r1); clear_rgba[2] = U2F(r2); clear_rgba[3] = U2F(r3); return 0; }
+IMP(_glClearColor) {
+    float r = U2F(r0), g = U2F(r1), b = U2F(r2), a = U2F(r3);
+    UNUSED;
+    /* Ka3D clears to cyan (0,1,1). Past the sky tiles that reads as empty
+     * void. Extend with the theme sky colour so minWorldScale can show the
+     * whole level. */
+    if (r < 0.40f && g > 0.75f && b > 0.75f) {
+        r = 0.655f;
+        g = 0.820f;
+        b = 0.910f;
+    }
+    clear_rgba[0] = r; clear_rgba[1] = g; clear_rgba[2] = b; clear_rgba[3] = a;
+    return 0;
+}
 IMP(_glClearDepthf) { UNUSED; clear_depth = U2F(r0); return 0; }
 IMP(_glClear) { UNUSED; be_clear((r0 & 0x4000) != 0, (r0 & 0x100) != 0, clear_rgba, clear_depth); return 0; }
 IMP(_glColor4ub) { UNUSED; color[0] = (float)(r0 & 255) / 255.f; color[1] = (float)(r1 & 255) / 255.f;
@@ -348,6 +397,7 @@ IMP(_glTexImage2D) {
             tex_drv_release(bound_tex);
 #endif
             fe_stat_tex_bytes -= tex_bytes[bound_tex]; tex_bytes[bound_tex] = 0;
+            apply_tex_shift(bound_tex, ow, oh);
             return 0;
         }
         if (opaque) for (int i = 0; i < ow * oh; i++) {   /* no room: back to 565 */
@@ -366,10 +416,7 @@ IMP(_glTexImage2D) {
      * pixels sit in the GL backend, which is not this OS heap. */
     tex_drv_release(bound_tex);
 #endif
-    if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
-        uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
-        fe_pending_tex_shift = 0;
-    }
+    apply_tex_shift(bound_tex, ow, oh);
     fe_stat_tex_bytes += ow * oh * 2 - tex_bytes[bound_tex]; tex_bytes[bound_tex] = ow * oh * 2;
     if (fe_stat_tex_bytes > fe_stat_tex_peak) fe_stat_tex_peak = fe_stat_tex_bytes;
     return 0;
@@ -386,10 +433,7 @@ IMP(_glCompressedTexImage2D) {
             if (++fe_stat_tex_count > fe_stat_tex_count_peak) fe_stat_tex_count_peak = fe_stat_tex_count;
         }
         be_tex_compressed(texh[bound_tex], 0, r2, (int)r3, h, G8(data), size);
-        if (fe_pending_tex_shift > 0 && fe_pending_tex_shift < 8) {
-            uv_div[bound_tex] = (uint8_t)fe_pending_tex_shift;
-            fe_pending_tex_shift = 0;
-        }
+        apply_tex_shift(bound_tex, (int)r3, h);
         fe_stat_tex_bytes += (int)size - tex_bytes[bound_tex]; tex_bytes[bound_tex] = (int)size;
         if (fe_stat_tex_bytes > fe_stat_tex_peak) fe_stat_tex_peak = fe_stat_tex_bytes;
     }
@@ -508,6 +552,31 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         sv[i].u = p->u; sv[i].v = p->v;
         for (int k = 0; k < 4; k++) { float cc = p->c[k]; sv[i].c[k] = (uint8_t)(cc <= 0 ? 0 : cc >= 1 ? 255 : cc * 255.f + 0.5f); }
     }
+    {
+        float area = (sv[1].x - sv[0].x) * (sv[2].y - sv[0].y) - (sv[2].x - sv[0].x) * (sv[1].y - sv[0].y);
+        float minx, maxx, miny, maxy, bw, bh;
+        int vi;
+        if (area < 0.f) area = -area;
+        minx = maxx = sv[0].x; miny = maxy = sv[0].y;
+        for (vi = 1; vi < n; vi++) {
+            if (sv[vi].x < minx) minx = sv[vi].x;
+            if (sv[vi].x > maxx) maxx = sv[vi].x;
+            if (sv[vi].y < miny) miny = sv[vi].y;
+            if (sv[vi].y > maxy) maxy = sv[vi].y;
+        }
+        bw = maxx - minx; bh = maxy - miny;
+        if (bw < 0.f) bw = -bw;
+        if (bh < 0.f) bh = -bh;
+        if (!(en_tex && bound_tex) && area > 2000.f) return;
+        /* THEME_GROUND / pause screenshot are unsifted. First-tri area can
+         * be a sliver of a huge quad, so use the clipped bbox too. */
+        if (bound_tex && bound_tex < MAXTEX && !uv_div[bound_tex] &&
+            (area > 14000.f || bw * bh > 35000.f))
+            return;
+        /* Theme 2/3 pause page, or THEME_GROUND covering the pigs at min zoom. */
+        if (bound_tex && bw * bh > 36000.f && bh > 150.f)
+            return;
+    }
     if (en_cull && cullmode != 0x408) {
         float area = (sv[1].x - sv[0].x) * (sv[2].y - sv[0].y) - (sv[2].x - sv[0].x) * (sv[1].y - sv[0].y);
         /* (fx,fy) -> (fy,fx) is a reflection (det -1), so GL winding reverses in
@@ -532,8 +601,13 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
     if (as) atlas_upload();
     st.tex = as ? pages[as->page - 1].handle : en_tex && bound_tex ? texh[bound_tex] : 0;
     st.blend = en_blend; st.sfactor = sf; st.dfactor = df;
-    st.depth_test = en_depth; st.depth_write = depthmask; st.depth_func = depthfunc;
-    st.alpha_test = en_alpha; st.alpha_ref = 0;
+    /* 2D sprites share z=0.001 with the THEME ground quads. Depth test then
+     * hides L2/L3 ice and pigs behind the static blocks. Draw order is
+     * already ground then dynamics. */
+    st.depth_test = 0; st.depth_write = 0; st.depth_func = depthfunc;
+    /* Sheets pad with a=0. Discard those even if the engine left ALPHA_TEST off,
+     * or a 194x196 static block is a white rectangle over the pigs. */
+    st.alpha_test = en_alpha || st.tex != 0; st.alpha_ref = 0;
     cv w[3]; int k = 0;
     for (int n = 0; n < count; n++) {
         int i = first + n;
@@ -546,14 +620,30 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
         if (va_.size < 4) pos[3] = 1;
         if (va_.size < 3) pos[2] = 0;
         xform(&mvp, pos, v.p);
-        if (getenv("AB_DUMP_V") && n == 0) {
-            fprintf(stderr, "draw mode=%u n=%d pos0=%.3f,%.3f,%.3f,%.3f mvp0=%.4f,%.4f,%.4f,%.4f tex=%u\n",
-                    modep, count, pos[0], pos[1], pos[2], pos[3], mvp.m[0], mvp.m[5], mvp.m[12], mvp.m[13], bound_tex);
+        {
+            float ndc_x = v.p[3] != 0.f ? v.p[0] / v.p[3] : v.p[0];
+            float ndc_y = v.p[3] != 0.f ? v.p[1] / v.p[3] : v.p[1];
+            if (n == 0 && bound_tex >= 2 && bound_tex <= 8) {
+                if (ndc_x >= -1.05f && ndc_x <= 1.05f && ndc_y >= -1.05f && ndc_y <= 1.05f)
+                    fe_stat_ingame_ok++;
+                else {
+                    fe_stat_ingame_clip++;
+                    if (getenv("AB_DUMP_CAM")) {
+                        static int nclip;
+                        if (nclip < 12)
+                            rt_log("ingame-clip ndc=%.2f,%.2f pos=%.1f,%.1f tex=%u",
+                                   (double)ndc_x, (double)ndc_y, (double)pos[0], (double)pos[1],
+                                   bound_tex), nclip++;
+                    }
+                }
+            }
         }
         if (ta_.on) { float t[4]; fetch(&ta_, i, t, 0, 0); v.u = t[0]; v.v = t[1]; } else { v.u = v.v = 0; }
         if (bound_tex && uv_div[bound_tex]) {
             float d = (float)(1 << uv_div[bound_tex]);
             v.u /= d; v.v /= d;
+            if (v.u < 0.f) v.u = 0.f; else if (v.u > 1.f) v.u = 1.f;
+            if (v.v < 0.f) v.v = 0.f; else if (v.v > 1.f) v.v = 1.f;
         }
         if (as) {
             float u = v.u < 0.f ? 0.f : v.u > 1.f ? 1.f : v.u, vv = v.v < 0.f ? 0.f : v.v > 1.f ? 1.f : v.v;
@@ -647,6 +737,8 @@ void fngl_reset(void) {
     fe_scale = 0.75f; fe_scale_y = 0.9f; fe_off_x = 0.f; fe_off_y = 0.f; fe_fb_h = 320.f; fe_view_h = 320;
     fe_tex_shift = 0; fe_tex_min_side = 64; fe_tex_big_side = 256; fe_tex_big_shift = 0; fe_atlas_max_side = 32;
     fe_pending_tex_shift = 0;
+    texshift_qn = texshift_qh = 0;
+    texshift_last_stem[0] = 0;
     fe_lowmem = 0;
     fe_lowmem_why[0] = 0;
     memset(uv_div, 0, sizeof uv_div);

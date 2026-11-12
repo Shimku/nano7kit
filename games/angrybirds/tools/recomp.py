@@ -413,6 +413,10 @@ class Emitter:
             return "SP=sp;CALLQ(I_%s(r0,r1,r2,r3));" % cname(name)
         t = tgt & ~1
         if t in self.funcs:
+            # Static terrain draw: the runtime patches the 2D xf so a swipe
+            # is not the iPad castle close-up. Direct CALLQ skips rt_icall.
+            if t in (0x130268, 0x130a48, 0x6c1b4):
+                return "SP=sp;CALLQ(rt_icall(0x%xu,r0,r1,r2,r3));" % t
             return "SP=sp;CALLQ(%s(r0,r1,r2,r3));" % self.fn(t)
         self.missing_calls[t] += 1
         return "SP=sp;CALLQ(rt_icall(0x%xu,r0,r1,r2,r3));" % t
@@ -1214,8 +1218,15 @@ def main():
         out = []
         for a in part:
             em.emit_function(a, out)
+        text = HEADER + '#include "recomp_funcs.h"\n#include "recomp_imports.h"\n\n' + "\n\n".join(out) + "\n"
+        # Image::draw clip AABB rejects L2 ice/pigs when the 2x2 is not identity.
+        # Keep the draw path (L_b1870); RECIPE rebuild must not restore the clip.
+        if 0xb15c4 in part:
+            text = text.replace("if(n_){goto L_b1860;}", "if(0&&n_){goto L_b1860;}")
+            text = text.replace("if(n_==v_){goto L_b1860;}", "if(0&&n_==v_){goto L_b1860;}")
+            text = text.replace("if(n_!=v_){goto L_b1870;}", "if(1||n_!=v_){goto L_b1870;}")
         with open(os.path.join(outdir, "recomp_%02d.c" % c), "w") as fh:
-            fh.write(HEADER + '#include "recomp_funcs.h"\n#include "recomp_imports.h"\n\n' + "\n\n".join(out) + "\n")
+            fh.write(text)
     imps = sorted({n for n in em.used_imports if n} | {n for (k, n) in img.m.imports.values() if n})
     with open(os.path.join(outdir, "recomp_imports.h"), "w") as fh:
         fh.write("/* generated */\n#include <stdint.h>\n")

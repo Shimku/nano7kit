@@ -23,7 +23,7 @@ static int pinch_on;
 static float pinch_d0, pinch_s0, pinch_cx, pinch_cy, pinch_play;
 static int cam_user;                    /* 1: player pinch/pan latched over cameraFunction */
 static float user_scale, user_left, user_top;
-static int pan_on;
+static int pan_on, pan_moved;
 static float pan_gx0, pan_gy0, pan_left0, pan_top0;
 /* Play-camera ground/sky and bird/castle look-at, captured once per level.
  * Pinch/pan write birdCameraData.px (cameraFunction draws from that, not
@@ -34,7 +34,9 @@ static float lvl_bird_px, lvl_bird_py, lvl_bird_sx, lvl_bird_left, lvl_bird_top;
 static float lvl_castle_px, lvl_castle_py, lvl_castle_sx;
 static float lvl_left, lvl_right;
 static float lvl_min_world;
-static int lvl_cam_ok;
+static float lvl_pig_minx, lvl_pig_maxx, lvl_bird_minx, lvl_bird_maxx;
+static float lvl_pig_wx[AB_PHYS_PIG], lvl_pig_wy[AB_PHYS_PIG];
+static int lvl_pig_n, lvl_cam_ok;
 static uint64_t tap_us;
 static float tap_x, tap_y;
 static char watch_name[32], watch_pending[32];
@@ -61,6 +63,17 @@ static void ab_log_level(const char *name);
 static void ab_iphone_cameras(void);
 static void ab_apply_bird_cam(void);
 static void ab_lua_gc(void);
+static void ab_latch_user_from_play(void);
+static int ab_touch_near_bird(float gx, float gy);
+static void ab_pan_from_finger(void);
+static void ab_note_level_bodies(const ab_phys_info *o);
+static void ab_cam_xf(uint32_t xf);
+static void ab_cam_xf_write(uint32_t xf);
+static void ab_cam_xf_ctx(void);
+static void ab_live_span(float *lo, float *hi);
+static int ab_xf_hud(uint32_t xf);
+static int ab_looks_like_xf(uint32_t p);
+static void ab_patch_returned_xf(uint32_t xf);
 
 static uint32_t mk_string(const char *s) {
     uint32_t o = g_malloc(16), p = g_strdup(s);
@@ -82,6 +95,239 @@ static uint32_t make_osi(void) {
 /* Fruit Ninja keeps fe_scale/fe_off fixed after reset: the 480x320 landscape
  * fills 240x432 with Home on the right. Do not pan or zoom this map; only
  * lua cameraFunction moves the world. */
+static int cam_patching;
+static int cam_user_live(void) {
+    return cam_user && user_scale > 0.10f && user_scale < 1.20f;
+}
+/* Native drawGame reads GameLua+368/372/380. Lua cameraFunction may
+ * overwrite those during update; put the latched swipe back before draw. */
+static void ab_force_draw_cam(uint32_t glu) {
+    if (!glu) glu = game_lua();
+    if (!glu || !guest_ok(glu, 384u)) return;
+    gw32(glu + 368u, F2U(user_left));
+    gw32(glu + 372u, F2U(user_top));
+    gw32(glu + 380u, F2U(user_scale));
+    if (app && guest_ok(app, 644u)) {
+        gw32(app + 636u, F2U(user_scale));
+        gw32(app + 640u, F2U(user_scale));
+    }
+    ab_cam_xf_ctx();
+}
+/* Ka3D 2D state lives at EGL_Context+0x10C (getRenderState2D). Image::draw
+ * clips with (x+tx)*sx against the 480x320 view. HUD (scale ~1) is unchanged. */
+static int ab_xf_hud(uint32_t xf) {
+    float sx, tx, ty;
+    if (!xf || !guest_ok(xf, 56u)) return 1;
+    sx = U2F(gr32(xf + 40u));
+    tx = U2F(gr32(xf + 32u));
+    ty = U2F(gr32(xf + 36u));
+    return sx > 0.90f && sx < 1.10f && tx > -80.f && tx < 520.f && ty > -80.f && ty < 360.f;
+}
+static int ab_looks_like_xf(uint32_t p) {
+    float sx, sy, a00, a01, a10, a11, n0, n1;
+    if (!p || (p & 3u) || !guest_ok(p, 56u)) return 0;
+    sx = U2F(gr32(p + 40u));
+    sy = U2F(gr32(p + 44u));
+    if (!(sx > 0.08f && sx < 6.f && sy > 0.08f && sy < 6.f)) return 0;
+    if (fabsf(sx - sy) > 0.35f) return 0;
+    a00 = U2F(gr32(p + 16u));
+    a01 = U2F(gr32(p + 20u));
+    a10 = U2F(gr32(p + 24u));
+    a11 = U2F(gr32(p + 28u));
+    n0 = a00 * a00 + a01 * a01;
+    n1 = a10 * a10 + a11 * a11;
+    if (n0 < 0.45f || n0 > 2.6f || n1 < 0.45f || n1 > 2.6f) return 0;
+    return 1;
+}
+static int cam_xy_baked;   /* Image::draw x,y already camera-relative */
+static int cam_xy_screen;  /* baked x,y are already 480x320 pixels; xf.sx = 1 */
+static int in_masked_add;  /* MaskedImage::add composites into an FBO */
+static void ab_cam_xf_write(uint32_t xf) {
+    float tx, ty, sc;
+    if (!xf || !guest_ok(xf, 56u)) return;
+    if (!cam_user_live()) return;
+    /* Image::draw dest = (x + xf48 + tx) then * (2*sx/viewport) into NDC.
+     * Native xf48/xf52 keep the opening camera; adding our tx on top puts
+     * L2 pigs (world ~1100) past +1 and the sprite never emits. When x,y
+     * are already view pixels, translations stay 0 and sx is 1. */
+    tx = cam_xy_baked ? 0.f : -user_left;
+    ty = cam_xy_baked ? 0.f : -user_top;
+    sc = cam_xy_screen ? 1.f : user_scale;
+    gw32(xf + 32u, F2U(tx));
+    gw32(xf + 36u, F2U(ty));
+    gw32(xf + 40u, F2U(sc));
+    gw32(xf + 44u, F2U(sc));
+    gw32(xf + 48u, F2U(0.f));
+    gw32(xf + 52u, F2U(0.f));
+    /* Keep dest = sprite pivot (UV uses destarg - dest). Identity 2x2 so
+     * Image::draw's clip AABB matches (x+tx)*scale; 90° ice otherwise
+     * inflates min-x NDC past +1 and the sprite never emits. */
+    gw32(xf + 16u, F2U(1.f));
+    gw32(xf + 20u, F2U(0.f));
+    gw32(xf + 24u, F2U(0.f));
+    gw32(xf + 28u, F2U(1.f));
+}
+static void ab_cam_xf(uint32_t xf) {
+    if (!xf || !guest_ok(xf, 56u)) return;
+    if (!cam_user_live()) return;
+    if (ab_xf_hud(xf)) return;
+    ab_cam_xf_write(xf);
+}
+static void ab_patch_returned_xf(uint32_t xf) {
+    /* Image::draw / terrain read the pointer getRenderState2D returns, which
+     * is not always EGL_Context+0x10C (a wrapper can hand back a copy). */
+    if (!cam_user_live()) return;
+    if (!ab_looks_like_xf(xf)) return;
+    if (ab_xf_hud(xf)) return;
+    ab_cam_xf_write(xf);
+}
+static void ab_cam_xf_glu(uint32_t glu) {
+    uint32_t c;
+    if (!glu || !guest_ok(glu, 28u)) return;
+    c = gr32(glu + 24u);
+    if (c && guest_ok(c, 0x10Cu + 56u))
+        ab_cam_xf_write(c + 0x10Cu);
+}
+static void ab_cam_xf_ctx(void) {
+    uint32_t glu;
+    if (ctx && guest_ok(ctx, 0x10Cu + 56u))
+        ab_cam_xf_write(ctx + 0x10Cu);
+    glu = game_lua();
+    if (glu) ab_cam_xf_glu(glu);
+}
+static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *r2, uint32_t *r3) {
+    /* MaskedImage mutates the shared 2D xf. Leave it alone; Sprite::draw
+     * after this call gets the swipe camera via getRenderState2D. */
+    if (addr == 0x130268u || addr == 0x130a48u)
+        in_masked_add = 1;
+    /* Image::draw this+12 is the EGL_Context. World sprites keep world x
+     * (L2 pigs at ~1100). Bake the swipe into x,y and clear leftover tx
+     * so clip AABB is the play view, not the opening slingshot. */
+    if (addr == 0xb15c4u && r0 && *r0 && guest_ok(*r0, 16u)) {
+        uint32_t c = gr32(*r0 + 12u);
+        float x = r2 ? U2F(*r2) : 0.f;
+        float y = r3 ? U2F(*r3) : 0.f;
+        int world = (x < -40.f || x > 520.f || y < -200.f || y > 420.f);
+        float sx0 = (c && guest_ok(c, 0x10Cu + 44u)) ? U2F(gr32(c + 0x10Cu + 40u)) : 0.f;
+        if (world && r2 && U2F(*r2) > 1000.f) fe_stat_castle_img++;
+        if (world && cam_user_live() && r2 && r3 &&
+            (!in_masked_add || x > 400.f)) {
+            /* Play scale: dest = world-left and xf.sx = scale (L1/L2 pan).
+             * Min zoom: dest already in 480x320 pixels and xf.sx = 1, or
+             * Image::draw's clip AABB rejects dest_pixel ~ span (L2-out). */
+            if (pinch_play > 0.20f && user_scale < pinch_play - 0.04f) {
+                *r2 = F2U((x - user_left) * user_scale);
+                *r3 = F2U((y - user_top) * user_scale);
+                cam_xy_screen = 1;
+            } else {
+                *r2 = F2U(x - user_left);
+                *r3 = F2U(y - user_top);
+                cam_xy_screen = 0;
+            }
+            cam_xy_baked = 1;
+            x = U2F(*r2);
+            y = U2F(*r3);
+        }
+        if (c && guest_ok(c, 0x10Cu + 56u) && (!in_masked_add || cam_xy_baked)) {
+            if (world || cam_xy_baked) ab_cam_xf_write(c + 0x10Cu);
+            else ab_cam_xf(c + 0x10Cu);
+        }
+        if (getenv("AB_DUMP_CAM") && (world || cam_xy_baked) && cam_user_live()) {
+            static int nimg;
+            float sx1 = (c && guest_ok(c, 0x10Cu + 44u)) ? U2F(gr32(c + 0x10Cu + 40u)) : 0.f;
+            float tx = (c && guest_ok(c, 0x10Cu + 52u)) ? U2F(gr32(c + 0x10Cu + 32u)) : 0.f;
+            float xf48 = (c && guest_ok(c, 0x10Cu + 52u)) ? U2F(gr32(c + 0x10Cu + 48u)) : 0.f;
+            if (nimg < 24 && (sx0 != sx1 || x > 80.f || nimg < 8)) {
+                rt_log("imgdraw x=%.0f y=%.0f ctx=%08x sx0=%.3f sx1=%.3f tx=%.1f xf48=%.1f user=%.3f,%.0f baked=%d",
+                       (double)x, (double)y, c, (double)sx0, (double)sx1, (double)tx,
+                       (double)xf48, (double)user_scale, (double)user_left, cam_xy_baked);
+                nimg++;
+            }
+        }
+    }
+    if (cam_patching) return;
+    if (!cam_user_live()) return;
+    if (addr == AB_SetTopLeft && r1) {
+        *r1 = F2U(user_left);
+        if (r2) *r2 = F2U(user_top);
+    } else if (addr == AB_SetWorldScale && r1) {
+        *r1 = F2U(user_scale);
+    } else if (addr == 0x7eb0u) {
+        /* GameLua::update: write bird/screen tables before cameraFunction. */
+        cam_patching = 1;
+        ab_commit_user_cam();
+        cam_patching = 0;
+        ab_force_draw_cam(r0 ? *r0 : 0);
+        ab_cam_xf_ctx();
+    } else if (addr == 0x9ad4u || addr == 0xa5d8u || addr == 0x6ba0u) {
+        /* drawGame / drawBackground / drawForegroundNative */
+        ab_force_draw_cam(r0 ? *r0 : 0);
+        ab_cam_xf_ctx();
+    }
+}
+static void ab_icall_after(uint32_t addr, uint32_t r0, uint32_t ret) {
+    uint32_t glu, c, vtbl, xf, getxf;
+    if (addr == 0x130268u || addr == 0x130a48u) {
+        in_masked_add = 0;
+        return;
+    }
+    if (addr == 0xb15c4u || addr == 0x6c1b4u) {
+        cam_xy_baked = 0;
+        cam_xy_screen = 0;
+    }
+    if (cam_patching) return;
+    if (!cam_user_live()) return;
+    if (in_masked_add) return;
+    /* getRenderState2D returns context+0x10C. Patch that pointer, not a
+     * wrapper's this+0x10C, so Image::draw / F_130268 read the swipe. */
+    if (addr == 0xa876cu) {
+        uint32_t xf = ab_looks_like_xf(ret) ? ret : 0;
+        if (!xf && r0 && guest_ok(r0, 0x10Cu + 56u)) xf = r0 + 0x10Cu;
+        if (getenv("AB_DUMP_CAM") && xf && guest_ok(xf, 44u) && cam_user_live()) {
+            float sx = U2F(gr32(xf + 40u));
+            static int ngx;
+            if (ngx < 12 && fabsf(sx - user_scale) > 0.04f) {
+                rt_log("getxf sx=%.3f tx=%.0f user=%.3f,%.0f hud=%d",
+                       (double)sx, (double)U2F(gr32(xf + 32u)),
+                       (double)user_scale, (double)user_left, ab_xf_hud(xf));
+                ngx++;
+            }
+        }
+        if (ab_looks_like_xf(ret)) {
+            if (!ab_xf_hud(ret)) ab_cam_xf_write(ret);
+        } else if (r0 && guest_ok(r0, 0x10Cu + 56u))
+            ab_cam_xf(r0 + 0x10Cu);
+        return;
+    }
+    ab_patch_returned_xf(ret);
+    if (addr == AB_SetTopLeft || addr == AB_SetWorldScale) {
+        /* Lua may pass floats in VFP; F_6000 reads r1/r2. Force the store. */
+        ab_force_draw_cam(r0);
+        return;
+    }
+    if (addr != 0xa960u) return; /* GameLua::setRenderState */
+    glu = r0 ? r0 : game_lua();
+    if (!glu || !guest_ok(glu, 28u)) return;
+    c = gr32(glu + 24u);
+    if (!c || !guest_ok(c, 4u)) return;
+    vtbl = gr32(c);
+    if (!vtbl || !guest_ok(vtbl, 92u)) return;
+    getxf = gr32(vtbl + 88u);
+    if (!getxf) return;
+    cam_patching = 1;
+    xf = rt_call("xf", getxf, c, 0, 0, 0, 0, 0);
+    cam_patching = 0;
+    if (ab_looks_like_xf(xf) && !ab_xf_hud(xf))
+        ab_cam_xf_write(xf);
+    else
+        ab_cam_xf(xf);
+}
+static void ab_cam_clear_play(void) {
+    play_ground_b = 0.f;
+    play_top0 = 0.f;
+    play_left0 = 0.f;
+    pinch_play = 0.f;
+}
 static void reset_view(void) {
     int i;
     fe_scale = 0.75f;
@@ -90,12 +336,18 @@ static void reset_view(void) {
     fe_off_y = 0.f;
     lbutton_held = 0;
     pinch_on = 0;
+    pan_on = 0;
+    pan_moved = 0;
+    cam_user = 0;
+    ab_cam_clear_play();
     for (i = 0; i < AB_FINGERS; i++) memset(&fed[i], 0, sizeof fed[i]);
 }
 
 int ab_start(void) {
     int i;
     reset_view();
+    rt_icall_patch = ab_icall_patch;
+    rt_icall_after = ab_icall_after;
     rt_log("ab_start: %d static inits", AB_INIT_COUNT);
     for (i = 0; i < AB_INIT_COUNT; i++) rt_call("init", ab_inits[i], 0, 0, 0, 0, 0, 0);
     osi = make_osi();
@@ -248,9 +500,10 @@ static void pin_touch_count(uint32_t a) {
     n = finger_down_count();
     /* Two fingers are our pinch. GameApp::update would also pinch App+636
      * (lua zoomLevel) and doItAllCamera would fight the latched scale.
-     * One finger while zoomed out is our pan; lua would treat it as a
-     * slingshot pull or a castle-camera sweep. */
+     * One finger on empty space is our pan (play scale or zoomed out);
+     * lua would treat it as a slingshot pull or a castle-camera sweep. */
     if (n >= 2) n = 0;
+    else if (pan_on) n = 0;
     else if (n == 1 && cam_user && user_scale < pinch_play - 0.02f) n = 0;
     if (n > 0) {
         if (!data || !guest_ok(data, (uint32_t)n * 12u)) {
@@ -350,15 +603,50 @@ void ab_touch(int id, int down, float px, float py) {
     fed[id].gx = gx;
     fed[id].gy = gy;
     fed[id].down = down != 0;
-    send_touch(began, moved, ended, id, gx, gy);
-    if (ended && id == 0 && cam_user && finger_down_count() == 0) {
-        uint64_t now = plat_time_us();
-        float dx = px - tap_x, dy = py - tap_y;
-        if (tap_us && now - tap_us < 400000ull && dx * dx + dy * dy < 40.f * 40.f)
-            ab_reset_play_cam();
-        tap_us = now;
-        tap_x = px;
-        tap_y = py;
+    if (began && id == 0 && finger_down_count() == 1 && !pinch_on) {
+        int zoomed = cam_user && user_scale < pinch_play - 0.02f;
+        int hud = (px > 188.f && py < 52.f) || (px < 110.f && py > 248.f && py < 350.f);
+        /* Pause / resume chrome is screen-space. Do not steal those taps
+         * as a pan (Theme 2 loads with the pause page up). */
+        if (hud) {
+            pan_on = 0;
+            pan_moved = 0;
+        } else if (!zoomed && ab_touch_near_bird(gx, gy)) {
+            pan_on = 0;
+            pan_moved = 0;
+        } else {
+            if (!cam_user) ab_latch_user_from_play();
+            pan_on = 1;
+            pan_moved = 0;
+            pan_gx0 = gx;
+            pan_gy0 = gy;
+            pan_left0 = user_left;
+            pan_top0 = user_top;
+        }
+    }
+    if (pan_on && id == 0 && down) {
+        if (moved) pan_moved = 1;
+        ab_pan_from_finger();
+    }
+    /* Pan/pinch are owned by the latched camera. Forwarding them as
+     * LBUTTON made lua cameraTargetObject / doItAllCamera zoom onto a
+     * single block (L2 play-scale swipe was two untextured wood boxes). */
+    if (!(pan_on || pinch_on || finger_down_count() >= 2))
+        send_touch(began, moved, ended, id, gx, gy);
+    if (ended && id == 0) {
+        int dragged = pan_on && pan_moved;
+        pan_on = 0;
+        pan_moved = 0;
+        if (dragged) tap_us = 0;
+        else if (cam_user && finger_down_count() == 0) {
+            uint64_t now = plat_time_us();
+            float dx = px - tap_x, dy = py - tap_y;
+            if (tap_us && now - tap_us < 400000ull && dx * dx + dy * dy < 40.f * 40.f)
+                ab_reset_play_cam();
+            tap_us = now;
+            tap_x = px;
+            tap_y = py;
+        }
     }
 }
 
@@ -385,6 +673,9 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
     if (dt < 0.001f) dt = 0.001f;
     fe_stat_tris = 0;
     fe_stat_draws = 0;
+    fe_stat_ingame_ok = 0;
+    fe_stat_ingame_clip = 0;
+    fe_stat_castle_img = 0;
     /* Identity GL stacks + the iOS 480x320 ortho, then one GameApp::update.
      * update already runs lua cameraFunction and drawGame. A second lua
      * drawGame here painted the world on top of the pause overlay (device
@@ -396,6 +687,7 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
     ab_apply_pinch();
     ab_apply_pan();
     ab_cam_fit_play();
+    ab_cam_xf_ctx();
     fe_reset_matrices();
     if (ctx && view_rect) {
         rt_call("setViewport", 0xa9560u, ctx, view_rect, 0, 0, 0, 0);
@@ -404,6 +696,8 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
     be_frame_begin();
     if (app && AB_Update) rt_call("update", AB_Update, app, F2U(dt), ctx, 0, 0, 0);
     ab_cam_fit_play();
+    if (cam_user && user_scale > 0.10f && user_scale < 1.20f)
+        ab_commit_user_cam();
     {
         ab_phys_info info;
         ab_phys_snapshot(&info);
@@ -483,14 +777,14 @@ static uint32_t game_lua(void) {
 }
 
 static uint32_t intern_str(const char *s) {
-    static const char *keys[96];
-    static uint32_t ptrs[96];
+    static const char *keys[128];
+    static uint32_t ptrs[128];
     static int n;
     int i;
     if (!s) return 0;
     for (i = 0; i < n; i++)
         if (keys[i] == s || (keys[i] && strcmp(keys[i], s) == 0)) return ptrs[i];
-    if (n >= 96) return g_strdup(s);
+    if (n >= 128) return g_strdup(s);
     keys[n] = s;
     ptrs[n] = g_strdup(s);
     return ptrs[n++];
@@ -504,19 +798,19 @@ static void lua_table_set_num(uint32_t tbl, const char *k, float v) {
 /* LuaTable::getTable returns by value (hidden r0, this r1, key r2). Scratch
  * slots are reused; D1 drops the previous lua registry ref. */
 static uint32_t lua_subtable(uint32_t parent, const char *name) {
-    static uint32_t slot[4];
+    static uint32_t slot[8];
     static int si;
     uint32_t t;
     int i;
     if (!parent || !name) return 0;
     if (!slot[0]) {
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < 8; i++) {
             slot[i] = g_malloc(32);
             if (slot[i]) memset(G8(slot[i]), 0, 32);
         }
     }
     t = slot[si];
-    si = (si + 1) & 3;
+    si = (si + 1) & 7;
     if (gr32(t)) rt_call("LuaTableD1", AB_LuaTableD1, t, 0, 0, 0, 0, 0);
     memset(G8(t), 0, 32);
     rt_call("getTable", AB_LuaGetTable, t, parent, intern_str(name), 0, 0, 0);
@@ -530,42 +824,60 @@ static void ab_lua_set_number(const char *name, float v) {
 }
 
 static void ab_cam_write_table(uint32_t cam, float sx, float px, float py, float left, float top) {
+    float vw, vh;
     if (!cam) return;
-    (void)left;
-    (void)top;
+    if (!(sx > 1e-4f)) sx = 0.5f;
+    vw = AB_VIEW_W / sx;
+    vh = AB_VIEW_H / sx;
     lua_table_set_num(cam, "sx", sx);
     lua_table_set_num(cam, "sy", sx);
     lua_table_set_num(cam, "px", px);
     lua_table_set_num(cam, "py", py);
+    lua_table_set_num(cam, "left", left);
+    lua_table_set_num(cam, "right", left + vw);
+    lua_table_set_num(cam, "top", top);
+    lua_table_set_num(cam, "bottom", top + vh);
+    /* cameraFunction clamps look-at to these; keep them wider than the
+     * whole level so a swipe can reach the pigs. */
+    lua_table_set_num(cam, "leftLimit", left - 800.f);
+    lua_table_set_num(cam, "rightLimit", left + vw + 800.f);
+    lua_table_set_num(cam, "groundLimit", top + vh + 200.f);
+    lua_table_set_num(cam, "skyLimit", top - 1600.f);
     lua_table_set_num(cam, "screenWidth", AB_VIEW_W);
     lua_table_set_num(cam, "screenHeight", AB_VIEW_H);
 }
 
 static void ab_commit_user_cam(void) {
-    uint32_t glu = game_lua(), objs, scr;
-    float px, py, vw, vh;
+    uint32_t glu = game_lua(), objs, scr, screen;
+    float px, py, vw, vh, lo, hi;
     if (!glu || !cam_user) return;
     if (!(user_scale > 0.10f && user_scale < 1.20f)) return;
     px = user_left + 0.5f * AB_VIEW_W / user_scale;
     py = user_top + 0.5f * AB_VIEW_H / user_scale;
     vw = AB_VIEW_W / user_scale;
     vh = AB_VIEW_H / user_scale;
-    (void)vw;
-    (void)vh;
     rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(user_scale), 0, 0, 0, 0);
     rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(user_left), F2U(user_top), 0, 0, 0);
-    /* doItAllCamera reads bird/castle sx and px, plus zoomLevel. Keep those
-     * on the latched view. Two-finger GameApp pinch is suppressed in
-     * pin_touch_count so zoomLevel is not a competing scale. */
+    /* zoomLevel is a delta on currentZoomedScale in doItAllCamera. Keep the
+     * pair equal (0) so lua does not add our scale onto itself. */
     ab_lua_set_number("worldScale", user_scale);
     ab_lua_set_number("currentZoomedScale", user_scale);
-    ab_lua_set_number("zoomLevel", user_scale);
-    ab_lua_set_number("oldZoomLevel", user_scale);
+    ab_lua_set_number("zoomLevel", 0.f);
+    ab_lua_set_number("oldZoomLevel", 0.f);
     ab_lua_set_number("animationWorldScale", user_scale);
     ab_lua_set_number("animationWorldScale2", user_scale);
-    ab_lua_set_number("cameraAnimationSlider", 1.f);
-    ab_lua_set_number("cameraAnimationSliderTarget", 1.f);
+    /* Bird camera (slider 0). Slider 1 is the castle table, whose sx is
+     * still 2.25 on iPad levels and a close-up of one block. */
+    ab_lua_set_number("cameraAnimationSlider", 0.f);
+    ab_lua_set_number("cameraAnimationSliderTarget", 0.f);
+    ab_lua_set_number("sweepSpeed", 0.f);
     ab_lua_set_bool("useLevelLimits", 0);
+    ab_lua_set_bool("forceSprings", 0);
+    ab_lua_set_bool("dragging", 0);
+    ab_live_span(&lo, &hi);
+    ab_lua_set_number("leftLimit", lo - 800.f);
+    ab_lua_set_number("rightLimit", hi + 800.f);
+    ab_lua_set_number("groundLimit", (play_ground_b != 0.f ? play_ground_b : py) + 800.f);
     if (app && guest_ok(app, 644u)) {
         gw32(app + 636u, F2U(user_scale));
         gw32(app + 640u, F2U(user_scale));
@@ -580,6 +892,15 @@ static void ab_commit_user_cam(void) {
     if (scr) {
         lua_table_set_num(scr, "x", px);
         lua_table_set_num(scr, "y", py);
+    }
+    screen = lua_subtable(glu, "screen");
+    if (screen) {
+        lua_table_set_num(screen, "x", px);
+        lua_table_set_num(screen, "y", py);
+        lua_table_set_num(screen, "left", user_left);
+        lua_table_set_num(screen, "top", user_top);
+        lua_table_set_num(screen, "right", user_left + vw);
+        lua_table_set_num(screen, "bottom", user_top + vh);
     }
 }
 
@@ -628,20 +949,18 @@ static void ab_apply_pinch(void) {
     cam_user = 1;
     user_scale = ns;
     {
-        float t, far_x, look_x, extra;
-        t = (pinch_play - ns) / (pinch_play - minz);
+        float t, lo, hi, look_x;
+        t = (pinch_play - minz) > 1e-4f ? (pinch_play - ns) / (pinch_play - minz) : 1.f;
         if (!(t > 0.f)) t = 0.f;
         if (t > 1.f) t = 1.f;
-        /* Stop short of the castle so a later one-finger pan still moves. */
-        far_x = lvl_cam_ok ? lvl_castle_px : pinch_cx + 700.f;
-        if (!(far_x > pinch_cx + 80.f) && lvl_cam_ok && lvl_right > pinch_cx + 80.f)
-            far_x = pinch_cx + 0.45f * (lvl_right - pinch_cx);
-        look_x = pinch_cx + t * 0.08f * (far_x - pinch_cx);
+        /* Full pinch-out frames the slingshot and every pig (the real
+         * game's minWorldScale view). Sky beyond the tiles is filled. */
+        ab_live_span(&lo, &hi);
+        lo -= 80.f;
+        hi += 120.f;
+        look_x = pinch_cx + t * (0.5f * (lo + hi) - pinch_cx);
         user_left = look_x - 0.5f * AB_VIEW_W / ns;
-        extra = ab_sky_extra(pinch_play);
         user_top = play_ground_b - AB_VIEW_H / ns;
-        if (play_top0 != 0.f && user_top < play_top0 - extra)
-            user_top = play_top0 - extra;
         ab_clamp_user_view();
     }
     cam_hold = 0;
@@ -657,33 +976,69 @@ static void ab_apply_pinch(void) {
     }
 }
 
-/* One-finger drag on empty space while zoomed out pans the play camera.
- * At play scale a single finger is the slingshot. */
+static void ab_latch_user_from_play(void) {
+    uint32_t glu = game_lua();
+    float sc, left, top;
+    if (!glu) return;
+    sc = cam_user && user_scale > 1e-4f ? user_scale : U2F(gr32(glu + AB_CAM_SCALE));
+    left = cam_user ? user_left : U2F(gr32(glu + AB_CAM_LEFT));
+    top = cam_user ? user_top : U2F(gr32(glu + AB_CAM_TOP));
+    /* Castle intro still has iPad sx 2.25. Rescale so a swipe can latch. */
+    if (sc > 1.20f) sc *= AB_VIEW_H / 1024.f;
+    if (!(sc > 0.10f && sc < 1.20f)) {
+        if (pinch_play > 0.20f && pinch_play < 1.05f) sc = pinch_play;
+        else sc = 0.60f;
+    }
+    user_scale = sc;
+    user_left = left;
+    user_top = top;
+    if (!(pinch_play > 0.20f && pinch_play < 1.05f)) pinch_play = sc;
+    if (!(play_ground_b > -4000.f && play_ground_b < 4000.f) || play_ground_b == 0.f)
+        play_ground_b = top + AB_VIEW_H / sc;
+    if (play_top0 == 0.f) play_top0 = top;
+    if (play_left0 == 0.f) play_left0 = left;
+    if (!lvl_cam_ok) ab_capture_level_cam();
+    cam_user = 1;
+}
+
+static int ab_touch_near_bird(float gx, float gy) {
+    ab_phys_info i;
+    int k;
+    float scale, bx, by, dx, dy;
+    ab_phys_snapshot(&i);
+    scale = i.world_scale > 1e-4f ? i.world_scale : 0.5f;
+    if (i.bird_n < 1)
+        return gx < 260.f;
+    for (k = 0; k < i.bird_n; k++) {
+        bx = (i.bird_wx[k] - i.cam_left) * scale;
+        by = (i.bird_wy[k] - i.cam_top) * scale;
+        dx = gx - bx;
+        dy = gy - by;
+        if (dx * dx + dy * dy < 70.f * 70.f) return 1;
+    }
+    return 0;
+}
+
+static void ab_pan_from_finger(void) {
+    float scale;
+    if (!cam_user || !pan_on || !fed[0].down) return;
+    scale = user_scale > 1e-4f ? user_scale : 0.4f;
+    user_left = pan_left0 + (pan_gx0 - fed[0].gx) / scale;
+    user_top = pan_top0 + (pan_gy0 - fed[0].gy) / scale;
+    ab_clamp_user_view();
+    ab_commit_user_cam();
+}
+
+/* One-finger drag on empty space pans. At play scale a grab on a bird is
+ * the slingshot; zoomed out, any one finger pans. Origin is latched in
+ * ab_touch so lua never sees the pan as a pouch pull. */
 static void ab_apply_pan(void) {
-    float scale, gx, gy;
     if (pinch_on || finger_down_count() != 1 || !fed[0].down) {
         pan_on = 0;
         return;
     }
-    if (!cam_user || !(user_scale < pinch_play - 0.02f)) {
-        pan_on = 0;
-        return;
-    }
-    scale = user_scale > 1e-4f ? user_scale : 0.4f;
-    gx = fed[0].gx;
-    gy = fed[0].gy;
-    if (!pan_on) {
-        pan_on = 1;
-        pan_gx0 = gx;
-        pan_gy0 = gy;
-        pan_left0 = user_left;
-        pan_top0 = user_top;
-        return;
-    }
-    user_left = pan_left0 + (pan_gx0 - gx) / scale;
-    user_top = pan_top0 + (pan_gy0 - gy) / scale;
-    ab_clamp_user_view();
-    ab_commit_user_cam();
+    if (!pan_on) return;
+    ab_pan_from_finger();
 }
 
 static void ab_lua_set_string(const char *name, const char *val) {
@@ -712,6 +1067,7 @@ void ab_ready_slingshot(void) {
 /* lua updateLoading calls loadLevelInternal(levelName), which createBox/createCircle.
  * C++ GameLua::loadLevel only fills the objects table. */
 static void cam_reset(void) {
+    ab_cam_clear_play();
     ab_lua_iphone_screen();
 }
 
@@ -746,16 +1102,12 @@ static float cam_get_num(uint32_t tbl, const char *k) {
     return U2F(rt_call("getNumber", AB_LuaGetNumber, tbl, intern_str(k), 0, 0, 0, 0));
 }
 
-/* Sky tiles cover about one play-view height plus a bit. Zooming past that
- * paints white (below ground, portrait-left) and cyan (past sky, portrait-right). */
+/* Past the painted sky tiles the GL clear used to show cyan. The front
+ * end now fills that with sky colour, so the camera may look well above
+ * the play view. */
 static float ab_sky_extra(float play) {
-    float play_h, extra;
-    if (!(play > 0.20f && play < 1.10f)) play = 0.70f;
-    play_h = AB_VIEW_H / play;
-    extra = play_h * 0.42f;
-    if (extra < 170.f) extra = 170.f;
-    if (extra > 210.f) extra = 210.f;
-    return extra;
+    (void)play;
+    return 1600.f;
 }
 
 static void ab_capture_level_cam(void) {
@@ -802,9 +1154,16 @@ static void ab_capture_level_cam(void) {
     if (AB_LuaGetNumber)
         lvl_min_world = U2F(rt_call("getNumber", AB_LuaGetNumber, glu, intern_str("minWorldScale"), 0, 0, 0, 0));
     lvl_cam_ok = 1;
-    rt_log("cam extents bird=%.0f,%.0f castle=%.0f left=%.0f right=%.0f top=%.0f sx=%.3f min=%.3f",
+    {
+        ab_phys_info bodies;
+        ab_phys_snapshot(&bodies);
+        ab_note_level_bodies(&bodies);
+    }
+    rt_log("cam extents bird=%.0f,%.0f castle=%.0f left=%.0f right=%.0f top=%.0f sx=%.3f min=%.3f pigs=%d %.0f..%.0f birds=%.0f..%.0f",
            (double)bpx, (double)bpy, (double)cpx, (double)bleft, (double)bright,
-           (double)top, (double)sx, (double)lvl_min_world);
+           (double)top, (double)sx, (double)lvl_min_world, lvl_pig_n,
+           (double)lvl_pig_minx, (double)lvl_pig_maxx,
+           (double)lvl_bird_minx, (double)lvl_bird_maxx);
 }
 
 static void ab_restore_level_cam_tables(void) {
@@ -821,31 +1180,61 @@ static void ab_restore_level_cam_tables(void) {
                        lvl_castle_py - 0.5f * AB_VIEW_H / lvl_castle_sx);
 }
 
+/* Slingshot (birds / bird camera) through every live pig. Used so a swipe
+ * can reach the castle and a pinch-out can fit the whole level. */
+static void ab_live_span(float *lo, float *hi) {
+    ab_phys_info b;
+    float l, h;
+    int i;
+    l = lvl_left;
+    h = lvl_right;
+    if (lvl_cam_ok) {
+        if (lvl_bird_minx != 0.f && lvl_bird_minx < l) l = lvl_bird_minx;
+        if (lvl_bird_px != 0.f && lvl_bird_px < l) l = lvl_bird_px;
+        if (lvl_pig_minx > 1.f && lvl_pig_minx < l) l = lvl_pig_minx;
+        if (lvl_pig_maxx > h) h = lvl_pig_maxx;
+        if (lvl_castle_px > h) h = lvl_castle_px;
+    }
+    ab_phys_snapshot(&b);
+    for (i = 0; i < b.bird_n; i++) {
+        if (b.bird_wx[i] < l) l = b.bird_wx[i];
+        if (b.bird_wx[i] > h) h = b.bird_wx[i];
+    }
+    for (i = 0; i < b.pig_n; i++) {
+        if (b.pig_wx[i] < l) l = b.pig_wx[i];
+        if (b.pig_wx[i] > h) h = b.pig_wx[i];
+    }
+    for (i = 0; i < b.block_n; i++) {
+        if (b.block_wx[i] > h) h = b.block_wx[i];
+    }
+    if (lo) *lo = l;
+    if (hi) *hi = h;
+}
+
 static void ab_clamp_user_view(void) {
-    float vw, vh, min_left, max_left, extra, play;
+    float vw, vh, min_left, max_left, lo, hi, extra;
     if (!(user_scale > 0.10f)) return;
     vw = AB_VIEW_W / user_scale;
     vh = AB_VIEW_H / user_scale;
-    play = pinch_play > 0.20f ? pinch_play : user_scale;
-    extra = ab_sky_extra(play);
+    extra = ab_sky_extra(pinch_play);
     if (play_ground_b != 0.f) {
         float max_b = play_ground_b + 24.f;
         if (user_top + vh > max_b) user_top = max_b - vh;
     }
     if (play_top0 != 0.f && user_top < play_top0 - extra)
         user_top = play_top0 - extra;
-    if (lvl_cam_ok && lvl_right > lvl_left + 100.f) {
-        float max_look, play_w;
-        min_left = lvl_left - 40.f;
-        play_w = pinch_play > 0.20f ? AB_VIEW_W / pinch_play : vw;
-        max_look = lvl_bird_px + 0.55f * play_w;
-        /* L2 look-at 423 still drew tiles; 628 was a wood close-up.
-         * L3 look-at 455 was good, 584 was not. */
-        if (max_look > 430.f) max_look = 430.f;
-        max_left = max_look - 0.5f * vw;
-        if (max_left < min_left)
-            user_left = min_left;
-        else {
+    ab_live_span(&lo, &hi);
+    /* Whole pig / tower, not a corner on the right edge. Pan keeps play
+     * scale; pinch-out is what fits slingshot and pigs in one view. */
+    lo -= 120.f;
+    hi += 140.f;
+    if (hi > lo + 80.f) {
+        min_left = lo - 40.f;
+        max_left = hi - vw;
+        if (max_left < min_left) {
+            /* View wider than the level: keep slingshot and pigs in frame. */
+            user_left = 0.5f * (lo + hi) - 0.5f * vw;
+        } else {
             if (user_left < min_left) user_left = min_left;
             if (user_left > max_left) user_left = max_left;
         }
@@ -853,44 +1242,28 @@ static void ab_clamp_user_view(void) {
 }
 
 /* lua minWorldScale is the iPhone whole-level floor. If it is missing or
- * stuck at the play camera (c9880d1 pinch 0.704 -> 0.692), fit bird and
- * castle look-at into 480x320 so two fingers can show the pigs. Sky tiles
- * do not cover that whole span on long levels, so the floor is the
- * ground-anchored height, not a blind 0.32. */
+ * stuck at the play camera, fit slingshot and pigs into 480x320. Sky
+ * beyond the tiles is filled with sky colour, so this is not raised to
+ * keep the camera inside the painted hills. */
 static float ab_level_min_scale(float play) {
-    uint32_t glu = game_lua(), objs, bird, castle;
-    float mn = 0.22f, lua_mn, bpx, cpx, span, fit, mn_y, extra, play_h;
+    uint32_t glu = game_lua();
+    float mn = 0.18f, lua_mn = 0.f, lo, hi, span, fit;
     if (!(play > 0.20f && play < 1.10f)) play = 0.70f;
-    extra = ab_sky_extra(play);
-    play_h = AB_VIEW_H / play;
-    mn_y = AB_VIEW_H / (play_h + extra);
     if (AB_LuaGetNumber && glu) {
         lua_mn = U2F(rt_call("getNumber", AB_LuaGetNumber, glu, intern_str("minWorldScale"), 0, 0, 0, 0));
-        if (lua_mn > 0.08f && lua_mn < 0.90f) mn = lua_mn;
+        if (lua_mn > 0.08f && lua_mn < play - 0.04f) mn = lua_mn;
     }
-    if (lvl_cam_ok && lvl_right > lvl_left + 400.f) {
-        span = lvl_right - lvl_left;
-        fit = AB_VIEW_W / (span + 80.f);
-        if (fit > 0.12f && fit < play - 0.04f) mn = fit;
-    } else if (!(mn < play - 0.04f) && glu) {
-        objs = lua_subtable(glu, "objects");
-        bird = objs ? lua_subtable(objs, "birdCameraData") : 0;
-        castle = objs ? lua_subtable(objs, "castleCameraData") : 0;
-        if (bird && castle) {
-            bpx = cam_get_num(bird, "px");
-            cpx = cam_get_num(castle, "px");
-            span = bpx > cpx ? bpx - cpx : cpx - bpx;
-            span += AB_VIEW_W / play;
-            if (span > 500.f) {
-                fit = AB_VIEW_W / span;
-                if (fit > 0.12f && fit < play - 0.04f) mn = fit;
-            }
+    ab_live_span(&lo, &hi);
+    span = hi - lo;
+    if (span > 400.f) {
+        fit = AB_VIEW_W / (span + 200.f);
+        if (fit > 0.10f && fit < play - 0.04f) {
+            if (!(mn < play - 0.04f) || fit < mn) mn = fit;
         }
     }
-    if (mn < mn_y) mn = mn_y;
-    if (!(mn < play - 0.04f)) mn = play * 0.55f;
-    if (mn < 0.22f) mn = 0.22f;
-    if (mn > play - 0.04f) mn = play * 0.55f;
+    if (!(mn < play - 0.04f)) mn = play * 0.45f;
+    if (mn < 0.12f) mn = 0.12f;
+    if (mn > play - 0.04f) mn = play * 0.45f;
     return mn;
 }
 
@@ -975,10 +1348,9 @@ static void ab_apply_bird_cam(void) {
     top = py - 0.5f * AB_VIEW_H / sx;
     play_left0 = left;
     play_top0 = top;
-    /* Keep a strip of ground inside the view; the play camera's bottom
-     * edge is already at the grass line, so zooming with that as the
-     * bottom paints white (below-ground) on long levels. */
-    play_ground_b = top + AB_VIEW_H / sx - 70.f;
+    /* Play bottom is the grass line. Pinch-out keeps that edge so the
+     * structure stays in the view instead of sliding into empty sky. */
+    play_ground_b = top + AB_VIEW_H / sx;
     rt_call("setWorldScale", AB_SetWorldScale, glu, F2U(sx), 0, 0, 0, 0);
     rt_call("setTopLeft", AB_SetTopLeft, glu, F2U(left), F2U(top), 0, 0, 0);
     ab_lua_set_number("worldScale", sx);
@@ -1059,7 +1431,7 @@ static void ab_reset_play_cam(void) {
         if (sc > 0.15f && sc < 1.10f) {
             play_top0 = tp;
             play_left0 = U2F(gr32(glu + AB_CAM_LEFT));
-            play_ground_b = tp + AB_VIEW_H / sc - 70.f;
+            play_ground_b = tp + AB_VIEW_H / sc;
             pinch_play = sc;
         }
     }
@@ -1078,12 +1450,12 @@ static void ab_log_level(const char *name) {
     {
         uint32_t glu = game_lua();
         float anim = glu ? U2F(rt_call("getNumber", AB_LuaGetNumber, glu, intern_str("animationWorldScale"), 0, 0, 0, 0)) : 0.f;
-        rt_log("LEVEL %s scale=%.3f anim=%.3f left=%.1f top=%.1f ctx=%dx%d obj=%d vis=%d/%d tex=%d fail=%d heap=%u hole=%u circ=%d poly=%d shapebad=%d align=%u draws=%d",
+        rt_log("LEVEL %s scale=%.3f anim=%.3f left=%.1f top=%.1f ctx=%dx%d obj=%d vis=%d/%d tex=%d fail=%d heap=%u hole=%u circ=%d poly=%d shapebad=%d align=%u draws=%d pigs=%d birds=%d",
                name ? name : "-", (double)i.world_scale, (double)anim, (double)i.cam_left, (double)i.cam_top,
                i.ctx_w, i.ctx_h, i.obj_n, i.vis_all, i.bodies,
                fe_stat_tex_count, be_stat_tex_fail, (unsigned)rt_heap_used(),
                (unsigned)rt_heap_largest_free(), i.circles, i.polygons, i.shape_bad,
-               (unsigned)rt_align_faults(), fe_stat_draws);
+               (unsigned)rt_align_faults(), fe_stat_draws, i.pig_n, i.bird_n);
     }
     plat_log_step(name ? name : "level", ++step_n);
 }
@@ -1146,6 +1518,17 @@ void ab_watch_level(void) {
     ab_lua_gc();
 }
 
+void ab_unpause(void) {
+    ab_lua_set_bool("inPausePage", 0);
+    ab_lua_set_bool("paused", 0);
+    ab_lua_set_bool("showPausePage", 0);
+    ab_lua_set_bool("pausePageReady", 0);
+    ab_lua_set_number("pausePageTimer", -1.f);
+    ab_lua_set_number("pausePageAlpha", 0.f);
+    ab_lua_set_number("ingamePausePageScroll", 0.f);
+    ab_lua_set_number("pauseBGw", 0.f);
+}
+
 void ab_load_lua_level(const char *name) {
     if (!name) return;
     cam_reset();
@@ -1153,8 +1536,12 @@ void ab_load_lua_level(const char *name) {
     cam_user = 0;
     pan_on = 0;
     lvl_cam_ok = 0;
+    lvl_pig_n = 0;
+    lvl_pig_minx = lvl_pig_maxx = 0.f;
+    lvl_bird_minx = lvl_bird_maxx = 0.f;
     ab_lua_gc();
     ab_lua_iphone_screen();
+    ab_unpause();
     ab_lua_set_string("levelName", name);
     ab_lua_set_bool("loadingPageDrawn", 1);
     ab_lua_set_bool("showBG", 1);
@@ -1221,8 +1608,12 @@ void ab_goto_level(const char *name) {
     cam_user = 0;
     pan_on = 0;
     lvl_cam_ok = 0;
+    lvl_pig_n = 0;
+    lvl_pig_minx = lvl_pig_maxx = 0.f;
+    lvl_bird_minx = lvl_bird_maxx = 0.f;
     ab_lua_gc();
     ab_lua_iphone_screen();
+    ab_unpause();
     ab_lua_set_number("zoomLevel", 0.f);
     ab_lua_set_number("oldZoomLevel", 0.f);
     ab_lua_set_number("currentZoomedScale", 0.f);
@@ -1239,7 +1630,9 @@ void ab_goto_level(const char *name) {
 
 void ab_phys_snapshot(ab_phys_info *o) {
     uint32_t glu, world, list, b;
-    int nwalk, nmax;
+    int nwalk, nmax, nc = 0, ci;
+    struct { float wx, wy, rad, rest; int npoly; } circs[48];
+    float bird_minx;
     if (!o) return;
     memset(o, 0, sizeof *o);
     o->dyn_ymin = 1e9f; o->dyn_ymax = -1e9f;
@@ -1279,9 +1672,9 @@ void ab_phys_snapshot(ab_phys_info *o) {
     list = gr32(world + B2_BODY_LIST);
     b = list;
     for (nwalk = 0; b && nwalk < 256 && nwalk < (nmax > 0 ? nmax + 2 : 256); nwalk++) {
-        int type, nfix, fi;
-        float x, y, wx, wy, sx, sy;
-        uint32_t fx;
+        int type, nfix, fi, ncirc = 0, npoly = 0;
+        float x, y, wx, wy, sx, sy, rad0 = 0.f, pig_rest = 0.f;
+        uint32_t fx, fx0;
         if (!guest_ok(b, 116u)) break;
         type = (int)gr32(b + 0u);
         x = U2F(gr32(b + 12u));
@@ -1323,22 +1716,33 @@ void ab_phys_snapshot(ab_phys_info *o) {
          * Box2D 2.1: circle type 0 size 0x14 (radius +8); polygon type 1 size
          * 0x98, m_vertexCount at +148. Reading every shape as a polygon made
          * circles look like nvert garbage and NaN size on the device log. */
-        fx = gr32(b + 108u);
+        fx0 = fx = gr32(b + 108u);
         for (fi = 0; fx && fi < 32; fi++) {
             uint32_t sh;
             int st;
-            if (!guest_ok(fx, 32u)) break;
+            if (!guest_ok(fx, 56u)) break;
             sh = gr32(fx + 28u);
             if (sh && guest_ok(sh, 12u)) {
                 st = (int)gr32(sh + 4u);
                 if (st == 0) {
                     float rad = U2F(gr32(sh + 8u));
                     o->circles++;
+                    ncirc++;
                     if (!(rad == rad) || rad <= 0.f || rad > 50.f) o->shape_bad++;
+                    else if (ncirc == 1) {
+                        static const uint32_t roff[6] = {12u, 16u, 32u, 36u, 48u, 52u};
+                        int k;
+                        rad0 = rad;
+                        for (k = 0; k < 6; k++) {
+                            float v = U2F(gr32(fx + roff[k]));
+                            if (v >= 0.01f && v <= 0.12f) { pig_rest = v; break; }
+                        }
+                    }
                 } else if (st == 1) {
                     int nv = guest_ok(sh, 152u) ? (int)gr32(sh + 148u) : -1;
                     float rad = U2F(gr32(sh + 8u));
                     o->polygons++;
+                    npoly++;
                     if (nv < 3 || nv > 8 || !(rad == rad)) o->shape_bad++;
                 } else {
                     o->shape_bad++;
@@ -1347,10 +1751,84 @@ void ab_phys_snapshot(ab_phys_info *o) {
             fx = gr32(fx + 20u);
         }
         if (nfix <= 0 && fi > 0) o->fixtures += fi;
+        if (type == 2 && ncirc >= 1 && nc < 48) {
+            circs[nc].wx = wx;
+            circs[nc].wy = wy;
+            circs[nc].rad = rad0;
+            circs[nc].rest = pig_rest;
+            circs[nc].npoly = npoly;
+            nc++;
+        }
+        if (type == 2 && npoly >= 1 && o->block_n < AB_PHYS_BLOCK) {
+            o->block_wx[o->block_n] = wx;
+            o->block_wy[o->block_n] = wy;
+            o->block_n++;
+        }
+        (void)fx0;
         b = gr32(b + 104u);
+    }
+    bird_minx = 1e9f;
+    for (ci = 0; ci < nc; ci++)
+        if (circs[ci].npoly == 0 && circs[ci].wx < bird_minx) bird_minx = circs[ci].wx;
+    if (!(bird_minx < 1e8f)) bird_minx = lvl_cam_ok ? lvl_bird_px : 0.f;
+    for (ci = 0; ci < nc; ci++) {
+        int is_pig = 0;
+        /* Leftmost circles are the slingshot birds; everything further right
+         * with no polygon fixture is a pig (SmallPiglette on L2 sits ~1000
+         * world units out, but a helmet pig can be closer). */
+        if (circs[ci].rad >= 0.28f && circs[ci].rad <= 1.20f &&
+            circs[ci].wx > bird_minx + 80.f) {
+            if (circs[ci].npoly == 0)
+                is_pig = 1;
+        }
+        if (is_pig) {
+            if (o->pig_n < AB_PHYS_PIG) {
+                o->pig_wx[o->pig_n] = circs[ci].wx;
+                o->pig_wy[o->pig_n] = circs[ci].wy;
+                o->pig_n++;
+            }
+        } else if (circs[ci].npoly == 0 && o->bird_n < AB_PHYS_BIRD) {
+            o->bird_wx[o->bird_n] = circs[ci].wx;
+            o->bird_wy[o->bird_n] = circs[ci].wy;
+            o->bird_n++;
+        }
     }
     if (o->static_n == 0) { o->stat_ymin = 0.f; o->stat_ymax = 0.f; }
     if (o->dynamic_n == 0) { o->dyn_ymin = 0.f; o->dyn_ymax = 0.f; }
+    /* Min zoom can drop a pig from the circle walk (L2-out 1/2). Keep the
+     * captured set so the check still requires every live pig. */
+    if (o->pig_n < lvl_pig_n) {
+        for (ci = 0; ci < lvl_pig_n && ci < AB_PHYS_PIG; ci++) {
+            o->pig_wx[ci] = lvl_pig_wx[ci];
+            o->pig_wy[ci] = lvl_pig_wy[ci];
+        }
+        o->pig_n = lvl_pig_n;
+    }
+    ab_note_level_bodies(o);
+}
+
+static void ab_note_level_bodies(const ab_phys_info *o) {
+    int i;
+    if (!o) return;
+    if (o->pig_n > 0) {
+        lvl_pig_minx = o->pig_wx[0];
+        lvl_pig_maxx = o->pig_wx[0];
+        for (i = 0; i < o->pig_n && i < AB_PHYS_PIG; i++) {
+            lvl_pig_wx[i] = o->pig_wx[i];
+            lvl_pig_wy[i] = o->pig_wy[i];
+            if (o->pig_wx[i] < lvl_pig_minx) lvl_pig_minx = o->pig_wx[i];
+            if (o->pig_wx[i] > lvl_pig_maxx) lvl_pig_maxx = o->pig_wx[i];
+        }
+        lvl_pig_n = o->pig_n;
+    }
+    if (o->bird_n > 0) {
+        lvl_bird_minx = o->bird_wx[0];
+        lvl_bird_maxx = o->bird_wx[0];
+        for (i = 1; i < o->bird_n; i++) {
+            if (o->bird_wx[i] < lvl_bird_minx) lvl_bird_minx = o->bird_wx[i];
+            if (o->bird_wx[i] > lvl_bird_maxx) lvl_bird_maxx = o->bird_wx[i];
+        }
+    }
 }
 
 int ab_phys_resting(const ab_phys_info *o) {
@@ -1491,8 +1969,8 @@ void ab_cam_fit_play(void) {
     if (cam_user) {
         ab_lua_set_number("castleCameraTimer", 3.f);
         ab_lua_set_number("cameraResetTimer", 0.f);
-        ab_lua_set_number("cameraAnimationSlider", 1.f);
-        ab_lua_set_number("cameraAnimationSliderTarget", 1.f);
+        ab_lua_set_number("cameraAnimationSlider", 0.f);
+        ab_lua_set_number("cameraAnimationSliderTarget", 0.f);
         ab_commit_user_cam();
         return;
     }

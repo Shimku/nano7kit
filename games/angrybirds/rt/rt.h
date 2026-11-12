@@ -110,6 +110,12 @@ void rt_enter(uint32_t a);
 #endif
 
 uint64_t rt_icall(uint32_t addr, uint32_t r0, uint32_t r1, uint32_t r2, uint32_t r3);
+/* Optional patch of r0..r3 before a guest call. Angry Birds uses this so a
+ * latched pinch/pan wins over lua cameraFunction's setTopLeft/setWorldScale. */
+typedef void (*rt_icall_patch_fn)(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *r2, uint32_t *r3);
+typedef void (*rt_icall_after_fn)(uint32_t addr, uint32_t r0, uint32_t ret);
+extern rt_icall_patch_fn rt_icall_patch;
+extern rt_icall_after_fn rt_icall_after;
 void rt_undef(uint32_t addr);
 void rt_swi(uint32_t n);
 

@@ -24,11 +24,13 @@ void be_tex_param(int h, uint32_t pname, uint32_t value);
 extern float fe_scale, fe_scale_y, fe_off_x, fe_off_y, fe_fb_h;
 extern int fe_view_h;
 extern int fe_stat_tris, fe_stat_draws, fe_stat_tex_bytes, fe_stat_tex_peak;
+extern int fe_stat_ingame_ok, fe_stat_ingame_clip, fe_stat_castle_img;
 extern int fe_tex_shift, fe_tex_min_side, fe_tex_big_side, fe_tex_big_shift, fe_stat_tex_count, fe_stat_tex_count_peak;   /* texture policy (see fngl.c) */
 extern int fe_atlas_max_side, fe_stat_atlased, fe_stat_atlas_pages;   /* 0 = no atlas */
 void fngl_reset(void);                 /* defaults; call before anything else */
 void fe_reset_matrices(void);          /* identity GL stacks; call on level load */
 extern int fe_pending_tex_shift;       /* convert-time downsample; UV is divided by 2^this */
+void fe_queue_tex_shift(int sh, const char *stem); /* fopen of a texscale sheet; consumed on upload */
 extern int fe_lowmem;                  /* 1: convert/start OOM; draw the red CHECK LOG.TXT screen */
 extern char fe_lowmem_why[160];
 void fe_enter_lowmem(const char *why);

@@ -157,8 +157,45 @@ void be_clear(int color, int depth, const float c[4], float d) {
 }
 void be_frame_begin(void) { be_frame_tris = be_frame_big = 0; }
 void be_frame_end(void) {
+    int y, x, sr = 167, sg = 209, sb = 232, ns = 0;
+    long rsum = 0, gsum = 0, bsum = 0;
     if (be_frame_tris > be_frame_tris_max) be_frame_tris_max = be_frame_tris;
     if (be_frame_big > be_frame_big_max) be_frame_big_max = be_frame_big;
+    /* Sample painted sky and replace leftover cyan/white void so pinch-out
+     * past the tiles still looks like sky, not a hole. */
+    for (y = 0; y < PH; y += 4) for (x = 80; x < PW; x += 4) {
+        unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (r < 90 && g > 160 && b > 210) continue;
+        if (r >= 230 && g >= 230 && b >= 230) continue;
+        if (b >= 190 && g >= 170 && r <= 220 && (int)b >= (int)r + 10) {
+            rsum += r; gsum += g; bsum += b; ns++;
+        }
+    }
+    if (ns > 8) {
+        sr = (int)(rsum / ns); sg = (int)(gsum / ns); sb = (int)(bsum / ns);
+    }
+    for (y = 0; y < PH; y++) for (x = 0; x < PW; x++) {
+        unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        int voidp = (r < 90 && g > 160 && b > 210) || (r >= 245 && g >= 245 && b >= 245);
+        int nsky = 0, k;
+        if (!voidp) continue;
+        for (k = 0; k < 8; k++) {
+            static const int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+            static const int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+            int nx = x + dx[k], ny = y + dy[k];
+            unsigned nr, ng, nb;
+            if (nx < 0 || nx >= PW || ny < 0 || ny >= PH) { nsky++; continue; }
+            nr = be_fb[ny][nx][0]; ng = be_fb[ny][nx][1]; nb = be_fb[ny][nx][2];
+            if ((nr < 90 && ng > 160 && nb > 210) || (nr >= 245 && ng >= 245 && nb >= 245) ||
+                (nb >= 190 && ng >= 170 && nr <= 220 && (int)nb >= (int)nr + 10))
+                nsky++;
+        }
+        if (nsky >= 6) {
+            be_fb[y][x][0] = (uint8_t)sr;
+            be_fb[y][x][1] = (uint8_t)sg;
+            be_fb[y][x][2] = (uint8_t)sb;
+        }
+    }
 }
 static float fac(uint32_t f, const float *s, const float *d, int k) {
     switch (f) {
@@ -210,7 +247,15 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
                 const uint8_t *tp = t->rgba + 4 * (ty * t->w + tx);
                 for (int k = 0; k < 4; k++) col[k] *= tp[k] / 255.f;
             }
+            /* Sprite sheets pad with a=0. Without discard those texels are
+             * opaque white and L2's 194x196 static block covers the pigs. */
+            if (col[3] <= 0.04f) continue;
             if (s->alpha_test && col[3] <= 0.f) continue;
+            /* Untextured white (missing tex / fullscreen fade) covering the
+             * pigs. Textured white is handled by texscale UV divide. Huge
+             * untextured brown is L2's 194x196 static block at castle zoom. */
+            if (!t && col[3] >= 0.50f && fabsf(area) > 2000.f)
+                continue;
             uint8_t *d = be_fb[y][x];
             if (s->blend) {
                 float dc[4] = {d[0] / 255.f, d[1] / 255.f, d[2] / 255.f, d[3] / 255.f};
