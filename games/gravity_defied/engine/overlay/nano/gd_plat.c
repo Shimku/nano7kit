@@ -1,5 +1,6 @@
 #include "../gd_config.h"
 #include "gdalloc.h"
+#include "gd_font8.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -87,6 +88,114 @@ void gd_set_edges(int fire, int back, int pause, int x, int y)
     s_pause = pause;
     s_tapx = x;
     s_tapy = y;
+}
+
+int gd_bar_zone(int x)
+{
+    if (x < GD_Z_LEANL) return 0;
+    if (x < GD_Z_MENU) return 1;
+    if (x < GD_Z_LEANR) return 2;
+    if (x < GD_Z_GAS) return 3;
+    return 4;
+}
+
+static void bar_hline(uint32_t *fb, int w, int h, int y, int x0, int x1, uint32_t c)
+{
+    int x;
+    if (y < 0 || y >= h) return;
+    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+    if (x0 < 0) x0 = 0;
+    if (x1 > w) x1 = w;
+    c |= 0xff000000u;
+    for (x = x0; x < x1; x++) fb[(long)y * w + x] = c;
+}
+
+static void bar_rect(uint32_t *fb, int w, int h, int x, int y, int rw, int rh, uint32_t c)
+{
+    int yy;
+    for (yy = 0; yy < rh; yy++) bar_hline(fb, w, h, y + yy, x, x + rw, c);
+}
+
+static void bar_tri_up(uint32_t *fb, int w, int h, int cx, int y0, int tw, int th, uint32_t c)
+{
+    int row, half;
+    for (row = 0; row < th; row++) {
+        half = ((row + 1) * (tw / 2)) / th;
+        if (half < 1) half = 1;
+        bar_hline(fb, w, h, y0 + row, cx - half, cx + half, c);
+    }
+}
+
+static void bar_tri_left(uint32_t *fb, int w, int h, int x0, int y0, int tw, int th, uint32_t c)
+{
+    int row, dist, len, mid = th / 2;
+    if (mid < 1) mid = 1;
+    for (row = 0; row < th; row++) {
+        dist = row < mid ? row : th - 1 - row;
+        len = 4 + (dist * (tw - 4)) / mid;
+        bar_hline(fb, w, h, y0 + row, x0 + tw - len, x0 + tw, c);
+    }
+}
+
+static void bar_tri_right(uint32_t *fb, int w, int h, int x0, int y0, int tw, int th, uint32_t c)
+{
+    int row, dist, len, mid = th / 2;
+    if (mid < 1) mid = 1;
+    for (row = 0; row < th; row++) {
+        dist = row < mid ? row : th - 1 - row;
+        len = 4 + (dist * (tw - 4)) / mid;
+        bar_hline(fb, w, h, y0 + row, x0, x0 + len, c);
+    }
+}
+
+void gd_draw_touch_bar(uint32_t *fb, int w, int h)
+{
+    static const int z0[5] = { GD_Z_BRK, GD_Z_LEANL, GD_Z_MENU, GD_Z_LEANR, GD_Z_GAS };
+    static const int z1[5] = { GD_Z_LEANL, GD_Z_MENU, GD_Z_LEANR, GD_Z_GAS, GD_SCREEN_W };
+    static const char *lab[5] = { "BRK", "<", "MENU", ">", "GAS" };
+    uint32_t idle[5] = { 0xff502018u, 0xff203848u, 0xff303038u, 0xff203848u, 0xff184828u };
+    uint32_t heldc[5] = { 0xffb04018u, 0xff3080b0u, 0xff585868u, 0xff3080b0u, 0xff18b040u };
+    int held[5];
+    int i, y, x, cy, cx, tw, th, ls, lw, lx;
+    uint32_t c, fg = 0xffffffffu;
+    if (!fb || w < GD_SCREEN_W || h < GD_GAME_H + 8) return;
+    held[0] = gd_held_brake();
+    held[1] = gd_held_lean_l();
+    held[2] = 0;
+    held[3] = gd_held_lean_r();
+    held[4] = gd_held_gas();
+    for (y = GD_GAME_H; y < h && y < GD_SCREEN_H; y++) {
+        uint32_t *row = fb + (long)y * w;
+        for (x = 0; x < w && x < GD_SCREEN_W; x++) {
+            int z = gd_bar_zone(x);
+            c = held[z] ? heldc[z] : idle[z];
+            row[x] = c | 0xff000000u;
+        }
+    }
+    for (i = 1; i < 5; i++) {
+        for (y = GD_GAME_H; y < h && y < GD_SCREEN_H; y++)
+            fb[(long)y * w + z0[i]] = 0xffe8e8e8u;
+    }
+    cy = GD_GAME_H + 28;
+    th = 28;
+    for (i = 0; i < 5; i++) {
+        cx = (z0[i] + z1[i]) / 2;
+        tw = z1[i] - z0[i] - 12;
+        if (tw < 12) tw = 12;
+        c = 0xfff0f0f0u;
+        if (i == 0) bar_rect(fb, w, h, cx - 12, cy - 12, 24, 24, c);
+        else if (i == 1) bar_tri_left(fb, w, h, cx - tw / 2, cy - th / 2, tw, th, c);
+        else if (i == 2) {
+            bar_rect(fb, w, h, cx - 12, cy - 14, 8, 28, c);
+            bar_rect(fb, w, h, cx + 4, cy - 14, 8, 28, c);
+        } else if (i == 3) bar_tri_right(fb, w, h, cx - tw / 2, cy - th / 2, tw, th, c);
+        else bar_tri_up(fb, w, h, cx, cy - 16, tw, 28, c);
+        ls = 2;
+        lw = (int)strlen(lab[i]) * 8 * ls;
+        lx = cx - lw / 2;
+        if (lx < z0[i] + 2) lx = z0[i] + 2;
+        gd_blit_str(fb, w, h, lx, h - 22, lab[i], ls, fg);
+    }
 }
 
 void gd_log(const char *fmt, ...)

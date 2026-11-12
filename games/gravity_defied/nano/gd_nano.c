@@ -13,10 +13,10 @@
 #include "notice.h"
 
 #define DATA_DIR  "/Apps/Data/GravityDefied"
-#define BLOCK_MAX 0x280000u
-#define BLOCK_MIN 0x200000u
-#define AFTER_MIN 0x20000u
-#define SLOP      0x10000u
+#define BLOCK_MAX 0x80000u
+#define BLOCK_MIN 0x60000u
+#define AFTER_MIN 0x8000u
+#define SLOP      0x4000u
 
 static int state; /* 0 start, 1 run, 2 short, 3 saved */
 static const char *note_lines[7];
@@ -50,38 +50,7 @@ static uint32_t pick_block(uint32_t free_b, uint32_t largest)
 
 static void draw_bar(uint32_t *fb, int w, int h)
 {
-    int y, x, i;
-    static const char *lab[5] = { "BRK", "<", "MENU", ">", "GAS" };
-    if (h < GD_BAR_H + 8) return;
-    for (y = GD_GAME_H; y < h; y++) {
-        uint32_t *row = fb + (long)y * w;
-        for (x = 0; x < w; x++) {
-            int zone = x / 48;
-            uint32_t c = 0xff202028u;
-            if (zone <= 0) c = gd_held_brake() ? 0xff803010u : 0xff402018u;
-            else if (zone == 1) c = gd_held_lean_l() ? 0xff306080u : 0xff203040u;
-            else if (zone == 2) c = 0xff303038u;
-            else if (zone == 3) c = gd_held_lean_r() ? 0xff306080u : 0xff203040u;
-            else c = gd_held_gas() ? 0xff108030u : 0xff184020u;
-            row[x] = c | 0xff000000u;
-        }
-    }
-    for (i = 0; i < 5; i++) {
-        const char *s = lab[i];
-        int lx = i * 48 + 8;
-        int ly = GD_GAME_H + 22;
-        for (; *s; s++, lx += 8) {
-            const uint8_t *g = hb_font8x8_glyph(*s);
-            int r, c;
-            for (r = 0; r < 8; r++)
-                for (c = 0; c < 8; c++) {
-                    if (!(g[r] & (0x80 >> c))) continue;
-                    int px = lx + c, py = ly + r;
-                    if (px >= 0 && px < w && py >= 0 && py < h)
-                        fb[(long)py * w + px] = 0xffffffffu;
-                }
-        }
-    }
+    gd_draw_touch_bar(fb, w, h);
 }
 
 static void apply_touch(const hb_spoint_t *touch)
@@ -98,7 +67,7 @@ static void apply_touch(const hb_spoint_t *touch)
     if (acc[0] > 180) lr = 1;
 
     if (down && y >= GD_GAME_H) {
-        int zone = x / 48;
+        int zone = gd_bar_zone(x);
         if (x < 0) zone = 0;
         if (zone <= 0) { brake = 1; gas_latched = 0; }
         else if (zone == 1) ll = 1;

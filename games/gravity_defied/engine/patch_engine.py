@@ -46,6 +46,8 @@ def apply(engine: Path) -> None:
                         }
                         if (++spins > 16) {
                             gd_log("physics: spin cap");
+                            if (method_46(index10) == 0)
+                                method_26(true);
                             break;
                         }
                     } while (var6 != 2);
@@ -79,6 +81,96 @@ label77:
         }
 """,
         label="method_39 outer step cap",
+    )
+    _sub(
+        src / "GamePhysics.cpp",
+        """            if (var5 == 0) {
+                var4 = (var3 + var4) >> 1;
+                goto label77;
+            }
+""",
+        """            if (var5 == 0) {
+                if (var3 == 0) {
+                    int lifts = 0;
+                    do {
+                        method_26(true);
+                        lifts++;
+                        var5 = method_46(index10);
+                    } while (var5 == 0 && lifts < 24);
+                    if (lifts)
+                        gd_log("physics: lift buried %d", lifts);
+                    if (var5 == 0)
+                        return 5;
+                    goto label77;
+                }
+                var4 = (var3 + var4) >> 1;
+                goto label77;
+            }
+""",
+        label="method_39 lift when already overlapping",
+    )
+    _sub(
+        src / "GamePhysics.cpp",
+        """void GamePhysics::resetSmth(bool unused)
+{
+    (void)unused;
+    field_44 = 0;
+    method_27(levelLoader->method_93(), levelLoader->method_94());
+    field_31 = 0;
+    field_39 = 0;
+    field_35 = false;
+    field_36 = false;
+    field_68 = false;
+    field_69 = false;
+    isGenerateInputAI = false;
+    field_41 = false;
+    field_42 = false;
+    levelLoader->gameLevel->method_183(field_29[2]->motoComponents[5]->xF16 + 98304 - const175_1_half[0], field_29[1]->motoComponents[5]->xF16 - 98304 + const175_1_half[0]);
+}
+""",
+        """void GamePhysics::resetSmth(bool unused)
+{
+    (void)unused;
+    field_44 = 0;
+    method_27(levelLoader->method_93(), levelLoader->method_94());
+    field_31 = 0;
+    field_39 = 0;
+    field_35 = false;
+    field_36 = false;
+    field_68 = false;
+    field_69 = false;
+    isGenerateInputAI = false;
+    field_41 = false;
+    field_42 = false;
+    /* method_27 writes index01 only. Copy that pose into index10, then lift
+     * out of the track so method_39 does not crash-restart on spawn overlap. */
+    for (int p = 0; p < 6; ++p) {
+        TimerOrMotoPartOrMenuElem *a = field_29[p]->motoComponents[index01].get();
+        TimerOrMotoPartOrMenuElem *b = field_29[p]->motoComponents[index10].get();
+        b->xF16 = a->xF16;
+        b->yF16 = a->yF16;
+        b->angleF16 = a->angleF16;
+        b->field_382 = a->field_382;
+        b->field_383 = a->field_383;
+        b->field_384 = a->field_384;
+    }
+    {
+        int lifts = 0;
+        int hit = method_46(index10);
+        while (hit == 0 && lifts < 48) {
+            method_26(true);
+            lifts++;
+            hit = method_46(index10);
+        }
+        if (lifts)
+            gd_log("physics: spawn lift %d (hit=%d)", lifts, hit);
+        if (hit == 1)
+            method_47(index10);
+    }
+    levelLoader->gameLevel->method_183(field_29[2]->motoComponents[5]->xF16 + 98304 - const175_1_half[0], field_29[1]->motoComponents[5]->xF16 - 98304 + const175_1_half[0]);
+}
+""",
+        label="resetSmth settle spawn",
     )
 
     _sub(
@@ -172,6 +264,98 @@ void GameMenu::selectRow(int i)
         gm.write_text(t.replace('#include "lcdui/Graphics.h"\n',
                                 '#include "lcdui/Graphics.h"\n#include "TextRender.h"\n'),
                       encoding="utf-8")
+
+    _sub(
+        src / "GameMenu.cpp",
+        """    field_104 = xPos + 7;
+    field_103 = 2;
+    field_110 = 0;
+""",
+        """    field_104 = xPos + 7;
+    field_103 = 2;
+    {
+        int need = 36 - font2->getBaselinePosition();
+        if (need > field_103) field_103 = need;
+    }
+    field_110 = 0;
+""",
+        label="GameMenu 36px rows",
+    )
+    _sub(
+        src / "GameMenu.cpp",
+        """        for (i = field_105; i < field_106 + 1; ++i) {
+            IGameMenuElement* var4 = vector[i];
+            graphics->setColor(0, 0, 0);
+            var4->render(graphics, var2, field_104);
+            if (i == field_95 && var4->isNotTextRender()) {
+                int var5 = xPos - micro->gameCanvas->helmetSpriteWidth / 2;
+                int var6 = var2 + font2->getBaselinePosition() / 2 - micro->gameCanvas->helmetSpriteHeight / 2;
+                graphics->setClip(var5, var6, micro->gameCanvas->helmetSpriteWidth, micro->gameCanvas->helmetSpriteHeight);
+                graphics->drawImage(micro->gameCanvas->helmetImage.get(), var5 - micro->gameCanvas->helmetSpriteWidth * (field_110 % 6), var6 - micro->gameCanvas->helmetSpriteHeight * (field_110 / 6), 20);
+                graphics->setClip(0, 0, canvasWidth, canvasHeight);
+                ++field_110;
+                if (field_110 > 30) {
+                    field_110 = 0;
+                }
+            }
+
+            if (var4->isNotTextRender()) {
+                var2 += font2->getBaselinePosition() + field_103;
+            } else {
+                var2 += (TextRender::getBaselinePosition() < GameCanvas::spriteSizeY[5] ? GameCanvas::spriteSizeY[5] : TextRender::getBaselinePosition()) + field_103;
+            }
+        }
+""",
+        """        for (i = field_105; i < field_106 + 1; ++i) {
+            IGameMenuElement* var4 = vector[i];
+            int rowH = var4->isNotTextRender()
+                ? font2->getBaselinePosition() + field_103
+                : (TextRender::getBaselinePosition() < GameCanvas::spriteSizeY[5] ? GameCanvas::spriteSizeY[5] : TextRender::getBaselinePosition()) + field_103;
+            if (i == field_95 && var4->isNotTextRender()) {
+                graphics->setColor(16, 48, 120);
+                graphics->fillRect(0, var2 - 4, canvasWidth, rowH);
+                graphics->setColor(255, 255, 255);
+            } else {
+                graphics->setColor(0, 0, 0);
+            }
+            var4->render(graphics, var2, field_104);
+            if (i == field_95 && var4->isNotTextRender()) {
+                int var5 = xPos - micro->gameCanvas->helmetSpriteWidth / 2;
+                int var6 = var2 + font2->getBaselinePosition() / 2 - micro->gameCanvas->helmetSpriteHeight / 2;
+                graphics->setClip(var5, var6, micro->gameCanvas->helmetSpriteWidth, micro->gameCanvas->helmetSpriteHeight);
+                graphics->drawImage(micro->gameCanvas->helmetImage.get(), var5 - micro->gameCanvas->helmetSpriteWidth * (field_110 % 6), var6 - micro->gameCanvas->helmetSpriteHeight * (field_110 / 6), 20);
+                graphics->setClip(0, 0, canvasWidth, canvasHeight);
+                ++field_110;
+                if (field_110 > 30) {
+                    field_110 = 0;
+                }
+            }
+
+            var2 += rowH;
+        }
+""",
+        label="GameMenu selection highlight",
+    )
+    _sub(
+        src / "GameMenu.cpp",
+        """    } else {
+        graphics->setColor(0, 0, 0);
+        var2 = field_101;
+        if (field_94 != "") {
+            graphics->setFont(font);
+            graphics->drawString(field_94, xPos, var2, 20);
+""",
+        """    } else {
+        graphics->setColor(236, 236, 240);
+        graphics->fillRect(0, 0, canvasWidth, canvasHeight);
+        graphics->setColor(0, 0, 0);
+        var2 = field_101;
+        if (field_94 != "") {
+            graphics->setFont(font);
+            graphics->drawString(field_94, xPos, var2, 20);
+""",
+        label="GameMenu opaque background",
+    )
 
     _sub(
         src / "LevelLoader.h",
@@ -397,6 +581,33 @@ void GameMenu::selectRow(int i)
         return;
 """,
         ),
+        (
+            """        gameMenuIngame->addMenuElement(settingStringContinue);
+        gameMenuIngame->addMenuElement(field_333);
+        gameMenuIngame->addMenuElement(taskOptions);
+        gameMenuIngame->addMenuElement(taskHelp);
+        gameMenuIngame->addMenuElement(settingStringPlayMenu);
+""",
+            """        gameMenuIngame->addMenuElement(settingStringContinue);
+        gameMenuIngame->addMenuElement(field_333);
+        gameMenuIngame->addMenuElement(taskOptions);
+        gameMenuIngame->addMenuElement(taskHelp);
+        gameMenuIngame->addMenuElement(settingStringPlayMenu);
+        gameMenuIngame->addMenuElement(settingStringExitGame);
+""",
+        ),
+        (
+            """        field_360 = field_371;
+        return;
+""",
+            """        field_360 = field_371;
+        gd_log("save: loaded leagues=%d levels=%d tracks=%d,%d,%d shadows=%d",
+               (int)availableLeagues, (int)field_344,
+               (int)field_342[0], (int)field_342[1], (int)field_342[2],
+               (int)isDisabledShadows);
+        return;
+""",
+        ),
     ]
     for old, new in reps:
         if old not in text:
@@ -464,13 +675,69 @@ void MenuManager::nanoTap(int x, int y)
 
     if '#include "gd_config.h"' not in text:
         text = '#include "gd_config.h"\n' + text
+    if "hostStartTrack" not in text:
+        text += """
+#ifdef GD_HOST
+void MenuManager::hostStartTrack(int level, int track, int league)
+{
+    if (!settingStringLevel || !settingsStringTrack || !settingsStringLeague) return;
+    if (level < 0) level = 0;
+    if (level > 2) level = 2;
+    if (track < 0) track = 0;
+    if (league < 0) league = 0;
+    micro->cancelPending();
+    settingStringLevel->setCurentOptionPos(level);
+    settingsStringTrack->setAvailableOptions(field_342[level]);
+    settingsStringTrack->setCurentOptionPos(track);
+    settingsStringLeague->setCurentOptionPos(league);
+    micro->gamePhysics->disableGenerateInputAI();
+    micro->levelLoader->method_88(level, track);
+    micro->gamePhysics->setMotoLeague(league);
+    field_354 = level;
+    field_355 = track;
+    field_357 = true;
+    micro->menuToGame();
+    micro->restart(true);
+}
+
+void MenuManager::hostSetUnlocks(int easy, int medium, int pro)
+{
+    field_342[0] = (int8_t)easy;
+    field_342[1] = (int8_t)medium;
+    field_342[2] = (int8_t)pro;
+    availableLeagues = (pro >= 0) ? 2 : (medium > 0) ? 1 : 0;
+    field_344 = (pro >= 0) ? 2 : 1;
+    if (settingsStringTrack)
+        settingsStringTrack->setAvailableOptions(field_342[settingStringLevel ? settingStringLevel->getCurrentOptionPos() : 0]);
+    if (settingStringLevel)
+        settingStringLevel->setAvailableOptions(field_344);
+    if (settingsStringLeague)
+        settingsStringLeague->setAvailableOptions(availableLeagues);
+    gd_log("unlocks: set tracks=%d,%d,%d leagues=%d levels=%d",
+           (int)field_342[0], (int)field_342[1], (int)field_342[2],
+           (int)availableLeagues, (int)field_344);
+}
+#endif
+"""
     mm.write_text(text, encoding="utf-8")
 
     mh = src / "MenuManager.h"
     ht = mh.read_text(encoding="utf-8")
     if "void nanoTap" not in ht:
         ht = ht.replace("    void processKeyCode(int keyCode);\n};",
-                        "    void processKeyCode(int keyCode);\n    void nanoTap(int x, int y);\n};")
+                        "    void processKeyCode(int keyCode);\n    void nanoTap(int x, int y);\n"
+                        "#ifdef GD_HOST\n"
+                        "    void hostStartTrack(int level, int track, int league);\n"
+                        "    void hostSetUnlocks(int easy, int medium, int pro);\n"
+                        "#endif\n};")
+        mh.write_text(ht, encoding="utf-8")
+    elif "hostStartTrack" not in ht:
+        ht = ht.replace("    void nanoTap(int x, int y);\n};",
+                        "    void nanoTap(int x, int y);\n"
+                        "#ifdef GD_HOST\n"
+                        "    void hostStartTrack(int level, int track, int league);\n"
+                        "    void hostSetUnlocks(int easy, int medium, int pro);\n"
+                        "#endif\n};")
         mh.write_text(ht, encoding="utf-8")
 
     rm = src / "RecordManager.cpp"

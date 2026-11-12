@@ -12,12 +12,10 @@
 #include "gd_engine.h"
 #include "notice.h"
 
-#define GD_SCREEN_W 240
-#define GD_SCREEN_H 432
-#define BLOCK_MAX 0x280000u
-#define BLOCK_MIN 0x200000u
-#define AFTER_MIN 0x20000u
-#define SLOP      0x10000u
+#define BLOCK_MAX 0x80000u
+#define BLOCK_MIN 0x60000u
+#define AFTER_MIN 0x8000u
+#define SLOP      0x4000u
 
 static uint32_t fb[GD_SCREEN_W * GD_SCREEN_H];
 static int want_notice;
@@ -29,6 +27,7 @@ static char ppm_dir[512];
 static unsigned max_frames = 4000;
 static int dump_every;
 static FILE *script;
+static int until_left;
 
 static uint32_t pick_block(uint32_t free_b, uint32_t largest)
 {
@@ -64,27 +63,6 @@ static void write_ppm(const char *path)
     fclose(f);
 }
 
-static void draw_bar(void)
-{
-    int y, x, i;
-    static const char *lab[5] = { "BRK", "<", "MENU", ">", "GAS" };
-    for (y = GD_GAME_H; y < GD_SCREEN_H; y++) {
-        uint32_t *row = fb + (long)y * GD_SCREEN_W;
-        for (x = 0; x < GD_SCREEN_W; x++) {
-            int zone = x / 48;
-            uint32_t c = 0xff202028u;
-            if (zone <= 0) c = gd_held_brake() ? 0xff803010u : 0xff402018u;
-            else if (zone == 1) c = gd_held_lean_l() ? 0xff306080u : 0xff203040u;
-            else if (zone == 2) c = 0xff303038u;
-            else if (zone == 3) c = gd_held_lean_r() ? 0xff306080u : 0xff203040u;
-            else c = gd_held_gas() ? 0xff108030u : 0xff184020u;
-            row[x] = c | 0xff000000u;
-        }
-    }
-    (void)lab;
-    (void)i;
-}
-
 static int run_line(char *line, unsigned frame)
 {
     char cmd[64];
@@ -96,8 +74,21 @@ static int run_line(char *line, unsigned frame)
         return 0;
     }
     if (strcmp(cmd, "tap") == 0) {
-        gd_set_edges(1, 0, 0, a, b);
+        /* nanoTap already fires the hit row; do not also send FIRE. */
+        gd_set_edges(0, 0, 0, a, b);
         gd_log("input: tap %d,%d frame=%u", a, b, frame);
+        return 0;
+    }
+    if (strcmp(cmd, "row") == 0) {
+        gd_engine_select_row(a);
+        return 0;
+    }
+    if (strcmp(cmd, "pick") == 0) {
+        gd_engine_pick_row(a);
+        return 1;
+    }
+    if (strcmp(cmd, "unlocks") == 0) {
+        gd_engine_set_unlocks(a, b, c);
         return 0;
     }
     if (strcmp(cmd, "pause") == 0) {
@@ -118,6 +109,16 @@ static int run_line(char *line, unsigned frame)
         return 0;
     }
     if (strcmp(cmd, "wait") == 0) return a > 0 ? a : 1;
+    if (strcmp(cmd, "track") == 0) {
+        gd_engine_clear_result();
+        if (gd_engine_start_track(a, b, c) != 0)
+            gd_log("track: start failed level=%d track=%d league=%d", a, b, c);
+        return 2;
+    }
+    if (strcmp(cmd, "until") == 0) {
+        until_left = a > 0 ? a : 1;
+        return until_left;
+    }
     if (strcmp(cmd, "dump") == 0) {
         char name[64];
         char path[640];
@@ -205,7 +206,7 @@ int main(int argc, char **argv)
 
     for (frame = 0; frame < max_frames; frame++) {
         gd_host_advance_ms(16);
-        if (script && wait_left <= 0) {
+        if (script && wait_left <= 0 && until_left <= 0) {
             if (fgets(line, sizeof line, script)) {
                 int w = run_line(line, frame);
                 if (w < 0) break;
@@ -215,7 +216,26 @@ int main(int argc, char **argv)
         if (wait_left > 0) wait_left--;
         gd_engine_tick();
         gd_input_reset_edges();
-        draw_bar();
+        gd_draw_touch_bar(fb, GD_SCREEN_W, GD_SCREEN_H);
+        if (until_left > 0) {
+            int r = gd_engine_track_result();
+            const char *nm = gd_engine_track_name();
+            if (r == 1 || r == 2) {
+                gd_log("track: result=finish code=%d frame=%u name=%s", r, frame, nm);
+                until_left = 0;
+                wait_left = 0;
+            } else if (r == 3 || r == 5) {
+                gd_log("track: result=crash code=%d frame=%u name=%s", r, frame, nm);
+                until_left = 0;
+                wait_left = 0;
+            } else {
+                until_left--;
+                if (until_left == 0) {
+                    gd_log("track: result=timeout frame=%u name=%s", frame, nm);
+                    wait_left = 0;
+                }
+            }
+        }
         if (gd_want_home()) {
             gd_log("quit: path Exit Game / destroyApp (host process exit)");
             if (ppm_dir[0]) {

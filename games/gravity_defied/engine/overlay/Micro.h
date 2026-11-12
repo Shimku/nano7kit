@@ -48,6 +48,7 @@ public:
     void showHelp(const char *progName);
     void requestMenu(int kind);
     void requestQuit();
+    void cancelPending();
 };
 
 extern Micro *g_micro;

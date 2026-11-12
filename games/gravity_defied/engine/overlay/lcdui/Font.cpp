@@ -12,7 +12,7 @@ Font::Font(FontStyle st, FontSize pointSize)
         break;
     case SIZE_MEDIUM:
     default:
-        px = 8;
+        px = 16;
         break;
     }
 }

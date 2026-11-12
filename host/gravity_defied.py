@@ -51,11 +51,18 @@ SPRITE_SIZES = {
 
 # Same numbers as games/gravity_defied/nano/gd_nano.c
 IMAGE_BYTES = 172_032
-BLOCK_MAX = 0x280000
-BLOCK_MIN = 0x200000
-AFTER_MIN = 0x20000
-SLOP = 0x10000
+BLOCK_MAX = 0x80000
+BLOCK_MIN = 0x60000
+AFTER_MIN = 0x8000
+SLOP = 0x4000
 ARENA_NEED = BLOCK_MIN
+
+LEVEL_NAMES = ("Easy", "Medium", "Pro")
+TRACK_NAMES = (
+    ("Intro", "Shorty", "Slope", "Crackle", "Knolls", "Deep", "Cliff", "Hole", "Original", "Savvy"),
+    ("Indoor", "Spikeholes", "Downhill", "Hillclimb", "Modesty", "Blocks", "Bumps", "Spikehops", "Pillar", "Trenches"),
+    ("Floorboards", "Tip top", "Dantes Peak", "Abrupt", "Undertaker", "Liberty", "Intense", "100%", "Training day", "Trial again"),
+)
 
 
 def build_dir() -> Path:
@@ -640,6 +647,7 @@ def build(payload: Path, *, force: bool = False) -> dict:
     shutil.copyfile(game_dir() / "nano" / "notice.c", app_dir / "notice.c")
     shutil.copyfile(game_dir() / "nano" / "notice.h", app_dir / "notice.h")
     shutil.copyfile(engine / "src" / "nano" / "gd_plat.c", app_dir / "gd_plat.c")
+    shutil.copyfile(engine / "src" / "nano" / "gd_font8.h", app_dir / "gd_font8.h")
     shutil.copyfile(engine / "src" / "gd_config.h", app_dir / "gd_config.h")
     shutil.copyfile(engine / "src" / "nano" / "gdalloc.h", app_dir / "gdalloc.h")
     shutil.copyfile(engine / "src" / "nano" / "gd_engine.h", app_dir / "gd_engine.h")
@@ -688,7 +696,7 @@ def heap_lines(heap_free: Optional[int], largest: Optional[int]) -> List[str]:
     mb = lambda n: f"{n / 1048576:.2f} MB"
     out = [
         f"    memory    image about {mb(IMAGE_BYTES)}, arena {mb(BLOCK_MIN)} to {mb(BLOCK_MAX)} "
-        f"(no GL driver). Pre-flight: under {mb(BLOCK_MIN + SLOP)} largest or "
+        f"(game peak plus margin, no GL driver). Pre-flight: under {mb(BLOCK_MIN + SLOP)} largest or "
         f"{mb(BLOCK_MIN + AFTER_MIN)} free after the image, it shows NOT ENOUGH MEMORY.",
     ]
     if heap_free is None:
@@ -759,128 +767,165 @@ def make_test_jar(dest: Path) -> Path:
     return dest
 
 
-def _league_script() -> str:
-    """Easy / Medium / Pro, three tracks each, then Exit Game."""
-    lines = [
-        "wait 25",
-        "dump menu_loading",
-        "wait 45",
+def apply_fetched_sprites(facts: dict, engine: Path) -> int:
+    """At test time only: run upstream sprite PNGs through the same converter as a jar."""
+    assets = engine / "assets"
+    n = 0
+    for stem in SPRITE_STEMS:
+        p = assets / f"{stem}.png"
+        if p.is_file():
+            facts["sprites"][stem] = p.read_bytes()
+            n += 1
+    return n
+
+
+def _menu_script() -> str:
+    """Splash, main, play, pause, labelled bar, Exit Game from pause then main."""
+    return "\n".join([
+        "wait 3",
+        "dump splash",
+        "wait 67",
         "dump menu_main",
         "fire",
-        "wait 10",
-        "dump menu_play",
-    ]
-    for li, lname in enumerate(("easy", "medium", "pro")):
-        for t in range(3):
-            if li > 0 and t == 0:
-                lines += ["key 6", "key 5", "key 1", "wait 4"]
-            elif t > 0:
-                lines += ["key 6", "key 6", "key 5", "key 1", "key 1", "wait 4"]
-            lines += [
-                "fire",
-                "wait 12",
-                f"dump gameplay_{lname}_t{t}",
-                "hold 1 0 0 0",
-                "wait 90",
-                f"dump gameplay_{lname}_t{t}_ride",
-                "hold 0 0 0 0",
-                "pause",
-                "wait 8",
-            ]
-            if li == 0 and t == 0:
-                lines.append("dump menu_ingame")
-            lines += ["key 6"] * 4 + ["fire", "wait 8"]
-            if t == 0:
-                lines.append(f"dump menu_play_{lname}")
-    lines += [
-        "key 6", "key 6", "key 6", "key 6", "key 6", "fire",
         "wait 8",
-        "dump menu_main_after",
-        "key 6", "key 6", "key 6", "key 6", "fire",
+        "dump menu_play",
+        "track 0 0 0",
+        "wait 8",
+        "dump gameplay_easy_intro",
+        "hold 1 0 0 0",
+        "wait 50",
+        "dump gameplay_easy_intro_ride",
+        "hold 0 0 0 0",
+        "pause",
+        "wait 8",
+        "dump menu_ingame",
+        "key 6", "key 6", "key 6", "key 6", "key 6",
         "wait 4",
-        "dump menu_exit",
-        "quit",
+        "dump menu_ingame_exit",
+        "fire",
+        "wait 4",
         "",
-    ]
+    ])
+
+
+def _tracks_script() -> str:
+    """Start every classic track and ride until finish, crash, or timeout."""
+    lines = ["wait 70"]
+    dumps = {(0, 0), (1, 0), (2, 0), (2, 1)}
+    for level in range(3):
+        for track in range(10):
+            lines += [f"track {level} {track} 0", "wait 6"]
+            if (level, track) in dumps:
+                slug = LEVEL_NAMES[level].lower() + "_" + TRACK_NAMES[level][track].lower().replace(" ", "_").replace("%", "pct")
+                lines.append(f"dump gameplay_{slug}")
+            lines += ["hold 1 0 0 0", "until 600", "hold 0 0 0 0", "wait 4"]
+    lines += ["quit", ""]
     return "\n".join(lines)
 
 
-def host_test(*, artifacts: Optional[Path] = None) -> dict:
-    """Compile the engine for the host and run iPod-like scripts (no save, corrupt save, notice, leagues)."""
-    out = build_dir()
-    out.mkdir(parents=True, exist_ok=True)
-    engine = fetch_engine(out / "src" / "gd")
-    binary = _compile_host(engine, out)
-    jar = out / "test.jar"
-    make_test_jar(jar)
-    facts = assert_payload(jar)
-    data = out / "host-data"
-    if data.exists():
-        shutil.rmtree(data)
-    stage_payload_data(facts, data)
-    classic = engine / "assets" / "levels.mrg"
-    if classic.is_file() and classic.stat().st_size > 1000:
-        # Classic 3x10 set from the fetched engine (not committed in nano7kit).
-        shutil.copyfile(classic, data / "levels.mrg")
-        gd_log_note = f"host test tracks: classic levels.mrg {classic.stat().st_size} bytes from the pin"
-        print("==>", gd_log_note)
-    art = Path(artifacts) if artifacts else out / "host-out"
-    if art.exists():
-        for old in art.glob("*"):
-            if old.is_file():
-                old.unlink()
-    art.mkdir(parents=True, exist_ok=True)
+def _save_script() -> str:
+    """Toggle Shadows Off from Options, stamp distinctive unlocks, Exit Game from Main."""
+    return "\n".join([
+        "wait 70",
+        "dump menu_main_save",
+        "pick 1",
+        "wait 6",
+        "pick 1",
+        "wait 4",
+        "dump menu_options_shadows",
+        "pick 7",
+        "wait 6",
+        "unlocks 2 4 1",
+        "row 4",
+        "wait 2",
+        "dump menu_exit_main",
+        "fire",
+        "wait 4",
+        "",
+    ])
 
-    def run(args, script_text=None, name="run", allow_rc=(0,)):
-        sdir = out / "scripts"
-        sdir.mkdir(exist_ok=True)
-        cmd = [str(binary), "--data", str(data), "--ppm", str(art)] + list(args)
-        if script_text is not None:
-            sp = sdir / (name + ".txt")
-            sp.write_text(script_text)
-            cmd += ["--script", str(sp)]
-        log = out / f"host-{name}.log"
-        with log.open("w", encoding="utf-8") as fh:
-            rc = subprocess.call(cmd, cwd=str(out), stdout=fh, stderr=subprocess.STDOUT)
-        text = log.read_text(encoding="utf-8", errors="replace")
-        if rc not in allow_rc:
-            raise Refused(f"{' '.join(cmd)} rc={rc}; see {log}\n{text[-2000:]}")
-        return text, rc
 
-    # Bluetooth + music: 3.9 MB free, 2 MB largest -> notice (same arithmetic as the iPod).
-    notice_log, notice_rc = run(
-        ["--free", str(int(3.9 * 1024 * 1024)), "--largest", str(2 * 1024 * 1024)],
-        name="notice",
-        allow_rc=(3,),
-    )
+def _pause_quit_script() -> str:
+    """Quit from the in-game pause menu (Exit Game row)."""
+    return "\n".join([
+        "wait 70",
+        "track 0 0 0",
+        "wait 8",
+        "hold 1 0 0 0",
+        "wait 20",
+        "hold 0 0 0 0",
+        "pause",
+        "wait 8",
+        "dump menu_pause_quit",
+        "row 5",
+        "wait 2",
+        "dump menu_pause_exit",
+        "fire",
+        "wait 4",
+        "",
+    ])
 
-    # empty save (already empty data dir besides assets/mrg)
-    for p in list(data.iterdir()):
-        if p.is_file() and p.name not in {"levels.mrg"}:
-            p.unlink()
-        elif p.is_dir() and p.name not in {"assets"}:
-            shutil.rmtree(p)
-    play_log, play_rc = run(
-        ["--free", str(6 * 1024 * 1024), "--largest", str(4 * 1024 * 1024), "--frames", "4000"],
-        _league_script(),
-        "leagues",
-        allow_rc=(0,),
-    )
 
-    corrupt = data / "GDTRStates"
-    corrupt.write_bytes(b"\xff" * 64)
-    corrupt_log, corrupt_rc = run(
-        ["--free", str(6 * 1024 * 1024), "--largest", str(4 * 1024 * 1024), "--frames", "80"],
-        "wait 50\ndump after_corrupt\nquit\n",
-        "corrupt",
-        allow_rc=(0,),
-    )
+def _loaded_line(blob: str) -> str:
+    hits = [ln for ln in blob.splitlines() if "save: loaded" in ln]
+    return hits[-1] if hits else ""
 
+
+def _peak_fails(blob: str) -> Tuple[int, int, int]:
+    peak = fails = arena = 0
+    for line in blob.splitlines():
+        if "arena " in line and "heap:" in line:
+            try:
+                arena = int(line.split("arena ")[1].split()[0])
+            except (IndexError, ValueError):
+                pass
+        if "peak=" in line:
+            try:
+                peak = max(peak, int(line.split("peak=")[1].split()[0]))
+            except (IndexError, ValueError):
+                pass
+        if "fails=" in line:
+            try:
+                fails = max(fails, int(line.split("fails=")[1].split()[0]))
+            except (IndexError, ValueError):
+                pass
+    return arena, peak, fails
+
+
+def _parse_tracks(blob: str) -> List[dict]:
+    rows = []
+    pending = None
+    for line in blob.splitlines():
+        if "track: start " in line:
+            pending = {"name": "", "level": -1, "track": -1, "result": "missing"}
+            rest = line.split("track: start ", 1)[1]
+            if "name=" in rest:
+                left, name = rest.split("name=", 1)
+                pending["name"] = name.strip()
+                rest = left
+            try:
+                parts = dict(kv.split("=", 1) for kv in rest.split() if "=" in kv)
+                pending["level"] = int(parts.get("level", -1))
+                pending["track"] = int(parts.get("track", -1))
+            except (ValueError, IndexError):
+                pass
+            rows.append(pending)
+        elif "track: result=" in line and rows:
+            try:
+                result = line.split("track: result=", 1)[1].split()[0]
+            except IndexError:
+                result = "unknown"
+            rows[-1]["result"] = result
+            if "name=" in line:
+                rows[-1]["name"] = line.split("name=", 1)[1].strip()
+    return rows
+
+
+def _ppms_to_pngs(art: Path) -> List[Path]:
     pngs = []
     for ppm in sorted(art.glob("*.ppm")):
         try:
             raw = ppm.read_bytes()
-            # P6 header
             parts = raw.split(b"\n", 3)
             if len(parts) < 4 or not parts[0].startswith(b"P6"):
                 continue
@@ -899,35 +944,186 @@ def host_test(*, artifacts: Optional[Path] = None) -> dict:
     extra_art = Path("/opt/cursor/artifacts/gravity-defied")
     try:
         extra_art.mkdir(parents=True, exist_ok=True)
-        for p in pngs:
-            shutil.copyfile(p, extra_art / p.name)
+        same = extra_art.resolve() == art.resolve()
+        if not same:
+            for old in extra_art.glob("*"):
+                if old.is_file():
+                    old.unlink()
+            for p in pngs:
+                shutil.copyfile(p, extra_art / p.name)
     except OSError:
         extra_art = None
-    peak = 0
-    fails = 0
-    for blob in (play_log, corrupt_log):
-        for line in blob.splitlines():
-            if "peak=" in line:
-                try:
-                    peak = max(peak, int(line.split("peak=")[1].split()[0]))
-                except (IndexError, ValueError):
-                    pass
-            if "fails=" in line:
-                try:
-                    fails = max(fails, int(line.split("fails=")[1].split()[0]))
-                except (IndexError, ValueError):
-                    pass
+    return pngs
+
+
+def _wipe_saves(data: Path) -> None:
+    for p in list(data.iterdir()):
+        if p.is_file() and p.name not in {"levels.mrg"}:
+            p.unlink()
+        elif p.is_dir() and p.name not in {"assets"}:
+            shutil.rmtree(p)
+
+
+def host_test(*, artifacts: Optional[Path] = None) -> dict:
+    """Compile the engine for the host and run iPod-like scripts."""
+    out = build_dir()
+    out.mkdir(parents=True, exist_ok=True)
+    engine = fetch_engine(out / "src" / "gd")
+    binary = _compile_host(engine, out)
+    jar = out / "test.jar"
+    make_test_jar(jar)
+    facts = assert_payload(jar)
+    n_art = apply_fetched_sprites(facts, engine)
+    print(f"    sprites   {n_art} upstream PNGs through the jar converter (not committed)")
+    data = out / "host-data"
+    if data.exists():
+        shutil.rmtree(data)
+    stage_payload_data(facts, data)
+    classic = engine / "assets" / "levels.mrg"
+    if classic.is_file() and classic.stat().st_size > 1000:
+        shutil.copyfile(classic, data / "levels.mrg")
+        print(f"==> host test tracks: classic levels.mrg {classic.stat().st_size} bytes from the pin")
+    art = Path(artifacts) if artifacts else out / "host-out"
+    if art.exists():
+        for old in art.glob("*"):
+            if old.is_file():
+                old.unlink()
+    art.mkdir(parents=True, exist_ok=True)
+
+    def run(args, script_text=None, name="run", allow_rc=(0,), data_dir=None):
+        sdir = out / "scripts"
+        sdir.mkdir(exist_ok=True)
+        d = data_dir or data
+        cmd = [str(binary), "--data", str(d), "--ppm", str(art)] + list(args)
+        if script_text is not None:
+            sp = sdir / (name + ".txt")
+            sp.write_text(script_text)
+            cmd += ["--script", str(sp)]
+        log = out / f"host-{name}.log"
+        with log.open("w", encoding="utf-8") as fh:
+            rc = subprocess.call(cmd, cwd=str(out), stdout=fh, stderr=subprocess.STDOUT)
+        text = log.read_text(encoding="utf-8", errors="replace")
+        if rc not in allow_rc:
+            raise Refused(f"{' '.join(cmd)} rc={rc}; see {log}\n{text[-2000:]}")
+        return text, rc
+
+    tiny_log, tiny_rc = run(
+        ["--free", str(6 * 1024 * 1024), "--largest", str(256 * 1024)],
+        name="notice_tiny",
+        allow_rc=(3,),
+    )
+
+    _wipe_saves(data)
+    bt_free = str(int(3.9 * 1024 * 1024))
+    bt_lg = str(2 * 1024 * 1024)
+    menu_log, menu_rc = run(
+        ["--free", bt_free, "--largest", bt_lg, "--frames", "800"],
+        _menu_script(),
+        "menus",
+        allow_rc=(0,),
+    )
+
+    _wipe_saves(data)
+    low_log, low_rc = run(
+        ["--free", str(6 * 1024 * 1024), "--largest", str(1024 * 1024), "--frames", "400"],
+        "wait 70\ntrack 0 0 0\nwait 6\ndump gameplay_1mb\nhold 1 0 0 0\nwait 40\ndump gameplay_1mb_ride\nhold 0 0 0 0\nquit\n",
+        "lowmem",
+        allow_rc=(0,),
+    )
+
+    _wipe_saves(data)
+    tracks_log, tracks_rc = run(
+        ["--free", bt_free, "--largest", bt_lg, "--frames", "20000"],
+        _tracks_script(),
+        "tracks",
+        allow_rc=(0, 1),
+    )
+
+    _wipe_saves(data)
+    save1_log, save1_rc = run(
+        ["--free", bt_free, "--largest", bt_lg, "--frames", "400"],
+        _save_script(),
+        "save_main",
+        allow_rc=(0,),
+    )
+    save_file = data / "GDTRStates"
+    save_bytes = save_file.stat().st_size if save_file.is_file() else 0
+    if save_bytes < 20:
+        raise Refused(f"save_main did not write GDTRStates ({save_bytes} bytes); see {out / 'host-save_main.log'}")
+    if "input: Exit Game" not in save1_log:
+        raise Refused("save_main did not fire Exit Game from Main")
+    save2_log, save2_rc = run(
+        ["--free", bt_free, "--largest", bt_lg, "--frames", "400"],
+        _pause_quit_script(),
+        "save_pause",
+        allow_rc=(0,),
+    )
+    save3_log, save3_rc = run(
+        ["--free", bt_free, "--largest", bt_lg, "--frames", "200"],
+        "wait 70\ndump menu_relaunch\npick 1\nwait 6\nrow 1\nwait 2\ndump menu_relaunch_options\nquit\n",
+        "save_relaunch",
+        allow_rc=(0,),
+    )
+
+    corrupt = data / "GDTRStates"
+    corrupt.write_bytes(b"\xff" * 64)
+    corrupt_log, corrupt_rc = run(
+        ["--free", bt_free, "--largest", bt_lg, "--frames", "80"],
+        "wait 50\ndump after_corrupt\nquit\n",
+        "corrupt",
+        allow_rc=(0,),
+    )
+
+    if "input: Exit Game" not in save2_log:
+        raise Refused("save_pause did not fire Exit Game from the pause menu")
+    loaded_pause = _loaded_line(save2_log)
+    loaded_relaunch = _loaded_line(save3_log)
+    if "shadows=1" not in loaded_pause or "tracks=2,4,1" not in loaded_pause:
+        raise Refused(f"pause relaunch lost save/unlocks: {loaded_pause}")
+    if "shadows=1" not in loaded_relaunch or "tracks=2,4,1" not in loaded_relaunch:
+        raise Refused(f"main-menu save/unlocks did not survive relaunch: {loaded_relaunch}")
+
+    pngs = _ppms_to_pngs(art)
+    tracks = _parse_tracks(tracks_log)
+    missing_tracks = [r for r in tracks if r.get("result") in (None, "missing")]
+    if len(tracks) != 30 or missing_tracks:
+        raise Refused(f"expected a result for all 30 tracks, got {len(tracks)} ({missing_tracks[:3]})")
+    mem = {}
+    for label, blob in (
+        ("bluetooth_music", menu_log),
+        ("one_mb", low_log),
+        ("tracks", tracks_log),
+        ("tiny", tiny_log),
+    ):
+        arena, peak, fails = _peak_fails(blob)
+        mem[label] = {"arena": arena, "peak": peak, "fails": fails}
+    shadows_loaded = [
+        ln for ln in (save1_log + save2_log + save3_log).splitlines()
+        if "save: loaded" in ln
+    ]
     return {
         "binary": str(binary),
         "artifacts": str(art),
         "pngs": [str(p) for p in pngs],
-        "notice": notice_log[-1500:],
-        "notice_rc": notice_rc,
-        "leagues": play_log[-2000:],
-        "play_rc": play_rc,
-        "corrupt": corrupt_log[-1500:],
+        "notice_tiny": tiny_log[-800:],
+        "notice_tiny_rc": tiny_rc,
+        "menus": menu_log[-1500:],
+        "menu_rc": menu_rc,
+        "lowmem": low_log[-1500:],
+        "low_rc": low_rc,
+        "tracks_log": tracks_log[-2500:],
+        "tracks_rc": tracks_rc,
+        "tracks": tracks,
+        "save_main_rc": save1_rc,
+        "save_pause_rc": save2_rc,
+        "save_relaunch_rc": save3_rc,
+        "save_bytes": save_bytes,
+        "save_loaded": shadows_loaded,
+        "save_loaded_pause": loaded_pause,
+        "save_loaded_relaunch": loaded_relaunch,
+        "corrupt": corrupt_log[-800:],
         "corrupt_rc": corrupt_rc,
-        "peak": peak,
-        "fails": fails,
+        "mem": mem,
         "ppm_count": len(list(art.glob("*.ppm"))),
+        "sprite_pngs": n_art,
     }

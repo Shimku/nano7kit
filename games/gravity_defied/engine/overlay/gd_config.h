@@ -4,9 +4,16 @@
 
 #define GD_SCREEN_W 240
 #define GD_SCREEN_H 432
-#define GD_BAR_H 56
+#define GD_BAR_H 88
 #define GD_GAME_H (GD_SCREEN_H - GD_BAR_H)
 #define GD_DATA_DIR "/Apps/Data/GravityDefied"
+/* Touch bar: BRK 56, lean 32, MENU 64, lean 32, GAS 56. */
+#define GD_Z_BRK  0
+#define GD_Z_LEANL 56
+#define GD_Z_MENU 88
+#define GD_Z_LEANR 152
+#define GD_Z_GAS  184
+#define GD_MENU_ROW_MIN 36
 
 #ifdef __cplusplus
 extern "C" {
@@ -43,6 +50,8 @@ int gd_menu_tap_y(void);
 void gd_input_reset_edges(void);
 void gd_set_held(int gas, int brake, int ll, int lr);
 void gd_set_edges(int fire, int back, int pause, int x, int y);
+int gd_bar_zone(int x);
+void gd_draw_touch_bar(uint32_t *fb, int w, int h);
 unsigned gd_arena_used(void);
 unsigned gd_arena_peak(void);
 unsigned gd_arena_fails(void);

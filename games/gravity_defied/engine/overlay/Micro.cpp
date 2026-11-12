@@ -135,6 +135,13 @@ void Micro::requestMenu(int kind)
     menuArmed = 1;
 }
 
+void Micro::cancelPending()
+{
+    goalUntil = 0;
+    menuArmed = 0;
+    menuKind = -1;
+}
+
 void Micro::startApp(int argc, char **argv)
 {
     if (argc > 1) mrgFilePath = argv[1];
@@ -232,6 +239,9 @@ void Micro::tick()
         if (field_248) gameTimeMs += 20L;
         if (timeMs == 0L) timeMs = Time::currentTimeMillis();
         int var5 = gamePhysics->updatePhysics();
+#ifdef GD_HOST
+        gd_engine_note_physics(var5);
+#endif
         if (var5 == 5) {
             static int crash_n;
             if ((++crash_n % 60) == 1)
@@ -241,10 +251,16 @@ void Micro::tick()
             field_246 = Time::currentTimeMillis() + 3000L;
             gameCanvas->scheduleGameTimerTask("Crashed", 3000);
         }
+        if (var5 == 5 && field_246 == 0L) {
+            /* Original sleeps about 1s then restarts. Immediate restart on a
+             * spawn overlap turned into a crash loop; settleSpawn should stop
+             * that, and this delay still matches the phone. */
+            field_246 = Time::currentTimeMillis() + 1000L;
+            gameCanvas->scheduleGameTimerTask("Crashed", 1000);
+        }
         if (field_246 != 0L && field_246 < Time::currentTimeMillis()) restart(true);
         if (var5 == 5) {
-            gameCanvas->scheduleGameTimerTask("Crashed", 3000);
-            restart(true);
+            /* restart is delayed via field_246 */
         } else if (var5 == 4) {
             timeMs = 0L;
             gameTimeMs = 0L;

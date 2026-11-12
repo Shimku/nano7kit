@@ -82,12 +82,18 @@ class MemoryTests(unittest.TestCase):
         self.assertNotIn("new ", text)
         self.assertIn("NOT ENOUGH MEMORY", (GAME / "nano" / "gd_nano.c").read_text())
 
-    def test_clean_boot_fits_bluetooth_music_does_not(self):
+    def test_bluetooth_music_and_one_mb_fit_tiny_does_not(self):
+        self.assertLessEqual(gd.BLOCK_MAX, 768 * 1024)
+        self.assertGreaterEqual(gd.BLOCK_MIN, 256 * 1024)
         clean = gd.heap_fit(6 * 1024 * 1024, 4 * 1024 * 1024)
         self.assertEqual(clean["best"]["verdict"], "FITS")
         self.assertGreaterEqual(clean["best"]["block"], gd.BLOCK_MIN)
         short = gd.heap_fit(int(3.9 * 1024 * 1024), 2 * 1024 * 1024)
-        self.assertEqual(short["best"]["verdict"], "NO_FIT")
+        self.assertEqual(short["best"]["verdict"], "FITS")
+        one = gd.heap_fit(6 * 1024 * 1024, 1024 * 1024)
+        self.assertEqual(one["best"]["verdict"], "FITS")
+        tiny = gd.heap_fit(6 * 1024 * 1024, 256 * 1024)
+        self.assertEqual(tiny["best"]["verdict"], "NO_FIT")
 
     def test_plan_without_payload_refuses(self):
         lines = gd.plan_lines(None, None, None)
@@ -162,6 +168,34 @@ class HygieneTests(unittest.TestCase):
         self.assertFalse((GAME / "engine" / "src").exists())
         self.assertEqual(gd.ENGINE_COMMIT, "91bd283959b96a7ea07e1c4c0040460334c85458")
         self.assertTrue(gd.ENGINE_URL.startswith("https://github.com/rgimad/"))
+
+    def test_menu_bar_and_font_are_readable(self):
+        cfg = (GAME / "engine" / "overlay" / "gd_config.h").read_text()
+        self.assertIn("#define GD_BAR_H 88", cfg)
+        self.assertIn("#define GD_MENU_ROW_MIN 36", cfg)
+        font = (GAME / "engine" / "overlay" / "lcdui" / "Font.cpp").read_text()
+        self.assertIn("px = 16", font)
+        gfx = (GAME / "engine" / "overlay" / "lcdui" / "Graphics.cpp").read_text()
+        self.assertIn("1u << col", gfx)
+        plat = (GAME / "engine" / "overlay" / "nano" / "gd_plat.c").read_text()
+        self.assertIn("gd_draw_touch_bar", plat)
+        self.assertIn("BRK", plat)
+        self.assertIn("GAS", plat)
+        patch = (GAME / "engine" / "patch_engine.py").read_text()
+        self.assertIn("spawn lift", patch)
+        self.assertIn("36 - font2->getBaselinePosition()", patch)
+        self.assertIn("settingStringExitGame", patch)
+        self.assertIn("hostSetUnlocks", patch)
+        self.assertIn("cancelPending", (GAME / "engine" / "overlay" / "Micro.cpp").read_text())
+        host = (GAME / "engine" / "host" / "main.c").read_text()
+        self.assertIn("gd_engine_set_unlocks", host)
+        self.assertIn("gd_engine_select_row", host)
+        self.assertIn("gd_engine_pick_row", host)
+        save = gd._save_script()
+        self.assertIn("unlocks 2 4 1", save)
+        self.assertIn("pick 1", save)
+        self.assertIn("row 4", save)
+        self.assertIn("row 5", gd._pause_quit_script())
 
     def test_upstream_fixes_are_in_the_patcher(self):
         patch = (GAME / "engine" / "patch_engine.py").read_text()

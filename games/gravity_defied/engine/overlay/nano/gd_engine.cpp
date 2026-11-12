@@ -2,12 +2,14 @@
 #include "../gd_config.h"
 #include "Micro.h"
 #include "MenuManager.h"
+#include "GameMenu.h"
 #include "GameCanvas.h"
 #include "lcdui/FontStorage.h"
 #include "rms/RecordStore.h"
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 static Micro *s_micro;
 static char s_argv0[] = "GravityDefied";
@@ -72,6 +74,11 @@ void gd_engine_dump_stats(char *buf, unsigned n)
 }
 
 #ifdef GD_HOST
+#include "LevelLoader.h"
+
+static int s_outcome;
+static char s_track_name[48];
+
 void gd_host_key(int code)
 {
     if (s_micro && s_micro->gameCanvas) {
@@ -84,5 +91,54 @@ void gd_host_key_up(int code)
 {
     if (s_micro && s_micro->gameCanvas)
         s_micro->gameCanvas->keyReleased(code);
+}
+
+void gd_engine_clear_result(void) { s_outcome = 0; }
+
+int gd_engine_track_result(void) { return s_outcome; }
+
+const char *gd_engine_track_name(void) { return s_track_name; }
+
+void gd_engine_note_physics(int v)
+{
+    if (!s_outcome && (v == 1 || v == 2 || v == 3 || v == 5))
+        s_outcome = v;
+}
+
+int gd_engine_start_track(int level, int track, int league)
+{
+    if (!s_micro || !s_micro->isInited || !s_micro->menuManager || !s_micro->levelLoader)
+        return -1;
+    s_outcome = 0;
+    s_track_name[0] = 0;
+    {
+        std::string n = s_micro->levelLoader->getName(level, track);
+        std::snprintf(s_track_name, sizeof s_track_name, "%s", n.c_str());
+    }
+    s_micro->cancelPending();
+    s_micro->menuManager->hostStartTrack(level, track, league);
+    gd_log("track: start level=%d track=%d league=%d name=%s", level, track, league, s_track_name);
+    return 0;
+}
+
+void gd_engine_select_row(int row)
+{
+    if (!s_micro || !s_micro->menuManager || !s_micro->menuManager->currentGameMenu) return;
+    s_micro->menuManager->currentGameMenu->selectRow(row);
+    gd_log("menu: row %d", row);
+}
+
+void gd_engine_pick_row(int row)
+{
+    if (!s_micro || !s_micro->menuManager || !s_micro->menuManager->currentGameMenu) return;
+    s_micro->menuManager->currentGameMenu->selectRow(row);
+    s_micro->menuManager->currentGameMenu->processGameActionUpd(1);
+    gd_log("menu: pick %d", row);
+}
+
+void gd_engine_set_unlocks(int easy, int medium, int pro)
+{
+    if (!s_micro || !s_micro->menuManager) return;
+    s_micro->menuManager->hostSetUnlocks(easy, medium, pro);
 }
 #endif
