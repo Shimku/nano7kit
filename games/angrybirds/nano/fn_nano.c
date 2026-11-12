@@ -4,7 +4,25 @@
  * 480x320 landscape; on the 240x432 panel it fills the panel (0.75 across, 0.9 along), so
  * the iPod is held with Home on the right as the iPhone was. That map is fixed (Fruit Ninja
  * style): only lua cameraFunction pans/zooms the world. Two fingers go through as ids 0 and
- * 1 so the game's own pinch and double-tap reset work. Volume keys do nothing in-game. */
+ * 1 so the game's own pinch and double-tap reset work. Volume keys do nothing in-game.
+ *
+ * iPod log.txt (Data/AngryBirds/docs/log.txt) if memory or textures go wrong:
+ *   nano7kit not enough memory: heap free ... needs ... (will not start; music/bluetooth?)
+ *   nano7kit not enough memory: ...; check log.txt; not continuing
+ *   texture POT pad: no memory
+ *   texture WxH: no memory to convert
+ *   texture WxH: solid fallback (convert failed)
+ *   tex upload null: solid fallback
+ *   guest heap exhausted: N bytes wanted, U used of T, largest hole H
+ *   guest skip N keep hole H
+ *   outside skip N, os largest C
+ *   outside alloc N returned 0
+ *   lua_gc hole A -> B used U
+ *   LEVEL ... tex=T fail=F heap=H hole=H ...
+ *   nano7kit tick f=... tex=T fail=F heap=H hole=H
+ *   nano7kit frame N: ... textures live L failed F bytes
+ * Healthy device: fail=0, hole > 300000, none of the "not enough memory" /
+ * "no memory to convert" / "guest heap exhausted" lines. */
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>

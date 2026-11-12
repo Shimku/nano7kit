@@ -41,7 +41,7 @@ static uint8_t uv_div[MAXTEX];
 static uint8_t texshift_q[TEXSHIFT_Q];
 static int texshift_qn, texshift_qh;
 static char texshift_last_stem[40];
-int fe_sky_quad, fe_ground_wrap, fe_wrap_hold, fe_skip_draw, fe_theme_n = 1;
+int fe_sky_quad, fe_ground_wrap, fe_wrap_hold, fe_atlas_uv, fe_skip_draw, fe_theme_n = 1;
 int fe_rot_sky_quad;
 float fe_ground_uw = 1.f, fe_ground_vh = 1.f;
 static int pending_ground_theme, pending_ui;
@@ -624,18 +624,32 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
              * Theme sky / beach fillRect must stay during play: LAYER_4 is
              * one screen tall and the zenith would otherwise be glClear.
              * On splash that same fillRect covers the title sunburst.
-             * On pause it covers PAUSED on the portrait-right. */
-            if (!(en_tex && bound_tex) && area > 2000.f && same_c) {
+             * On pause it covers PAUSED on the portrait-right.
+             * Pinch-out applies the camera xf to fillRect2D, so the sky
+             * colour lands as 2-3 bright blue horizontal bars at panel
+             * y ~380-420 (landscape-right). Drop those thin fillRect
+             * strips; LAYER_4 + clamp cover the zenith. */
+            if (same_c) {
                 unsigned r = sv[0].c[0], g = sv[0].c[1], b = sv[0].c[2];
+                int fill_sky = b > 155 && r < 90 && g > 60 && g < 145 &&
+                               (int)b > (int)r + 60 && (int)b > (int)g + 20;
                 int sky = b > 90 && r < 240;
                 int haze = r > 140 && g > 110 && b > 70 && b < 210;
                 int gold = r > 180 && g > 140 && b < 100;
-                if (gold) {
-                    /* PAUSED / level number on the pause overlay. */
-                } else if (fe_drop_fullscreen || !fe_in_level) {
+                /* Pinch-out fillRect2D is 2-3 bright blue bars at panel
+                 * y ~380-420. LAYER_4 + clamp cover the zenith; drop
+                 * that thin fillRect (and the full fill) during play. */
+                if (!gold && fill_sky && fe_in_level && !fe_drop_fullscreen &&
+                    area > 80.f)
                     return;
-                } else if (!sky && !haze) {
-                    return;
+                if (!(en_tex && bound_tex) && area > 2000.f) {
+                    if (gold) {
+                        /* PAUSED / level number on the pause overlay. */
+                    } else if (fe_drop_fullscreen || !fe_in_level) {
+                        return;
+                    } else if (!sky && !haze) {
+                        return;
+                    }
                 }
             }
             if (!(en_tex && bound_tex) && area > 80.f && same_c &&
@@ -669,10 +683,10 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         if (fe_in_level && bound_tex >= 11 && bw > 80.f && bh > 80.f &&
             minx > 40.f && minx < 160.f && !fe_drop_fullscreen)
             return;
-        /* Rotated untextured or THEME_GROUND-wrapped quad in the sky:
-         * StaticBlockTheme*_04/05 drawn at native 97/194 px with the lua
-         * 45-degree xf. Real ramps are ~user_scale of that and sit on
-         * the ground band (minx < 70). Skip + flag anything bigger. */
+        /* Rotated untextured or THEME_GROUND-wrapped quad in the sky.
+         * StaticBlockTheme*_04/05 keep the lua 2x2 and atlas UVs, so a
+         * real ramp is textured (not flat). Wrap/untextured diamonds
+         * that still cover 8% of the panel are the old opaque squares. */
         {
             float dx01 = sv[1].x - sv[0].x, dy01 = sv[1].y - sv[0].y;
             int vi, same_c = 1, rot, sky, flat, hud;
@@ -742,6 +756,13 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
         if (!gln) {
             int t;
             for (t = 1; t <= 3; t++) if (fe_theme_ground_gl[t]) { gln = fe_theme_ground_gl[t]; break; }
+        }
+        /* 04/05 slopes use the sprite's atlas UVs. THEME_GROUND wrap
+         * overwrote those and painted an opaque square. */
+        if (fe_atlas_uv) {
+            wrap = 0;
+            fe_ground_wrap = 0;
+            fe_wrap_hold = 0;
         }
         /* A mixed batch (pinch-out) can include birds; remapping that
          * as one GROUND_BLOCK smears the whole scene. One quad is 4-6. */
@@ -978,6 +999,7 @@ void fngl_reset(void) {
     fe_sky_quad = 0;
     fe_ground_wrap = 0;
     fe_wrap_hold = 0;
+    fe_atlas_uv = 0;
     fe_skip_draw = 0;
     fe_rot_sky_quad = 0;
     fe_theme_n = 1;

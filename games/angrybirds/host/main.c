@@ -594,15 +594,37 @@ static int pinch_out_pigs_ok(const char *tag, const ab_phys_info *a, int pan_ok)
     }
     return 0;
 }
+static int panel_out_fill_bars(void) {
+    /* Pinch-out fillRect2D sky as 2-3 bright blue horizontal bars at
+     * panel y ~380-420, toward the portrait-right. */
+    int y, bars = 0, run = 0;
+    for (y = 350; y < 432; y++) {
+        int n = 0, x;
+        for (x = 80; x < 240; x++) {
+            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            if (b > 155 && r < 90 && g > 60 && g < 145 &&
+                (int)b > (int)r + 60 && (int)b > (int)g + 20)
+                n++;
+        }
+        if (n >= 40) run++;
+        else {
+            if (run >= 2 && run <= 16) bars++;
+            run = 0;
+        }
+    }
+    if (run >= 2 && run <= 16) bars++;
+    return bars;
+}
 static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_from) {
     int ground, void_run, drawn, inside = 0, diff = -1, bad = 0;
-    int flat_pct, gvar;
+    int flat_pct, gvar, fill_bars = 0;
     unsigned mode_rgb = 0;
     ground = panel_ground_pixels();
     void_run = panel_max_void_run();
     drawn = panel_vis_drawn(a, &inside);
     flat_pct = panel_flat_pct(&mode_rgb);
     gvar = panel_ground_variance();
+    if (tag && strstr(tag, "-out")) fill_bars = panel_out_fill_bars();
     if (diff_from) diff = ppm_pixel_diff(diff_from, tag);
     if (a && a->world_scale < 0.35f) {
         if (ground < 80 && !(drawn >= 8 && tag && strstr(tag, "-out")))
@@ -633,9 +655,10 @@ static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_
     }
     if (gvar < AB_GROUND_VAR_MIN) bad = 1;
     if (fe_rot_sky_quad) bad = 1;
-    fprintf(stderr, "AB_DEVICE_TEST %s pixels ground=%d void_col=%d vis_drawn=%d/%d diff=%d flat=%d%% gvar=%d mode=%06x rot_sky=%d %s\n",
+    if (fill_bars >= 2) bad = 1;
+    fprintf(stderr, "AB_DEVICE_TEST %s pixels ground=%d void_col=%d vis_drawn=%d/%d diff=%d flat=%d%% gvar=%d mode=%06x rot_sky=%d bars=%d %s\n",
             tag, ground, void_run, drawn, inside, diff, flat_pct, gvar, mode_rgb,
-            fe_rot_sky_quad, bad ? "FAIL" : "ok");
+            fe_rot_sky_quad, fill_bars, bad ? "FAIL" : "ok");
     return !bad;
 }
 static int dump_and_check(const char *name, const ab_phys_info *a, const char *diff_from) {
@@ -724,10 +747,13 @@ static void extend_sky_fill(void) {
             (void)lo;
             /* Clamp fill-sky to the last painted sky pixel on this row.
              * Tiling LAYER_4 repeated the cloud strip into a smeared band
-             * of horizontal stripes; stretching the quad did the same. */
-            for (x = hx + 1; x < 240; x++) {
+             * of horizontal stripes; stretching the quad did the same.
+             * Also replace fillRect2D holes left of hx (x>=50): those are
+             * the 2-3 bright blue bars at y ~380-420 on every out view. */
+            for (x = 50; x < 240; x++) {
                 unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
-                if (!pix_fill_sky(r, g, b)) continue;
+                int voidp = (r < 90 && g > 160 && b > 210) || (r >= 245 && g >= 245 && b >= 245);
+                if (!pix_fill_sky(r, g, b) && !voidp) continue;
                 be_fb[y][x][0] = (uint8_t)hr;
                 be_fb[y][x][1] = (uint8_t)hg;
                 be_fb[y][x][2] = (uint8_t)hb;
@@ -735,18 +761,22 @@ static void extend_sky_fill(void) {
             }
         }
         /* L20 MENU wedges are near-black on LAYER_4. Paint those runs
-         * with the last sky pixel; stop at the first non-sky. */
+         * with the last sky pixel; stop at the first non-sky.
+         * Do not pick up fillRect2D blue: that painted 2-3 bright blue
+         * bars at panel y ~380-420 on every out view. */
         {
             unsigned sr = hr, sg = hg, sb = hb;
             int hs = 1;
             for (x = 239; x >= 50; x--) {
                 unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
-                if (pix_painted_sky(r, g, b) || pix_fill_sky(r, g, b) ||
-                    (g > 200 && b > 150 && r > 170)) {
+                if (pix_painted_sky(r, g, b) ||
+                    (g > 200 && b > 150 && r > 170 && r < 240)) {
                     sr = r; sg = g; sb = b;
                     hs = 1;
                     continue;
                 }
+                if (pix_fill_sky(r, g, b))
+                    continue;
                 if (!hs) continue;
                 if (y < 40 && x > 175) continue;
                 /* Bars are 4-bit grey (34,34,34). Dirt is brown. */

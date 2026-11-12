@@ -244,28 +244,9 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
         be_frame_tris++;
         if (fabsf(area) < 4.f) be_check_tiny++; else be_frame_big++;
         if (area == 0) continue;
-            /* L20 97x97 GROUND_BLOCK: INGAME_1 rect is PVRTC-black. Drop
-             * sky-side tris whose verts all sit past the ground band. */
-        {
-            const be_vtx *vv[3];
-            int vi, tex_dark = 0, skyish = 0;
-            vv[0] = a; vv[1] = b; vv[2] = c;
-            for (vi = 0; vi < 3; vi++) {
-                if (vv[vi]->x > 50.f) skyish++;
-                if (t) {
-                    int tx = (int)floorf(vv[vi]->u * (float)t->w);
-                    int ty = (int)floorf(vv[vi]->v * (float)t->h);
-                    const uint8_t *tp;
-                    tx %= t->w; if (tx < 0) tx += t->w;
-                    ty %= t->h; if (ty < 0) ty += t->h;
-                    tp = t->rgba + 4 * (ty * t->w + tx);
-                    if ((int)tp[0] + (int)tp[1] + (int)tp[2] < 80 && tp[3] > 140)
-                        tex_dark++;
-                }
-            }
-            if (skyish == 3 && tex_dark >= 2 && fabsf(area) > 40.f)
-                continue;
-        }
+        /* 04/05 INGAME_1 can look PVRTC-black if UVs collapsed. Those
+         * sprites are real StaticBlockTheme bodies: do not drop
+         * sky-side dark tris or the slope is an invisible collider. */
         int x0 = (int)floorf(fminf(a->x, fminf(b->x, c->x))), x1 = (int)ceilf(fmaxf(a->x, fmaxf(b->x, c->x)));
         int y0 = (int)floorf(fminf(a->y, fminf(b->y, c->y))), y1 = (int)ceilf(fmaxf(a->y, fmaxf(b->y, c->y)));
         if (x0 < 0) x0 = 0;
@@ -318,10 +299,11 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
                         if (!sky && !haze && !dirt) continue;
                     }
                 }
-                /* GROUND_BLOCK often misses wrap (glDraw after Image::draw
-                 * pops the flag) and is one muddy INGAME_1 texel. Wrap can
-                 * also land on THEME_GROUND with a collapsed UV, which is
-                 * still one brown colour - retile in panel space. */
+                /* GROUND_BLOCK 01/02/03 often miss wrap (glDraw after
+                 * Image::draw pops the flag) and are one muddy texel.
+                 * Wrap can also land on THEME_GROUND with a collapsed UV,
+                 * which is still one brown colour - retile in panel space.
+                 * 04/05 keep atlas UVs: do not retile or clip those. */
                 {
                     int wide = (x1 - x0) > 40 && (y1 - y0) > 40;
                     int th, gth;
@@ -336,16 +318,12 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
                                 gt = &T[theme_ground_be[th]];
                                 break;
                             }
-                    /* Only retile bodies that touch the ground band.
-                     * Sky-side 97x97 / 194x196 diamonds (lua angle 45 deg)
-                     * used to match wide&&(bbox>100) and float in the sky. */
+                    /* Only retile wrapped strips that touch the ground
+                     * band (x0 < 60). */
                     int terrain = x0 < 60;
-                    /* Clip THEME_GROUND wrap / dirt to the ground band.
-                     * 04/05 sprites that survive the lua skip still paint
-                     * a sky-side diamond when the quad straddles x=70. */
-                    if ((fe_ground_wrap || dirt) && x > 92 && wide)
+                    if (fe_ground_wrap && x > 92 && wide)
                         continue;
-                    if ((dirt || (mud && x < 50)) && wide && terrain && gt && fabsf(area) > 400.f) {
+                    if (fe_ground_wrap && (dirt || (mud && x < 50)) && wide && terrain && gt && fabsf(area) > 400.f) {
                         /* x*2 so a 150px ramp covers more than one 256 tile
                          * and cave holes stay visible. */
                         int tx = (x * 2) % gt->w, ty = (y * 2) % gt->h;

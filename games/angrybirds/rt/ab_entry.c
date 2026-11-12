@@ -152,7 +152,7 @@ static int in_bg_draw;     /* drawBackground / drawForegroundNative tile loop */
 static int ro_clear_pending; /* Hashtable::clear once, on first createBox */
 static int imgbake_n;        /* AB_DUMP_RO Image::draw dest samples this level */
 static int img_flag_sp;
-static int img_flag_stack[16][3];
+static int img_flag_stack[16][4];
 /* MaskedImage mutates the shared 2D xf. Save it so a nested Image::draw
  * can use the swipe camera, then put the FBO xf back. */
 static uint8_t xf_save_ctx[56], xf_save_glu[56];
@@ -304,6 +304,7 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
             img_flag_stack[img_flag_sp][0] = fe_sky_quad;
             img_flag_stack[img_flag_sp][1] = fe_ground_wrap;
             img_flag_stack[img_flag_sp][2] = fe_skip_draw;
+            img_flag_stack[img_flag_sp][3] = fe_atlas_uv;
             img_flag_sp++;
         }
         fe_skip_draw = (in_bg_draw && srcw >= 479u && srcw <= 481u &&
@@ -311,60 +312,56 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
         fe_sky_quad = (in_bg_draw && srcw >= 400u && srcw <= 480u && srch >= 250u && srch <= 330u);
         {
             int gblk04 = (srcw >= 90u && srcw <= 104u && srch >= 90u && srch <= 104u);
-            int gblk = gblk04 ||
+            int gblk05 = (srcw >= 180u && srcw <= 210u && srch >= 180u && srch <= 210u);
+            int gblk_slope = gblk04 || gblk05;
+            int gblk = gblk_slope ||
                 (srcw >= 90u && srcw <= 104u && srch >= 28u && srch <= 40u) ||
-                (srcw >= 180u && srcw <= 210u &&
-                 ((srch >= 28u && srch <= 40u) || (srch >= 180u && srch <= 210u))) ||
+                (srcw >= 180u && srcw <= 210u && srch >= 28u && srch <= 40u) ||
                 (srcw >= 600u && srcw <= 680u && srch >= 28u && srch <= 40u);
-            if (gblk04) {
-                /* 97x97 THEME*_04 is PVRTC-black. Wrapping it onto
-                 * THEME_GROUND at native size painted a dirt diamond in
-                 * the sky; it is real StaticBlockTheme*_04 terrain so
-                 * wrap at user_scale instead of skipping the body. */
-                fe_ground_wrap = 1;
-                fe_wrap_hold = 1;
-                fe_ground_uw = (float)srcw / 40.f;
-                fe_ground_vh = (float)srch / 40.f;
+            fe_atlas_uv = 0;
+            if (gblk_slope) {
+                /* StaticBlockTheme*_04/05 are real immovable box terrain
+                 * (lua width 2.42/4.85 m, sprite 97x97 / 194x196, often
+                 * angle +-pi/4 or 90 deg). THEME_GROUND wrap overwrote
+                 * the atlas UVs and painted an opaque square; skipping
+                 * the sprite left an invisible slope birds still hit.
+                 * Keep the lua 2x2 on the sprite quad and the texture's
+                 * own atlas UVs (INGAME_1). The 97x97 rect can look
+                 * PVRTC-black if UVs collapsed; wrap is still wrong. */
+                fe_ground_wrap = 0;
+                fe_wrap_hold = 0;
+                fe_atlas_uv = 1;
+                xf_keep_2x2 = 1;
             } else if (gblk) {
                 fe_ground_wrap = 1;
                 fe_wrap_hold = 1;
-                /* 256-texel THEME_GROUND. src/40 so a 194x196 body shows
+                fe_atlas_uv = 0;
+                xf_keep_2x2 = 1;
+                /* 256-texel THEME_GROUND. src/40 so a 194x33 strip shows
                  * several dirt repeats, not one muddy splat. */
                 fe_ground_uw = (float)srcw / 40.f;
                 fe_ground_vh = (float)srch / 40.f;
             } else {
                 fe_ground_wrap = 0;
+                fe_atlas_uv = 0;
             }
             if (gblk) {
-                static int nterrain;
+                static int n04, n05, nstrip;
                 uint32_t xf = (c && guest_ok(c, 0x10Cu + 56u)) ? c + 0x10Cu : 0;
                 float a00 = xf ? U2F(gr32(xf + 16u)) : 1.f;
                 float a01 = xf ? U2F(gr32(xf + 20u)) : 0.f;
-                float aa = a00 < 0.f ? -a00 : a00;
-                float ab = a01 < 0.f ? -a01 : a01;
-                int diamond = (gblk04 || srch >= 180u) && (aa < 0.85f || ab > 0.25f);
                 const char *def = gblk04 ? "StaticBlockTheme*_04 GROUND_BLOCK_*_04" :
-                    (srch >= 180u ? "StaticBlockTheme*_05 GROUND_BLOCK_*_05" :
+                    (gblk05 ? "StaticBlockTheme*_05 GROUND_BLOCK_*_05" :
                      (srcw >= 600u ? "StaticBlockTheme*_03 GROUND_BLOCK_*_03" :
                       (srcw >= 180u ? "StaticBlockTheme*_02 GROUND_BLOCK_*_02" :
                        "StaticBlockTheme*_01 GROUND_BLOCK_*_01")));
-                /* Identity / 180 platforms (a00~+-1, a01~0) sit on the
-                 * ground. 90-degree and +-pi/4 lua boxes are real
-                 * immovable collision, but THEME_GROUND wrap paints an
-                 * opaque square; those angles put a textured diamond in
-                 * the sky. Skip the sprite; keep 0/180 platforms. */
-                if (diamond) {
-                    fe_skip_draw = 1;
-                    fe_ground_wrap = 0;
-                    xf_keep_2x2 = 0;
-                } else {
-                    xf_keep_2x2 = 1;
-                }
-                if (nterrain < 120) {
-                    rt_log("terrain %s type=static src=%ux%u dest=%.0f,%.0f a00=%.2f a01=%.2f wrap=%d skip=%d tex=INGAME_6/7/8",
+                const char *texname = gblk_slope ? "INGAME_1" : "INGAME_6/7/8";
+                int *slot = gblk04 ? &n04 : gblk05 ? &n05 : &nstrip;
+                if (*slot < 16) {
+                    rt_log("terrain %s type=static src=%ux%u dest=%.0f,%.0f a00=%.2f a01=%.2f wrap=%d skip=%d tex=%s",
                            def, srcw, srch, (double)x, (double)y,
-                           (double)a00, (double)a01, fe_ground_wrap, diamond);
-                    nterrain++;
+                           (double)a00, (double)a01, fe_ground_wrap, 0, texname);
+                    (*slot)++;
                 }
             }
         }
@@ -444,8 +441,7 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
             /* Splash/pause/select 480x320 pages: xf_ui_full is identity, but
              * forcing it on every dest~0,0 overlay hid the level-select map
              * (native xf has the episode scroll). Only the pause dump uses
-             * identity so leftover world sx does not slide PAUSED off the
-             * portrait-right. */
+             * identity; leftover world sx slides PAUSED off the portrait-right. */
             int ui_full = fe_drop_fullscreen && !in_bg_draw &&
                           srcw >= 479u && srcw <= 481u &&
                           srch >= 318u && srch <= 322u;
@@ -512,15 +508,23 @@ static void ab_icall_after(uint32_t addr, uint32_t r0, uint32_t ret) {
         xf_ui_full = 0;
         if (addr == 0xb15c4u && img_flag_sp > 0) {
             int had_wrap = fe_ground_wrap;
+            int had_atlas = fe_atlas_uv;
             img_flag_sp--;
             fe_sky_quad = img_flag_stack[img_flag_sp][0];
             fe_ground_wrap = img_flag_stack[img_flag_sp][1];
             fe_skip_draw = img_flag_stack[img_flag_sp][2];
-            /* Ka3D may glDraw after Image::draw returns. Keep wrap for that
-             * one batch so THEME_GROUND hits the GROUND_BLOCK quad. */
-            if (had_wrap) {
+            fe_atlas_uv = img_flag_stack[img_flag_sp][3];
+            /* Ka3D may glDraw after Image::draw returns. Keep wrap for
+             * 01/02/03 so THEME_GROUND hits that quad; keep atlas UVs
+             * for 04/05 so a leftover wrap_hold does not paint a square. */
+            if (had_atlas) {
+                fe_ground_wrap = 0;
+                fe_wrap_hold = 0;
+                fe_atlas_uv = 1;
+            } else if (had_wrap) {
                 fe_ground_wrap = 1;
                 fe_wrap_hold = 1;
+                fe_atlas_uv = 0;
             }
         }
     }
@@ -1367,6 +1371,7 @@ static void ab_xf_reset_ctx(void) {
     fe_sky_quad = 0;
     fe_ground_wrap = 0;
     fe_wrap_hold = 0;
+    fe_atlas_uv = 0;
 }
 static void cam_reset(void) {
     reset_view();

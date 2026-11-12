@@ -37,8 +37,9 @@ extern int fe_pending_tex_shift;       /* convert-time downsample; UV is divided
 void fe_queue_tex_shift(int sh, const char *stem); /* fopen of a texscale sheet; consumed on upload */
 void fe_note_sheet(const char *stem);  /* INGAME_6/7/8 -> THEME_GROUND sampler */
 extern int fe_sky_quad;                /* BACKGROUND LAYER_4: stretch to zenith */
-extern int fe_ground_wrap;             /* GROUND_BLOCK: sample THEME_GROUND */
+extern int fe_ground_wrap;             /* GROUND_BLOCK 01/02/03: sample THEME_GROUND */
 extern int fe_wrap_hold;               /* wrap survives Image::draw return */
+extern int fe_atlas_uv;                /* GROUND_BLOCK 04/05: keep atlas UVs, no wrap */
 extern float fe_ground_uw, fe_ground_vh;
 extern int fe_skip_draw;               /* dummy 480x320 BACKGROUND */
 extern int fe_theme_n;                 /* 1/2/3 from lua sky colour */
