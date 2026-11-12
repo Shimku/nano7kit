@@ -110,6 +110,7 @@ void be_frame_end(void) { flush(); }
 /* textures: the front end already made them 16 bits per texel and at most 512 on a side */
 int be_tex_create(void) { GLuint t = 0; glGenTextures(1, &t); if (t) { be_stat_live_tex++; gll_note(t); } return (int)t; }
 void be_tex_delete(int h) { GLuint t = (GLuint)h; if (t) { glDeleteTextures(1, &t); be_stat_live_tex--; } }
+void be_set_theme_ground(int theme, int h) { (void)theme; (void)h; }
 void be_tex_param(int h, uint32_t p, uint32_t v) {
     if (!h) return;
     if (p == GL_TEXTURE_MIN_FILTER && v != GL_NEAREST) v = GL_LINEAR;   /* no mip chains are uploaded */

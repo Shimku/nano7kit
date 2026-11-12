@@ -318,14 +318,15 @@ IMP(_fopen) {
     UNUSED;
     const char *path = gstr(r0), *mode = gstr(r1), *name = base_name(path);
     int tsh = tex_file_shift(name);
-    if (tsh) {
+    {
         const char *dot = strrchr(name, '.');
         char stem[40];
         size_t n = dot ? (size_t)(dot - name) : strlen(name);
         if (n >= sizeof stem) n = sizeof stem - 1;
         memcpy(stem, name, n);
         stem[n] = 0;
-        fe_queue_tex_shift(tsh, stem);
+        if (tsh) fe_queue_tex_shift(tsh, stem);
+        fe_note_sheet(stem);
     }
     int w = strchr(mode, 'w') != NULL || strchr(mode, 'a') != NULL;
     int dummy = 0;

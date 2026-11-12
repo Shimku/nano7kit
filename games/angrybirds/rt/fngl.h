@@ -20,6 +20,7 @@ void be_tex_delete(int h);
 void be_tex_image(int h, int level, int w, int ht, uint32_t format, uint32_t type, const void *pixels);
 void be_tex_compressed(int h, int level, uint32_t fmt, int w, int ht, const void *data, uint32_t size);
 void be_tex_param(int h, uint32_t pname, uint32_t value);
+void be_set_theme_ground(int theme, int h); /* THEME_GROUND backend handle */
 /* panel mapping, set by the shell: iPhone framebuffer pixel (origin bottom left) -> panel */
 extern float fe_scale, fe_scale_y, fe_off_x, fe_off_y, fe_fb_h;
 extern int fe_view_h;
@@ -33,6 +34,13 @@ void fngl_reset(void);                 /* defaults; call before anything else */
 void fe_reset_matrices(void);          /* identity GL stacks; call on level load */
 extern int fe_pending_tex_shift;       /* convert-time downsample; UV is divided by 2^this */
 void fe_queue_tex_shift(int sh, const char *stem); /* fopen of a texscale sheet; consumed on upload */
+void fe_note_sheet(const char *stem);  /* INGAME_6/7/8 -> THEME_GROUND sampler */
+extern int fe_sky_quad;                /* BACKGROUND LAYER_4: stretch to zenith */
+extern int fe_ground_wrap;             /* GROUND_BLOCK: sample THEME_GROUND */
+extern int fe_wrap_hold;               /* wrap survives Image::draw return */
+extern float fe_ground_uw, fe_ground_vh;
+extern int fe_skip_draw;               /* dummy 480x320 BACKGROUND */
+extern int fe_theme_n;                 /* 1/2/3 from lua sky colour */
 extern int fe_lowmem;                  /* 1: convert/start OOM; draw the red CHECK LOG.TXT screen */
 extern char fe_lowmem_why[160];
 void fe_enter_lowmem(const char *why);

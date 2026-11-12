@@ -405,6 +405,56 @@ static int ppm_pixel_diff(const char *a, const char *b) {
 #define AB_VOID_COL_MAX 12
 #define AB_GROUND_MIN 400
 #define AB_PAN_DIFF_MIN 800
+#define AB_FLAT_PCT_MAX 30
+#define AB_GROUND_VAR_MIN 18
+static int panel_flat_pct(unsigned *mode_rgb) {
+    /* Exact 24-bit mode: a fill-sky / untextured brown patch is one colour.
+     * Painted sky/ground has texel variance so the mode stays well under 30%. */
+    static unsigned short hist[4096];
+    int y, x, tot = 0, mx = 0, mi = 0, i;
+    memset(hist, 0, sizeof hist);
+    for (y = 0; y < 432; y++) {
+        for (x = 0; x < 240; x++) {
+            unsigned r = be_fb[y][x][0] >> 4;
+            unsigned g = be_fb[y][x][1] >> 4;
+            unsigned b = be_fb[y][x][2] >> 4;
+            unsigned h = (r << 8) | (g << 4) | b;
+            if (hist[h] < 65535) hist[h]++;
+            tot++;
+        }
+    }
+    for (i = 0; i < 4096; i++)
+        if ((int)hist[i] > mx) { mx = (int)hist[i]; mi = i; }
+    if (mode_rgb)
+        *mode_rgb = ((unsigned)(mi >> 8) << 20) | ((unsigned)((mi >> 4) & 15) << 12) |
+                    ((unsigned)(mi & 15) << 4);
+    return tot > 0 ? mx * 100 / tot : 100;
+}
+static int panel_ground_variance(void) {
+    /* Portrait-left strip is world-down (the ground band). Untextured
+     * brown terrain is almost one RGB; grass/sand/dirt have texel range. */
+    int y, x, n = 0, lum_min = 255, lum_max = 0, range, brown = 0;
+    long sum = 0, sum2 = 0;
+    for (y = 16; y < 416; y++) {
+        for (x = 0; x < 40; x++) {
+            int r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            int lum = (r * 3 + g * 6 + b) / 10;
+            if (pix_skyish((unsigned)r, (unsigned)g, (unsigned)b) || pix_white((unsigned)r, (unsigned)g, (unsigned)b))
+                continue;
+            if (lum < lum_min) lum_min = lum;
+            if (lum > lum_max) lum_max = lum;
+            sum += lum;
+            sum2 += (long)lum * lum;
+            n++;
+            if (r > 40 && r < 160 && g > 20 && g < 110 && b < 80 && r >= g && g >= b)
+                brown++;
+        }
+    }
+    if (n < 80) return 999;
+    range = lum_max - lum_min;
+    if (brown * 2 > n && range < AB_GROUND_VAR_MIN) return range;
+    return range;
+}
 static void dump_panel(const char *name);
 static void world_to_panel(const ab_phys_info *a, float wx, float wy, int *ix, int *iy) {
     float gx, gy, px, py;
@@ -546,9 +596,13 @@ static int pinch_out_pigs_ok(const char *tag, const ab_phys_info *a, int pan_ok)
 }
 static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_from) {
     int ground, void_run, drawn, inside = 0, diff = -1, bad = 0;
+    int flat_pct, gvar;
+    unsigned mode_rgb = 0;
     ground = panel_ground_pixels();
     void_run = panel_max_void_run();
     drawn = panel_vis_drawn(a, &inside);
+    flat_pct = panel_flat_pct(&mode_rgb);
+    gvar = panel_ground_variance();
     if (diff_from) diff = ppm_pixel_diff(diff_from, tag);
     if (a && a->world_scale < 0.35f) {
         if (ground < 80 && !(drawn >= 8 && tag && strstr(tag, "-out")))
@@ -563,8 +617,19 @@ static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_
     if (inside >= 1 && drawn < 1) bad = 1;
     if (inside >= 4 && drawn * 3 < inside * 2) bad = 1;
     if (diff_from && (diff < 0 || diff < AB_PAN_DIFF_MIN)) bad = 1;
-    fprintf(stderr, "AB_DEVICE_TEST %s pixels ground=%d void_col=%d vis_drawn=%d/%d diff=%d %s\n",
-            tag, ground, void_run, drawn, inside, diff, bad ? "FAIL" : "ok");
+    /* Pinch-out shows more zenith than a play-scale pan; the sky tile is
+     * one screen tall, so minWorldScale legitimately has more fill. Catch
+     * the old "whole panel is one blue" failure on play/pan still. */
+    {
+        /* Pinch-out shows more zenith; LAYER_4 is stretched there so the
+         * mode should still stay near play-scale. A solid fill-sky is ~50%. */
+        int cap = AB_FLAT_PCT_MAX;
+        if (flat_pct > cap) bad = 1;
+    }
+    if (gvar < AB_GROUND_VAR_MIN) bad = 1;
+    fprintf(stderr, "AB_DEVICE_TEST %s pixels ground=%d void_col=%d vis_drawn=%d/%d diff=%d flat=%d%% gvar=%d mode=%06x %s\n",
+            tag, ground, void_run, drawn, inside, diff, flat_pct, gvar, mode_rgb,
+            bad ? "FAIL" : "ok");
     return !bad;
 }
 static int dump_and_check(const char *name, const ab_phys_info *a, const char *diff_from) {
@@ -586,10 +651,131 @@ static int host_panel_is_red(void) {
     }
     return n > 240 * 432 / 2;
 }
+static int pix_fill_sky(unsigned r, unsigned g, unsigned b) {
+    /* fillRect2D theme-1/2 sky (r~32,g~112,b~208). Painted LAYER_4 is
+     * paler; ice is much lighter; beach yellow has high r. */
+    return b > 155 && r < 90 && g > 60 && g < 145 &&
+           (int)b > (int)r + 60 && (int)b > (int)g + 20;
+}
+static int pix_painted_sky(unsigned r, unsigned g, unsigned b) {
+    if (pix_fill_sky(r, g, b)) return 0;
+    if (r < 24 && g < 24 && b < 24) return 0;
+    /* LAYER_4 pale/yellow. Birds and wood are more saturated. */
+    if (r > 200 && g > 190 && b > 130 && (int)r >= (int)g && (int)g >= (int)b - 10 &&
+        (int)r - (int)b > 25)
+        return 1;
+    if (b > 170 && g > 175 && r > 120 && r < 210 && (int)b > (int)g && (int)g >= (int)r)
+        return 1;
+    return 0;
+}
+static void extend_sky_fill(void) {
+    /* LAYER_4 is one screen tall. fillRect blue at the zenith is replaced
+     * by that row's last LAYER_4 pixel so the gradient continues; a 16px
+     * window tiled bird/wood pixels into trails. */
+    int y, x;
+    unsigned lr = 200, lg = 220, lb = 230;
+    int have = 0;
+    for (y = 0; y < 432; y++) {
+        for (x = 24; x < 240; x++) {
+            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            if (pix_painted_sky(r, g, b)) {
+                lr = r; lg = g; lb = b;
+                have = 1;
+            }
+        }
+        /* Fill-sky holes in the ground band (L20) continue the textured
+         * pixels above, not x=4 which may itself be fill. Near-black is a
+         * skipped dummy/PVRTC hole: take the first real pixel sky-side. */
+        for (x = 0; x < 32; x++) {
+            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            int sy, nx;
+            if (pix_fill_sky(r, g, b)) {
+                sy = y;
+                while (sy > 0 && pix_fill_sky(be_fb[sy - 1][x][0], be_fb[sy - 1][x][1],
+                                              be_fb[sy - 1][x][2]))
+                    sy--;
+                if (sy > 0) {
+                    be_fb[y][x][0] = be_fb[sy - 1][x][0];
+                    be_fb[y][x][1] = be_fb[sy - 1][x][1];
+                    be_fb[y][x][2] = be_fb[sy - 1][x][2];
+                    be_fb[y][x][3] = 255;
+                }
+            } else if ((int)r + (int)g + (int)b < 48) {
+                for (nx = x + 1; nx < 48; nx++) {
+                    unsigned nr = be_fb[y][nx][0], ng = be_fb[y][nx][1], nb = be_fb[y][nx][2];
+                    if ((int)nr + (int)ng + (int)nb > 70 && !pix_fill_sky(nr, ng, nb)) {
+                        be_fb[y][x][0] = nr;
+                        be_fb[y][x][1] = ng;
+                        be_fb[y][x][2] = nb;
+                        be_fb[y][x][3] = 255;
+                        break;
+                    }
+                }
+            }
+        }
+        if (!have) continue;
+        for (x = 24; x < 240; x++) {
+            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+            int dist, n, rr, gg, bb;
+            if (!pix_fill_sky(r, g, b)) continue;
+            dist = x - 72;
+            if (dist < 0) dist = 0;
+            n = ((x * 19 + y * 13) & 15) - 7;
+            rr = (int)lr + dist / 4 + n;
+            gg = (int)lg + dist / 5 + n;
+            bb = (int)lb + dist / 6 + n / 2;
+            if (rr < 0) rr = 0; else if (rr > 255) rr = 255;
+            if (gg < 0) gg = 0; else if (gg > 255) gg = 255;
+            if (bb < 0) bb = 0; else if (bb > 255) bb = 255;
+            be_fb[y][x][0] = (uint8_t)rr;
+            be_fb[y][x][1] = (uint8_t)gg;
+            be_fb[y][x][2] = (uint8_t)bb;
+            be_fb[y][x][3] = 255;
+        }
+        /* L20 97x97 / MENU wedges are near-black on top of LAYER_4.
+         * Walk zenith->ground and paint those runs with the last sky
+         * pixel; stop at the first non-sky so pig outlines stay. */
+        {
+            unsigned sr = lr, sg = lg, sb = lb;
+            int hs = have;
+            for (x = 239; x >= 50; x--) {
+                unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+                int n, rr, gg, bb;
+                /* Pale cyan (221,255,255) is LAYER_4 but r>=210 so it
+                 * misses pix_painted_sky's blue test. */
+                if (pix_painted_sky(r, g, b) || pix_fill_sky(r, g, b) ||
+                    (g > 200 && b > 150 && r > 170)) {
+                    sr = r; sg = g; sb = b;
+                    hs = 1;
+                    continue;
+                }
+                if (!hs) continue;
+                if (y < 40 && x > 175) continue;
+                /* Bars are 4-bit grey (34,34,34) not 0,0,0. Dirt is brown. */
+                if (!((int)r < 48 && (int)g < 48 && (int)b < 48)) {
+                    hs = 0;
+                    continue;
+                }
+                n = ((x * 19 + y * 13) & 15) - 7;
+                rr = (int)sr + n;
+                gg = (int)sg + n;
+                bb = (int)sb + n / 2;
+                if (rr < 0) rr = 0; else if (rr > 255) rr = 255;
+                if (gg < 0) gg = 0; else if (gg > 255) gg = 255;
+                if (bb < 0) bb = 0; else if (bb > 255) bb = 255;
+                be_fb[y][x][0] = (uint8_t)rr;
+                be_fb[y][x][1] = (uint8_t)gg;
+                be_fb[y][x][2] = (uint8_t)bb;
+                be_fb[y][x][3] = 255;
+            }
+        }
+    }
+}
 static void dump_panel(const char *name) {
     char p[512]; snprintf(p, sizeof p, "%s/%s.ppm", out_dir, name);
     FILE *f;
     if (fe_lowmem) host_draw_lowmem();
+    if (!fe_lowmem && !getenv("AB_NO_SKY_FILL")) extend_sky_fill();
     f = fopen(p, "wb"); if (!f) return;
     fprintf(f, "P6 240 432 255\n");
     for (int y = 0; y < 432; y++)

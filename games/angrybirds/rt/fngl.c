@@ -40,6 +40,13 @@ static uint8_t uv_div[MAXTEX];
 static uint8_t texshift_q[TEXSHIFT_Q];
 static int texshift_qn, texshift_qh;
 static char texshift_last_stem[40];
+int fe_sky_quad, fe_ground_wrap, fe_wrap_hold, fe_skip_draw, fe_theme_n = 1;
+float fe_ground_uw = 1.f, fe_ground_vh = 1.f;
+static int pending_ground_theme, pending_ui;
+static uint32_t fe_theme_ground_gl[4];
+static uint8_t fe_ui_tex[MAXTEX];
+static uint32_t sky_tex_gl;
+static int texh[MAXTEX];
 void fe_queue_tex_shift(int sh, const char *stem) {
     if (sh < 1 || sh > 7) return;
     /* Size/header fopen then data fopen of the same PVR must not queue twice
@@ -51,6 +58,13 @@ void fe_queue_tex_shift(int sh, const char *stem) {
     if (stem) snprintf(texshift_last_stem, sizeof texshift_last_stem, "%s", stem);
     if (texshift_qn < TEXSHIFT_Q) texshift_q[texshift_qn++] = (uint8_t)sh;
     fe_pending_tex_shift = sh;
+}
+void fe_note_sheet(const char *stem) {
+    if (!stem) return;
+    if (!strcmp(stem, "INGAME_6")) pending_ground_theme = 1;
+    else if (!strcmp(stem, "INGAME_7")) pending_ground_theme = 2;
+    else if (!strcmp(stem, "INGAME_8")) pending_ground_theme = 3;
+    if (!strncmp(stem, "MENU", 4)) pending_ui = 1;
 }
 static int take_tex_shift(void) {
     int sh = 0;
@@ -70,8 +84,18 @@ static void apply_tex_shift(uint32_t n, int w, int h) {
         rt_log("texshift gl=%u %dx%d div=%d leftover=%d", n, w, h, sh,
                texshift_qn - texshift_qh);
     }
+    if (pending_ground_theme >= 1 && pending_ground_theme <= 3 && n && n < MAXTEX &&
+        (w >= 128 || h >= 128)) {
+        fe_theme_ground_gl[pending_ground_theme] = n;
+        if (n < MAXTEX && texh[n]) be_set_theme_ground(pending_ground_theme, texh[n]);
+        rt_log("theme-ground %d gl=%u %dx%d", pending_ground_theme, n, w, h);
+        pending_ground_theme = 0;
+    }
+    if (pending_ui && n && n < MAXTEX && (w >= 128 || h >= 128)) {
+        fe_ui_tex[n] = 1;
+        pending_ui = 0;
+    }
 }
-static int texh[MAXTEX];
 static uint32_t bound_tex;
 static int en_blend, en_tex, en_depth, en_cull, en_alpha;
 static uint32_t sf, df, cullmode, depthfunc, frontface = 0x0901u; /* GL_CCW */
@@ -191,6 +215,9 @@ IMP(_glBindTexture) {
     UNUSED;
     bound_tex = r1 < MAXTEX ? r1 : 0;
     if (bound_tex && tex_named[bound_tex]) en_tex = 1;
+    /* LAYER_4 binds here while fe_sky_quad is still 1; glDraw may run after
+     * a nested Image::draw cleared the flag. */
+    if (fe_sky_quad && bound_tex >= 2 && bound_tex <= 10) sky_tex_gl = bound_tex;
     return 0;
 }
 static void atlas_free(uint32_t n);
@@ -582,11 +609,45 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         bw = maxx - minx; bh = maxy - miny;
         if (bw < 0.f) bw = -bw;
         if (bh < 0.f) bh = -bh;
-        if (!(en_tex && bound_tex) && area > 2000.f) return;
+        {
+            int same_c = 1, vi;
+            for (vi = 1; vi < n; vi++)
+                if (sv[vi].c[0] != sv[0].c[0] || sv[vi].c[1] != sv[0].c[1] || sv[vi].c[2] != sv[0].c[2])
+                    same_c = 0;
+            /* Uniform untextured fill (white fade, brown box) is dropped.
+             * Theme sky / beach fillRect must stay: LAYER_4 is one screen
+             * tall and the zenith would otherwise be glClear. */
+            if (!(en_tex && bound_tex) && area > 2000.f && same_c) {
+                unsigned r = sv[0].c[0], g = sv[0].c[1], b = sv[0].c[2];
+                int sky = b > 90 && r < 240;
+                int haze = r > 140 && g > 110 && b > 70 && b < 210;
+                if (!sky && !haze) return;
+            }
+            if (!(en_tex && bound_tex) && area > 80.f && same_c &&
+                sv[0].c[0] < 48 && sv[0].c[1] < 48 && sv[0].c[2] < 48)
+                return;
+        }
+        if (fe_sky_quad && bound_tex >= 2 && bound_tex <= 10) sky_tex_gl = bound_tex;
+        if (getenv("AB_DUMP_DARK") && bw > 50.f && bh > 80.f && minx > 60.f) {
+            static int ndark;
+            if (ndark < 40) {
+                rt_log("sky-quad tex=%u en=%d area=%.0f rgb=%u,%u,%u uv=%.3f,%.3f..%.3f,%.3f panel=%.0f,%.0f..%.0f,%.0f",
+                       bound_tex, en_tex, (double)area,
+                       sv[0].c[0], sv[0].c[1], sv[0].c[2],
+                       sv[0].u, sv[0].v, sv[n > 2 ? 2 : 0].u, sv[n > 2 ? 2 : 0].v,
+                       (double)minx, (double)miny, (double)maxx, (double)maxy);
+                ndark++;
+            }
+        }
         /* Pause page composites a near-full screenshot over the menu.
          * Theme 2/3 BACKGROUND/THEME_GROUND fill the same portrait size
          * during play, so only drop it while the pause overlay is up. */
         if (fe_drop_fullscreen && bound_tex && bw > 190.f && bh > 280.f)
+            return;
+        /* L20 theme-3 draws MENU_1 as two huge sky wedges. HUD icons
+         * are small and sit at minx~200. */
+        if (bound_tex >= 11 && bw > 80.f && bh > 80.f &&
+            minx > 40.f && minx < 200.f && !fe_drop_fullscreen)
             return;
     }
     if (en_cull && cullmode != 0x408) {
@@ -606,7 +667,13 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
 static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32_t idx) {
     if (!va_.on || count <= 0) return;
     if (modep < 4 || modep > 6) return;           /* points and lines are not drawn */
-    if (fe_skip_fbo_blit) return;
+    if (fe_skip_fbo_blit || fe_skip_draw) return;
+    if (getenv("AB_DUMP_BG") && (fe_sky_quad || fe_ground_wrap || fe_wrap_hold)) {
+        static int ndr;
+        if (ndr < 12)
+            rt_log("glDraw sky=%d wrap=%d tex=%u count=%d",
+                   fe_sky_quad, fe_ground_wrap, bound_tex, count), ndr++;
+    }
     init_once();                                  /* Ka3D shaders submit clip-space verts; identity MVP */
     fe_stat_draws++;
     mat mvp; mul(&mvp, &stk[1][top[1]], &stk[0][top[0]]);
@@ -624,6 +691,41 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
     if (en_tex && bound_tex && tex_named[bound_tex] && !texh[bound_tex] && !atl[bound_tex].page)
         return;
     st.tex = as ? pages[as->page - 1].handle : en_tex && bound_tex ? texh[bound_tex] : 0;
+    {
+        int wrap = fe_ground_wrap;
+        int th = fe_theme_n;
+        uint32_t gln = 0;
+        if (th < 1 || th > 3) th = 1;
+        gln = fe_theme_ground_gl[th];
+        if (!gln) {
+            int t;
+            for (t = 1; t <= 3; t++) if (fe_theme_ground_gl[t]) { gln = fe_theme_ground_gl[t]; break; }
+        }
+        /* A mixed batch (pinch-out) can include birds; remapping that
+         * as one GROUND_BLOCK smears the whole scene. One quad is 4-6. */
+        if (wrap && count > 8) { wrap = 0; fe_ground_wrap = 0; }
+        if (wrap && gln && gln < MAXTEX && texh[gln]) {
+            st.tex = texh[gln];
+            as = NULL;
+            fe_wrap_hold = 0;
+            fe_ground_wrap = 1;
+            be_set_theme_ground(th, st.tex);
+            if (getenv("AB_DUMP_BG")) {
+                static int nwrap;
+                if (nwrap < 8)
+                    rt_log("ground-wrap theme=%d gl=%u be=%d uw=%.2f vh=%.2f",
+                           th, gln, st.tex, (double)fe_ground_uw, (double)fe_ground_vh), nwrap++;
+            }
+        } else {
+            if (wrap && getenv("AB_DUMP_BG")) {
+                static int nmiss;
+                if (nmiss < 8)
+                    rt_log("ground-wrap MISS theme=%d gl=%u texh=%d",
+                           th, gln, gln && gln < MAXTEX ? texh[gln] : -1), nmiss++;
+            }
+            fe_ground_wrap = 0;
+        }
+    }
     st.blend = en_blend; st.sfactor = sf; st.dfactor = df;
     /* 2D sprites share z=0.001 with the THEME ground quads. Depth test then
      * hides L2/L3 ice and pigs behind the static blocks. Draw order is
@@ -633,6 +735,9 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
      * or a 194x196 static block is a white rectangle over the pigs. */
     st.alpha_test = en_alpha || st.tex != 0; st.alpha_ref = 0;
     cv w[3]; int k = 0;
+    cv stored[64];
+    int nstore = 0, wrap = fe_ground_wrap;
+    if (wrap) fe_ground_wrap = 0;
     for (int n = 0; n < count; n++) {
         int i = first + n;
         if (idx_type) {
@@ -665,9 +770,15 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
         if (ta_.on) { float t[4]; fetch(&ta_, i, t, 0, 0); v.u = t[0]; v.v = t[1]; } else { v.u = v.v = 0; }
         if (bound_tex && uv_div[bound_tex]) {
             float d = (float)(1 << uv_div[bound_tex]);
+            /* Sprite UVs live in 0..1. THEME_GROUND terrain uses wrapping
+             * UVs past 1; clamping those to 1 made 194x196 ground a single
+             * brown texel. Only clamp the 0..1 sprite case. */
+            int sprite_uv = v.u >= -0.02f && v.u <= 1.02f && v.v >= -0.02f && v.v <= 1.02f;
             v.u /= d; v.v /= d;
-            if (v.u < 0.f) v.u = 0.f; else if (v.u > 1.f) v.u = 1.f;
-            if (v.v < 0.f) v.v = 0.f; else if (v.v > 1.f) v.v = 1.f;
+            if (sprite_uv) {
+                if (v.u < 0.f) v.u = 0.f; else if (v.u > 1.f) v.u = 1.f;
+                if (v.v < 0.f) v.v = 0.f; else if (v.v > 1.f) v.v = 1.f;
+            }
         }
         if (as) {
             float u = v.u < 0.f ? 0.f : v.u > 1.f ? 1.f : v.u, vv = v.v < 0.f ? 0.f : v.v > 1.f ? 1.f : v.v;
@@ -676,6 +787,10 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
         }
         if (ca_.on) { float c[4]; fetch(&ca_, i, c, 0, 1); for (int q = 0; q < 4; q++) v.c[q] = c[q]; if (ca_.size == 3) v.c[3] = 1; }
         else for (int q = 0; q < 4; q++) v.c[q] = color[q];
+        if (wrap) {
+            if (nstore < 64) stored[nstore++] = v;
+            continue;
+        }
         if (modep == 4) { w[k++] = v; if (k == 3) { emit_tri(&w[0], &w[1], &w[2]); k = 0; } }
         else if (modep == 5) {
             if (n < 2) { w[n] = v; continue; }
@@ -685,6 +800,51 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
             if (n == 0) { w[0] = v; continue; }
             if (n == 1) { w[1] = v; continue; }
             emit_tri(&w[0], &w[1], &v); w[1] = v;
+        }
+    }
+    if (wrap && nstore >= 3) {
+        float uw = fe_ground_uw, vh = fe_ground_vh;
+        int i;
+        /* Sprite UVs of a GROUND_BLOCK collapse to one texel after
+         * texshift. Map THEME_GROUND across the quad in clip space so
+         * the dirt is locked to the body (not the collapsed UV). */
+        {
+            float xmin = 1e9f, xmax = -1e9f, ymin = 1e9f, ymax = -1e9f, dx, dy;
+            for (i = 0; i < nstore; i++) {
+                float iw = stored[i].p[3] != 0.f ? 1.f / stored[i].p[3] : 1.f;
+                float nx = stored[i].p[0] * iw, ny = stored[i].p[1] * iw;
+                if (nx < xmin) xmin = nx;
+                if (nx > xmax) xmax = nx;
+                if (ny < ymin) ymin = ny;
+                if (ny > ymax) ymax = ny;
+            }
+            dx = xmax - xmin; dy = ymax - ymin;
+            if (dx < 1e-6f) dx = 1.f;
+            if (dy < 1e-6f) dy = 1.f;
+            if (uw < 0.15f) uw = 0.15f;
+            if (vh < 0.15f) vh = 0.15f;
+            for (i = 0; i < nstore; i++) {
+                float iw = stored[i].p[3] != 0.f ? 1.f / stored[i].p[3] : 1.f;
+                float nx = stored[i].p[0] * iw, ny = stored[i].p[1] * iw;
+                stored[i].u = (nx - xmin) / dx * uw;
+                stored[i].v = (ny - ymin) / dy * vh;
+                stored[i].c[0] = stored[i].c[1] = stored[i].c[2] = 1.f;
+                stored[i].c[3] = 1.f;
+            }
+        }
+        k = 0;
+        for (i = 0; i < nstore; i++) {
+            cv v = stored[i];
+            if (modep == 4) { w[k++] = v; if (k == 3) { emit_tri(&w[0], &w[1], &w[2]); k = 0; } }
+            else if (modep == 5) {
+                if (i < 2) { w[i] = v; continue; }
+                if (i & 1) emit_tri(&w[1], &w[0], &v); else emit_tri(&w[0], &w[1], &v);
+                w[0] = w[1]; w[1] = v;
+            } else {
+                if (i == 0) { w[0] = v; continue; }
+                if (i == 1) { w[1] = v; continue; }
+                emit_tri(&w[0], &w[1], &v); w[1] = v;
+            }
         }
     }
     flush_out();
@@ -767,6 +927,18 @@ void fngl_reset(void) {
     fe_pending_tex_shift = 0;
     texshift_qn = texshift_qh = 0;
     texshift_last_stem[0] = 0;
+    pending_ground_theme = 0;
+    pending_ui = 0;
+    memset(fe_theme_ground_gl, 0, sizeof fe_theme_ground_gl);
+    memset(fe_ui_tex, 0, sizeof fe_ui_tex);
+    sky_tex_gl = 0;
+    fe_sky_quad = 0;
+    fe_ground_wrap = 0;
+    fe_wrap_hold = 0;
+    fe_skip_draw = 0;
+    fe_theme_n = 1;
+    fe_ground_uw = 1.f;
+    fe_ground_vh = 1.f;
     fe_lowmem = 0;
     fe_lowmem_why[0] = 0;
     memset(uv_div, 0, sizeof uv_div);

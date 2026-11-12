@@ -146,8 +146,11 @@ static int cam_xy_baked;   /* Image::draw x,y already camera-relative */
 static int cam_xy_screen;  /* baked dest is already * scale; xf.sx = 1 */
 static int in_masked_add;  /* MaskedImage::add composites into an FBO */
 static int in_sprite_draw; /* Sprite::draw: world sheet, not HUD Image::draw */
+static int in_bg_draw;     /* drawBackground / drawForegroundNative tile loop */
 static int ro_clear_pending; /* Hashtable::clear once, on first createBox */
 static int imgbake_n;        /* AB_DUMP_RO Image::draw dest samples this level */
+static int img_flag_sp;
+static int img_flag_stack[16][3];
 /* MaskedImage mutates the shared 2D xf. Save it so a nested Image::draw
  * can use the swipe camera, then put the FBO xf back. */
 static uint8_t xf_save_ctx[56], xf_save_glu[56];
@@ -200,11 +203,18 @@ static void ab_cam_xf_write(uint32_t xf) {
     gw32(xf + 52u, F2U(0.f));
     /* Keep dest = sprite pivot (UV uses destarg - dest). Identity 2x2 so
      * Image::draw's clip AABB matches (x+tx)*scale; 90° ice otherwise
-     * inflates min-x NDC past +1 and the sprite never emits. */
-    gw32(xf + 16u, F2U(1.f));
-    gw32(xf + 20u, F2U(0.f));
-    gw32(xf + 24u, F2U(0.f));
-    gw32(xf + 28u, F2U(1.f));
+     * inflates min-x NDC past +1 and the sprite never emits. Rotated
+     * GROUND_BLOCK (L20 45° 97x97) must keep a00/a01 or it shears into
+     * black diagonal bars. */
+    {
+        float a01 = U2F(gr32(xf + 20u)), a10 = U2F(gr32(xf + 24u));
+        if (!(fabsf(a01) > 0.05f || fabsf(a10) > 0.05f)) {
+            gw32(xf + 16u, F2U(1.f));
+            gw32(xf + 20u, F2U(0.f));
+            gw32(xf + 24u, F2U(0.f));
+            gw32(xf + 28u, F2U(1.f));
+        }
+    }
 }
 static void ab_cam_xf(uint32_t xf) {
     if (!xf || !guest_ok(xf, 56u)) return;
@@ -239,6 +249,18 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
     /* MaskedImage mutates the shared 2D xf. Save it; nested Image::draw
      * writes the swipe camera, then after() puts the FBO xf back. */
     if (addr == 0x6c1b4u) in_sprite_draw++;
+    if (addr == 0xa5d8u || addr == 0x6ba0u) {
+        uint32_t glu;
+        in_bg_draw++;
+        glu = r0 ? *r0 : game_lua();
+        if (glu && guest_ok(glu, 140u)) {
+            float sr = U2F(gr32(glu + 116u)), sg = U2F(gr32(glu + 120u)), sb = U2F(gr32(glu + 124u));
+            if (sr > 160.f && sg > 110.f && sb < 200.f && sr + sg > 1.8f * sb) fe_theme_n = 3;
+            else if (sg > sr + 8.f && sg > sb) fe_theme_n = 2;
+            else if (sr > 90.f && sg > 110.f && sb < 90.f) fe_theme_n = 2;
+            else fe_theme_n = 1;
+        }
+    }
     if (addr == 0x9ad4u) ab_disarm_fbo_masks();
     if (addr == 0x130a48u) fe_skip_fbo_blit = 1;
     if (addr == 0x130268u || addr == 0x130a48u) {
@@ -256,6 +278,48 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
         float x = r2 ? U2F(*r2) : 0.f;
         float y = r3 ? U2F(*r3) : 0.f;
         uint32_t srcw = guest_ok(SP, 16u) ? gr32(SP + 8u) : 0;
+        uint32_t srch = guest_ok(SP, 16u) ? gr32(SP + 12u) : 0;
+        if (srcw > 2048u && srch > 2048u) {
+            float fw = U2F(srcw), fh = U2F(srch);
+            if (fw > 20.f && fw < 800.f && fh > 20.f && fh < 800.f) {
+                srcw = (uint32_t)(fw + 0.5f);
+                srch = (uint32_t)(fh + 0.5f);
+            }
+        }
+        /* Dummy 480x320 BACKGROUND_*_LAYER_4_DUMMY is an empty quad that
+         * shows as black bars (L20). LAYER_4 itself is 478x318. */
+        if (img_flag_sp < 16) {
+            img_flag_stack[img_flag_sp][0] = fe_sky_quad;
+            img_flag_stack[img_flag_sp][1] = fe_ground_wrap;
+            img_flag_stack[img_flag_sp][2] = fe_skip_draw;
+            img_flag_sp++;
+        }
+        /* LAYER_4_DUMMY is 480x320 empty. Drawn outside drawBackground it
+         * is two black triangles (L20). LAYER_4 itself is 478x318. */
+        fe_skip_draw = (srcw >= 479u && srcw <= 481u && srch >= 318u && srch <= 322u);
+        fe_sky_quad = (in_bg_draw && srcw >= 400u && srcw <= 480u && srch >= 250u && srch <= 330u);
+        if ((srcw >= 90u && srcw <= 104u && srch >= 90u && srch <= 104u)) {
+            /* 97x97 THEME*_04 is PVRTC-black. Wrapping it onto THEME_GROUND
+             * paints a dirt diamond in the L20 sky; skip_draw punched a
+             * slingshot hole. Leave the sprite: be_soft drops sky-side
+             * PVRTC-black and remaps large ground-side bodies. */
+            fe_ground_wrap = 0;
+        } else if ((srcw >= 90u && srcw <= 104u && srch >= 28u && srch <= 40u) ||
+            (srcw >= 180u && srcw <= 210u && (srch >= 28u && srch <= 40u || srch >= 180u && srch <= 210u)) ||
+            (srcw >= 600u && srcw <= 680u && srch >= 28u && srch <= 40u)) {
+            fe_ground_wrap = 1;
+            /* 256-texel THEME_GROUND. src/40 so a 194x196 body shows
+             * several dirt repeats, not one muddy splat. */
+            fe_ground_uw = (float)srcw / 40.f;
+            fe_ground_vh = (float)srch / 40.f;
+        } else {
+            fe_ground_wrap = 0;
+        }
+        if (getenv("AB_DUMP_BG") && (fe_sky_quad || fe_ground_wrap || fe_skip_draw) && imgbake_n < 60) {
+            rt_log("draw-flag sky=%d wrap=%d skip=%d src=%ux%u sprite=%d bg=%d theme=%d",
+                   fe_sky_quad, fe_ground_wrap, fe_skip_draw, srcw, srch,
+                   in_sprite_draw, in_bg_draw, fe_theme_n);
+        }
         /* Screen-space HUD keeps dest in 0..480, y>=0. World sprites sit
          * outside that: L2 pigs x~1100, L8 castle y<0 even when x is in
          * 0..520 (the slingshot origin). Huge BACKGROUND/THEME srcw (L21
@@ -279,7 +343,24 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
                 imgbake_n++;
             }
         }
-        if (world && !huge && cam_user_live() && r2 && r3) {
+        /* drawBackground already set per-layer parallax tx/ty and the
+         * tile dest. Writing the swipe camera here pins every tile at
+         * world 0 (slingshot) and the rest of the level is fill-sky. */
+        if (getenv("AB_DUMP_BG") && imgbake_n < 40) {
+            uint32_t xf = (c && guest_ok(c, 0x10Cu + 56u)) ? c + 0x10Cu : 0;
+            if (in_bg_draw || (srcw >= 80u && srcw <= 700u && in_sprite_draw)) {
+                rt_log("%s dest=%.0f,%.0f src=%ux%u sx=%.3f a00=%.2f a01=%.2f",
+                       in_bg_draw ? "bg-tile dest" : "blk",
+                       (double)x, (double)y, srcw, srch,
+                       xf ? (double)U2F(gr32(xf + 40u)) : 0.0,
+                       xf ? (double)U2F(gr32(xf + 16u)) : 0.0,
+                       xf ? (double)U2F(gr32(xf + 20u)) : 0.0);
+                imgbake_n++;
+            }
+        }
+        if (in_bg_draw) {
+            /* parallax xf already set */
+        } else if (world && !huge && cam_user_live() && r2 && r3) {
             if (srcw < 250u || srcw == 0u || srcw > 2048u) {
                 *r2 = F2U((x - user_left) * user_scale);
                 *r3 = F2U((y - user_top) * user_scale);
@@ -293,7 +374,7 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
             x = U2F(*r2);
             y = U2F(*r3);
         }
-        if (c && guest_ok(c, 0x10Cu + 56u) && (!in_masked_add || cam_xy_baked)) {
+        if (!in_bg_draw && c && guest_ok(c, 0x10Cu + 56u) && (!in_masked_add || cam_xy_baked)) {
             /* Huge BACKGROUND keeps world dest. Write the swipe camera xf;
              * leftover identity 2x2 from a dest-baked ice sprite shears
              * theme-2/3 hills (L21). Do not dest-bake: that warped L1-pan. */
@@ -337,15 +418,24 @@ static void ab_icall_after(uint32_t addr, uint32_t r0, uint32_t ret) {
         return;
     }
     if (addr == 0x6c1b4u && in_sprite_draw > 0) in_sprite_draw--;
+    if ((addr == 0xa5d8u || addr == 0x6ba0u) && in_bg_draw > 0) in_bg_draw--;
     if (addr == 0xb15c4u || addr == 0x6c1b4u) {
         if (in_masked_add) ab_masked_xf_restore();
         cam_xy_baked = 0;
         cam_xy_screen = 0;
+        if (addr == 0xb15c4u && img_flag_sp > 0) {
+            img_flag_sp--;
+            fe_sky_quad = img_flag_stack[img_flag_sp][0];
+            fe_ground_wrap = img_flag_stack[img_flag_sp][1];
+            fe_skip_draw = img_flag_stack[img_flag_sp][2];
+        }
     }
     if (cam_patching) return;
     if (!cam_user_live()) return;
     /* Nested Image::draw getxf still needs the swipe xf. FBO-local getxf
-     * (cam_xy_baked=0) keeps the saved MaskedImage transform. */
+     * (cam_xy_baked=0) keeps the saved MaskedImage transform. Native
+     * drawBackground owns xf.tx/ty while tiling sky/ground. */
+    if (in_bg_draw) return;
     if (in_masked_add && !cam_xy_baked) return;
     /* getRenderState2D returns context+0x10C. Patch that pointer, not a
      * wrapper's this+0x10C, so Image::draw / F_130268 read the swipe. */
@@ -1170,8 +1260,14 @@ static void ab_xf_reset_ctx(void) {
     in_masked_add = 0;
     masked_depth = 0;
     in_sprite_draw = 0;
+    in_bg_draw = 0;
     cam_xy_baked = 0;
     cam_xy_screen = 0;
+    img_flag_sp = 0;
+    fe_skip_draw = 0;
+    fe_sky_quad = 0;
+    fe_ground_wrap = 0;
+    fe_wrap_hold = 0;
 }
 static void cam_reset(void) {
     reset_view();

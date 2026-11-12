@@ -14,6 +14,10 @@ typedef struct { int used, w, h, fmt_seen; uint8_t *rgba; uint32_t format, type;
 #define MAXT 512
 static tex T[MAXT];
 int be_stat_pvrtc, be_stat_uncompressed, be_tex_peak_bytes, be_tex_bytes;
+static int theme_ground_be[4];
+void be_set_theme_ground(int theme, int h) {
+    if (theme >= 1 && theme <= 3 && h > 0 && h < MAXT) theme_ground_be[theme] = h;
+}
 int be_stat_tex_fail, be_stat_live_tex;
 int be_check_tiny;           /* triangles under 2 square pixels (the nano driver rule) */
 int be_frame_tris, be_frame_tris_max, be_frame_big, be_frame_big_max;   /* big: what the nano draws */
@@ -148,6 +152,31 @@ void be_tex_compressed(int h, int level, uint32_t fmt, int w, int ht, const void
     put_rgba(t, w, ht);
     int bpp2 = fmt == 0x8C01 || fmt == 0x8C03;
     if ((uint32_t)(w * ht * (bpp2 ? 2 : 4) / 8) <= size) pvrtc_decode(t->rgba, data, w, ht, bpp2);
+    if (w == 256 && ht == 256 && t->rgba && getenv("AB_DUMP_BG")) {
+        int i, uniq = 0;
+        unsigned seen[64];
+        memset(seen, 0, sizeof seen);
+        for (i = 0; i < w * ht; i++) {
+            unsigned k = ((unsigned)t->rgba[4 * i] >> 2) * 4096u +
+                         ((unsigned)t->rgba[4 * i + 1] >> 2) * 64u +
+                         ((unsigned)t->rgba[4 * i + 2] >> 2);
+            int s = (int)(k % 64u);
+            if (!seen[s]) { seen[s] = 1; uniq++; }
+        }
+        fprintf(stderr, "pvrtc 256 h=%d uniq~%d rgb0=%u,%u,%u\n",
+                h, uniq, t->rgba[0], t->rgba[1], t->rgba[2]);
+        if (h >= 8 && h <= 10) {
+            char p[64];
+            FILE *f;
+            snprintf(p, sizeof p, "/tmp/theme-ground-%d.ppm", h);
+            f = fopen(p, "wb");
+            if (f) {
+                fprintf(f, "P6 256 256 255\n");
+                for (i = 0; i < w * ht; i++) fwrite(t->rgba + 4 * i, 1, 3, f);
+                fclose(f);
+            }
+        }
+    }
 }
 void be_clear(int color, int depth, const float c[4], float d) {
     for (int y = 0; y < PH; y++) for (int x = 0; x < PW; x++) {
@@ -215,6 +244,28 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
         be_frame_tris++;
         if (fabsf(area) < 4.f) be_check_tiny++; else be_frame_big++;
         if (area == 0) continue;
+            /* L20 97x97 GROUND_BLOCK: INGAME_1 rect is PVRTC-black. Drop
+             * sky-side tris whose verts all sit past the ground band. */
+        {
+            const be_vtx *vv[3];
+            int vi, tex_dark = 0, skyish = 0;
+            vv[0] = a; vv[1] = b; vv[2] = c;
+            for (vi = 0; vi < 3; vi++) {
+                if (vv[vi]->x > 50.f) skyish++;
+                if (t) {
+                    int tx = (int)floorf(vv[vi]->u * (float)t->w);
+                    int ty = (int)floorf(vv[vi]->v * (float)t->h);
+                    const uint8_t *tp;
+                    tx %= t->w; if (tx < 0) tx += t->w;
+                    ty %= t->h; if (ty < 0) ty += t->h;
+                    tp = t->rgba + 4 * (ty * t->w + tx);
+                    if ((int)tp[0] + (int)tp[1] + (int)tp[2] < 80 && tp[3] > 140)
+                        tex_dark++;
+                }
+            }
+            if (skyish == 3 && tex_dark >= 2 && fabsf(area) > 40.f)
+                continue;
+        }
         int x0 = (int)floorf(fminf(a->x, fminf(b->x, c->x))), x1 = (int)ceilf(fmaxf(a->x, fmaxf(b->x, c->x)));
         int y0 = (int)floorf(fminf(a->y, fminf(b->y, c->y))), y1 = (int)ceilf(fmaxf(a->y, fmaxf(b->y, c->y)));
         if (x0 < 0) x0 = 0;
@@ -254,7 +305,58 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
             /* Untextured white (missing tex / fullscreen fade) covering the
              * pigs. Textured white is handled by texscale UV divide. Huge
              * untextured brown is L2's 194x196 static block at castle zoom. */
-            if (!t && col[3] >= 0.50f && fabsf(area) > 2000.f)
+            {
+                int dirt = col[0] > 0.10f && col[0] < 0.62f && col[1] < 0.42f &&
+                           col[2] < 0.36f && col[0] >= col[1] - 0.05f && col[3] >= 0.50f;
+                int mud = col[0] < 0.22f && col[1] < 0.22f && col[2] < 0.22f && col[3] >= 0.50f;
+                if (!t && col[3] >= 0.50f && fabsf(area) > 2000.f) {
+                    int same = a->c[0] == b->c[0] && a->c[1] == b->c[1] && a->c[2] == b->c[2] &&
+                               a->c[0] == c->c[0] && a->c[1] == c->c[1] && a->c[2] == c->c[2];
+                    if (same) {
+                        int sky = col[2] > 0.35f && col[0] < 0.94f;
+                        int haze = col[0] > 0.55f && col[1] > 0.43f && col[2] > 0.27f && col[2] < 0.82f;
+                        if (!sky && !haze && !dirt) continue;
+                    }
+                }
+                /* GROUND_BLOCK often misses wrap (glDraw after Image::draw
+                 * pops the flag) and is one muddy INGAME_1 texel. Wrap can
+                 * also land on THEME_GROUND with a collapsed UV, which is
+                 * still one brown colour - retile in panel space. */
+                {
+                    int wide = (x1 - x0) > 40 && (y1 - y0) > 40;
+                    int th, gth;
+                    tex *gt = NULL;
+                    gth = fe_theme_n;
+                    if (gth < 1 || gth > 3) gth = 1;
+                    if (theme_ground_be[gth] && T[theme_ground_be[gth]].rgba)
+                        gt = &T[theme_ground_be[gth]];
+                    else
+                        for (th = 1; th <= 3; th++)
+                            if (theme_ground_be[th] && T[theme_ground_be[th]].rgba) {
+                                gt = &T[theme_ground_be[th]];
+                                break;
+                            }
+                    /* Small sky-side 97x97 diamonds must not be retiled -
+                     * that is the L20 brown triangle. Castle ramps are
+                     * bigger or they touch the ground band. */
+                    int terrain = x0 < 60 || (x1 - x0) > 100 || (y1 - y0) > 100;
+                    if ((dirt || (mud && x < 50)) && wide && terrain && gt && fabsf(area) > 400.f) {
+                        /* x*2 so a 150px ramp covers more than one 256 tile
+                         * and cave holes stay visible. */
+                        int tx = (x * 2) % gt->w, ty = (y * 2) % gt->h;
+                        const uint8_t *gp;
+                        if (tx < 0) tx += gt->w;
+                        if (ty < 0) ty += gt->h;
+                        gp = gt->rgba + 4 * (ty * gt->w + tx);
+                        col[0] = gp[0] / 255.f;
+                        col[1] = gp[1] / 255.f;
+                        col[2] = gp[2] / 255.f;
+                        col[3] = 1.f;
+                    }
+                }
+            }
+            if (!t && col[3] >= 0.50f && fabsf(area) > 80.f &&
+                col[0] < 0.18f && col[1] < 0.18f && col[2] < 0.18f)
                 continue;
             uint8_t *d = be_fb[y][x];
             if (s->blend) {
