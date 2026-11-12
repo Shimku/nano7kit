@@ -125,8 +125,13 @@ uint32_t rt_call(const char *what, uint32_t addr, uint32_t a0, uint32_t a1, uint
 uint32_t g_malloc(uint32_t n);
 void g_free(uint32_t p);
 uint32_t g_strdup(const char *s);
+int rt_heap_poisoned(uint32_t p);   /* 1 if p is in a free guest block (UAF) */
 uint32_t rt_heap_used(void), rt_heap_peak(void), rt_heap_size(void);
 uint32_t rt_heap_largest_free(void);
+/* GameLua::createBox/createCircle: clear leftover RenderObject slots after
+ * lua destroy and before the new insert. Generated ENTER() calls this. */
+void ab_on_create_object(void);
+void ab_after_remove_physics(void); /* lua "Removing physics objects" */
 uint32_t rt_outside_used(void), rt_outside_peak(void), rt_outside_count(void);
 uint32_t rt_malloc_failures(void);
 uint32_t rt_align_faults(void);

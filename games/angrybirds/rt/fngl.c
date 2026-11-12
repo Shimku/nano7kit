@@ -17,6 +17,7 @@ int fe_view_h = 480;
 int fe_stat_tris, fe_stat_draws, fe_stat_tex_bytes;
 int fe_stat_ingame_ok, fe_stat_ingame_clip, fe_stat_castle_img;
 int fe_drop_fullscreen;
+int fe_skip_fbo_blit;
 
 typedef struct { float m[16]; } mat;
 static mat stk[3][16];
@@ -132,7 +133,15 @@ static void cap(uint32_t c, int on) {
     }
 }
 IMP(_glEnable) { UNUSED; cap(r0, 1); return 0; }
-IMP(_glDisable) { UNUSED; cap(r0, 0); return 0; }
+IMP(_glDisable) {
+    UNUSED;
+    /* Framebuffer bind is a no-op, so MaskedImage's glDisable(TEXTURE_2D)
+     * while "drawing into the FBO" is never paired with a restore. Ice
+     * later in the 67-bucket walk would be vertex-coloured rectangles. */
+    if (r0 == 0x0DE1u) return 0;
+    cap(r0, 0);
+    return 0;
+}
 IMP(_glBlendFunc) { UNUSED; sf = r0; df = r1; return 0; }
 IMP(_glDepthMask) { UNUSED; depthmask = (r0 & 255) != 0; return 0; }
 IMP(_glDepthFunc) { UNUSED; depthfunc = r0; return 0; }
@@ -178,7 +187,12 @@ IMP(_glGenTextures) { UNUSED;
     for (uint32_t i = 0; i < r0; i++) { uint32_t n = 0; for (uint32_t k = 1; k < MAXTEX; k++) if (!tex_named[k]) { n = k; tex_named[k] = 1; texh[k] = 0; atl[k].page = 0; uv_div[k] = 0; break; }
         gw32(r1 + 4 * i, n); }
     return 0; }
-IMP(_glBindTexture) { UNUSED; bound_tex = r1 < MAXTEX ? r1 : 0; return 0; }
+IMP(_glBindTexture) {
+    UNUSED;
+    bound_tex = r1 < MAXTEX ? r1 : 0;
+    if (bound_tex && tex_named[bound_tex]) en_tex = 1;
+    return 0;
+}
 static void atlas_free(uint32_t n);
 #ifndef FN_NANO
 static void tex_drv_release(uint32_t n);
@@ -592,11 +606,23 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
 static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32_t idx) {
     if (!va_.on || count <= 0) return;
     if (modep < 4 || modep > 6) return;           /* points and lines are not drawn */
+    if (fe_skip_fbo_blit) return;
     init_once();                                  /* Ka3D shaders submit clip-space verts; identity MVP */
     fe_stat_draws++;
     mat mvp; mul(&mvp, &stk[1][top[1]], &stk[0][top[0]]);
+    /* MaskedImage's no-op FBO path glDisable(TEXTURE_2D). L2 is the first
+     * chapter-1 level that uses it; with 67 hash buckets the masks draw
+     * before L3 ice and the ice is untextured rectangles. Isolation's
+     * 37-bucket order draws ice first. Binding a named texture must
+     * sample it. */
+    if (bound_tex && tex_named[bound_tex]) en_tex = 1;
     const atl_slot *as = en_tex && bound_tex && atl[bound_tex].page ? &atl[bound_tex] : NULL;
     if (as) atlas_upload();
+    /* Named FBO color attachments never got pixels (TexImage NULL).
+     * Blitting them is a brown 2x2 diamond; the sprite-into-FBO still
+     * landed on the screen. */
+    if (en_tex && bound_tex && tex_named[bound_tex] && !texh[bound_tex] && !atl[bound_tex].page)
+        return;
     st.tex = as ? pages[as->page - 1].handle : en_tex && bound_tex ? texh[bound_tex] : 0;
     st.blend = en_blend; st.sfactor = sf; st.dfactor = df;
     /* 2D sprites share z=0.001 with the THEME ground quads. Depth test then

@@ -307,6 +307,23 @@ Files: `games/angrybirds`, `host/angrybirds.py`. Same approach as Fruit Ninja
   live pig bodies by piglette restitution (0.05) so StoneBlock8 / helmet
   extras are not pigs. GESTURE/DEVICE pan and pinch-out every chapter-1
   level that exists.
+  RECIPE 21 drops leftover instance rows after lua "Removing physics
+  objects" (bodies gone, block definitions still in the table). Empty
+  slots zero leftover mask (+36), angle (+76) and overflow chains so
+  L3 after L2 does not blit MaskedImage's empty FBO (brown diamonds).
+  Hashtable::clear / D1+C1 is not used: before destroy it leaks Box2D
+  bodies, during createBox it wipes definitions. Guest free poisons
+  with 0xDB; first-fit carves the high end of a hole so lua_gc plus
+  address-ordered alloc cannot hand L2 Image addresses back to L3.
+  `AB_HEAP_NOREUSE` leaks the block instead. Named GL textures with no
+  pixels (MaskedImage's no-op FBO) are not blitted. The MaskedImage
+  compositor at GameLua+460 is D1+C1 on each load so L2's FBO 2x2 does
+  not paint L3 pan ice as untextured rectangles. Binding a named GL
+  texture re-enables TEXTURE_2D; glDisable(TEXTURE_2D) is ignored
+  (Framebuffer bind is a no-op, so MaskedImage never restores it).
+  drawGame zeros slot+36 masks and skips the compositor flush blit so
+  sprites go through Sprite::draw instead of the empty FBO. Isolation
+  (`AB_ISOLATE_LEVEL=N`) boots, inits lua, and loads that level directly.
   `AB_GESTURE_TEST=1`
   checks a drag never moves the composited frame, a two-finger pinch changes
   worldScale, L1 then L2 then L3 load in one session, and the L1/L2 panel

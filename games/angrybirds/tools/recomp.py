@@ -1243,6 +1243,20 @@ def main():
                 ):
                     body = body.replace(a, b)
                 text = text[:start] + body + text[end:]
+        # First createBox/createCircle of a newly loaded level: lua destroy
+        # already walked the objects table. Hashtable::clear here drops L2
+        # leftover occupied slots before L3 inserts (address reuse after
+        # first-fit would otherwise keep L2 Image* on live L3 bodies).
+        for ca, fn in (
+            (0x79f8, "F_79f8"),   # GameLua::createBox
+            (0x7bfc, "F_7bfc"),   # GameLua::createCircle
+            (0x129d0, "F_129d0"), # GameLua::createBoxLua
+            (0x13034, "F_13034"), # GameLua::createCircleLua
+        ):
+            if ca not in part:
+                continue
+            needle = "ENTER(0x%x);" % ca
+            text = text.replace(needle, needle + "ab_on_create_object();", 1)
         with open(os.path.join(outdir, "recomp_%02d.c" % c), "w") as fh:
             fh.write(text)
     imps = sorted({n for n in em.used_imports if n} | {n for (k, n) in img.m.imports.values() if n})

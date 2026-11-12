@@ -26,6 +26,7 @@ extern int fe_view_h;
 extern int fe_stat_tris, fe_stat_draws, fe_stat_tex_bytes, fe_stat_tex_peak;
 extern int fe_stat_ingame_ok, fe_stat_ingame_clip, fe_stat_castle_img;
 extern int fe_drop_fullscreen;
+extern int fe_skip_fbo_blit;           /* MaskedImage flush: FBO bind is a no-op */
 extern int fe_tex_shift, fe_tex_min_side, fe_tex_big_side, fe_tex_big_shift, fe_stat_tex_count, fe_stat_tex_count_peak;   /* texture policy (see fngl.c) */
 extern int fe_atlas_max_side, fe_stat_atlased, fe_stat_atlas_pages;   /* 0 = no atlas */
 void fngl_reset(void);                 /* defaults; call before anything else */

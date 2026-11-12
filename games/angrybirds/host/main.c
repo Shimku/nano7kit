@@ -1068,6 +1068,53 @@ int main(int argc, char **argv) {
         unsigned pr, pg, pb, qr, qg, qb;
         float ox, oy, sx, sy, scale0, scale1;
         wait_frames(200);
+        /* Fresh boot -> menu -> one chapter-1 level, no sequential leftover. */
+        if (getenv("AB_ISOLATE_LEVEL")) {
+            int n = atoi(getenv("AB_ISOLATE_LEVEL"));
+            char lname[16], dump[24];
+            dump_panel("panel-splash");
+            tap_at(105.f, 216.f);
+            wait_frames(45);
+            dump_panel("panel-menu");
+            dump_panel("panel-select");
+            if (n < 1) n = 1;
+            snprintf(lname, sizeof lname, "Level%d", n);
+            snprintf(dump, sizeof dump, "panel-l%d", n); /* panel-l1 panel-l2 ... Level8 */
+            if (!level_lua_exists(n)) {
+                fprintf(stderr, "AB_ISOLATE_TEST L%d missing FAIL\n", n);
+                return 1;
+            }
+            /* gotoFirstLevel inits lua cameras; then replace L1 with N so
+             * this is still a fresh boot of one level, not a sequential run. */
+            ab_call_lua("gotoFirstLevel");
+            wait_frames(20);
+            for (i = 0; i < 8; i++) {
+                tap_at(49.f, 324.f);
+                tap_at(55.f, 333.f);
+            }
+            wait_frames(8);
+            if (getenv("AB_WARM_LEVEL")) {
+                char warm[16];
+                snprintf(warm, sizeof warm, "Level%s", getenv("AB_WARM_LEVEL"));
+                ab_load_lua_level(warm);
+                wait_frames(90);
+                ab_unpause();
+                dismiss_tutorial();
+                wait_frames(4);
+            }
+            ab_load_lua_level(lname);
+            wait_frames(90);
+            ab_unpause();
+            dismiss_tutorial();
+            wait_frames(8);
+            if (!level_sane(lname, &a)) fail++;
+            if (!dump_and_check(dump, &a, NULL)) fail++;
+            if (!play_level_camera(dump, &a)) fail++;
+            fprintf(stderr, "AB_ISOLATE_TEST L%d pigs %d texfail=%d %s\n",
+                    n, a.pig_n, be_stat_tex_fail, fail ? "FAIL" : "PASS");
+            fprintf(stderr, "AB_GESTURE_TEST %s texfail=%d\n", fail ? "FAIL" : "PASS", be_stat_tex_fail);
+            return fail ? 1 : 0;
+        }
         ab_call_lua("gotoFirstLevel");
         wait_frames(20);
         for (i = 0; i < 8; i++) {

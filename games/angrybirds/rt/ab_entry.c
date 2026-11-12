@@ -65,6 +65,7 @@ static void ab_iphone_cameras(void);
 static void ab_apply_bird_cam(void);
 static void ab_lua_gc(void);
 static void ab_drop_stale_render_objects(void);
+static void ab_disarm_fbo_masks(void);
 static void ab_latch_user_from_play(void);
 static int ab_touch_near_bird(float gx, float gy);
 static void ab_pan_from_finger(void);
@@ -144,6 +145,9 @@ static int ab_looks_like_xf(uint32_t p) {
 static int cam_xy_baked;   /* Image::draw x,y already camera-relative */
 static int cam_xy_screen;  /* baked dest is already * scale; xf.sx = 1 */
 static int in_masked_add;  /* MaskedImage::add composites into an FBO */
+static int in_sprite_draw; /* Sprite::draw: world sheet, not HUD Image::draw */
+static int ro_clear_pending; /* Hashtable::clear once, on first createBox */
+static int imgbake_n;        /* AB_DUMP_RO Image::draw dest samples this level */
 /* MaskedImage mutates the shared 2D xf. Save it so a nested Image::draw
  * can use the swipe camera, then put the FBO xf back. */
 static uint8_t xf_save_ctx[56], xf_save_glu[56];
@@ -234,6 +238,9 @@ static int masked_depth;
 static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *r2, uint32_t *r3) {
     /* MaskedImage mutates the shared 2D xf. Save it; nested Image::draw
      * writes the swipe camera, then after() puts the FBO xf back. */
+    if (addr == 0x6c1b4u) in_sprite_draw++;
+    if (addr == 0x9ad4u) ab_disarm_fbo_masks();
+    if (addr == 0x130a48u) fe_skip_fbo_blit = 1;
     if (addr == 0x130268u || addr == 0x130a48u) {
         if (masked_depth++ == 0) {
             in_masked_add = 1;
@@ -255,7 +262,23 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
          * hills y<-80) stay with lua dest + native xf so they do not shear. */
         int huge = (srcw >= 250u && srcw <= 2048u);
         int world = !huge && (x < -20.f || x > 520.f || y < -20.f);
+        /* L8 castle sits near the slingshot origin (dest in 0..520, y>=-20)
+         * so the AABB test misses it. Sprite::draw with a camera xf is still
+         * world space; HUD Image::draw is not. */
+        if (!world && !huge && in_sprite_draw && cam_user_live() &&
+            c && guest_ok(c, 0x10Cu + 56u) && !ab_xf_hud(c + 0x10Cu))
+            world = 1;
         if (world && r2 && U2F(*r2) > 1000.f) fe_stat_castle_img++;
+        if (getenv("AB_DUMP_RO") && world && cam_user_live() && r2 && x > 1000.f) {
+            uint32_t xf = (c && guest_ok(c, 0x10Cu + 56u)) ? c + 0x10Cu : 0;
+            if (imgbake_n < 12) {
+                rt_log("imgbake dest=%.0f,%.0f srcw=%u sprite=%d mask=%d xf=%08x a00=%.2f sx=%.3f",
+                       (double)x, (double)y, srcw, in_sprite_draw, in_masked_add, xf,
+                       xf ? (double)U2F(gr32(xf + 16u)) : 0.0,
+                       xf ? (double)U2F(gr32(xf + 40u)) : 0.0);
+                imgbake_n++;
+            }
+        }
         if (world && !huge && cam_user_live() && r2 && r3) {
             if (srcw < 250u || srcw == 0u || srcw > 2048u) {
                 *r2 = F2U((x - user_left) * user_scale);
@@ -271,10 +294,12 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
             y = U2F(*r3);
         }
         if (c && guest_ok(c, 0x10Cu + 56u) && (!in_masked_add || cam_xy_baked)) {
-            /* Huge BACKGROUND dest stays with the native 2x2; identity xf
-             * shears theme-2/3 hills (L21). */
-            if (huge) ;
-            else if (world || cam_xy_baked) ab_cam_xf_write(c + 0x10Cu);
+            /* Huge BACKGROUND keeps world dest. Write the swipe camera xf;
+             * leftover identity 2x2 from a dest-baked ice sprite shears
+             * theme-2/3 hills (L21). Do not dest-bake: that warped L1-pan. */
+            if (huge) {
+                if (cam_user_live()) ab_cam_xf_write(c + 0x10Cu);
+            } else if (world || cam_xy_baked) ab_cam_xf_write(c + 0x10Cu);
             else ab_cam_xf(c + 0x10Cu);
         }
     }
@@ -301,6 +326,7 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
 static void ab_icall_after(uint32_t addr, uint32_t r0, uint32_t ret) {
     uint32_t glu, c, vtbl, xf, getxf;
     if (addr == 0x130268u || addr == 0x130a48u) {
+        if (addr == 0x130a48u) fe_skip_fbo_blit = 0;
         if (masked_depth > 0) masked_depth--;
         if (masked_depth == 0) {
             ab_masked_xf_restore();
@@ -310,6 +336,7 @@ static void ab_icall_after(uint32_t addr, uint32_t r0, uint32_t ret) {
         cam_xy_screen = 0;
         return;
     }
+    if (addr == 0x6c1b4u && in_sprite_draw > 0) in_sprite_draw--;
     if (addr == 0xb15c4u || addr == 0x6c1b4u) {
         if (in_masked_add) ab_masked_xf_restore();
         cam_xy_baked = 0;
@@ -389,6 +416,7 @@ static void reset_view(void) {
     cam_user = 0;
     in_masked_add = 0;
     masked_depth = 0;
+    in_sprite_draw = 0;
     cam_xy_baked = 0;
     cam_xy_screen = 0;
     ab_cam_clear_play();
@@ -1141,6 +1169,7 @@ static void ab_xf_reset_ctx(void) {
     xf_have_ctx = xf_have_glu = 0;
     in_masked_add = 0;
     masked_depth = 0;
+    in_sprite_draw = 0;
     cam_xy_baked = 0;
     cam_xy_screen = 0;
 }
@@ -1609,12 +1638,15 @@ void ab_unpause(void) {
     ab_lua_set_number("pauseBGw", 0.f);
 }
 
-/* GameLua+192/+196 is Hashtable<String,RenderObjectData> (stride 96,
- * occupied at +92, b2Body* at +24, Image* at +32, chain at +88). lua
- * updateLoading rebuilds Box2D but leaves occupied slots whose bodies
- * are gone, so L3 after L2 still draws L2 ice. Drop those after
- * createBox. Do not Hashtable::clear before load: lua destroy walks
- * this table. */
+/* GameLua+0xB8 is Hashtable<String,RenderObjectData> (this+8 = glu+192
+ * bucket count, +12 buf, stride 96, occupied +92, b2Body* +24, Image*
+ * +32, mask +36, angle +76, chain +88). iOS tore this down with the
+ * level scene. updateLoading does not: L2 grow leaves dangling overflow
+ * chains and leftover +36 mask pointers that send L3 ice through
+ * MaskedImage's empty FBO (brown diamonds). Hashtable::clear / D1+C1
+ * before "Removing physics" leaks Box2D bodies (lua destroy walks this
+ * table) and during createBox wipes block definitions. After physics
+ * is gone, drop instance rows and zero empty-slot mask/angle/chain. */
 static int ab_body_in_world(uint32_t world, uint32_t body) {
     uint32_t b;
     int n;
@@ -1627,9 +1659,86 @@ static int ab_body_in_world(uint32_t world, uint32_t body) {
     }
     return 0;
 }
+static int ab_looks_like_image(uint32_t img) {
+    uint32_t vt;
+    if (!img || !guest_ok(img, 16u)) return 0;
+    if (rt_heap_poisoned(img)) return 0;
+    vt = gr32(img);
+    /* gr::Image vtable is 0x13faac; other Ka3D images sit in the same page. */
+    return vt >= 0x13f000u && vt < 0x150000u;
+}
+void ab_on_create_object(void) {
+    if (!ro_clear_pending) return;
+    /* First createBox of Loading blocks: physics from the previous level
+     * is still live. Only unoccupy rows whose Image was already freed. */
+    ro_clear_pending = 0;
+    ab_drop_stale_render_objects();
+    rt_log("ro-clear instances");
+}
+void ab_after_remove_physics(void) {
+    /* lua just destroyed Box2D bodies. Instance slots and overflow chain
+     * nodes still hold Image, mask, and angle from L2 until Loading level
+     * inserts L3. Scrub them so drawGame does not blit leftover masks. */
+    ab_drop_stale_render_objects();
+    rt_log("ro-after-physics");
+}
+/* GameLua+460 is the MaskedImage compositor. L2 is the first chapter-1
+ * level that uses it; after that the no-op FBO attachment stays a solid
+ * 2x2 and L3 pan ice is untextured rectangles / brown diamonds. iOS
+ * rebuilt this with the level scene. */
+#define AB_MASKED_OFF  460u
+#define AB_MASKED_D1   0x1315d8u
+#define AB_MASKED_C1   0x1315d4u
+static void ab_reset_masked_image(void) {
+    uint32_t glu = game_lua(), mi, ctx, vt;
+    if (!glu || !guest_ok(glu, AB_MASKED_OFF + 4u)) return;
+    mi = gr32(glu + AB_MASKED_OFF);
+    if (!mi || !guest_ok(mi, 64u)) return;
+    vt = gr32(mi);
+    /* Pointer to a MaskedImage (vtable 0x141384). A code address here
+     * would mean the object is embedded at glu+460; do not D1 that. */
+    if (vt < 0x13f000u || vt >= 0x150000u) return;
+    ctx = gr32(mi + 8u);
+    if (!ctx || !guest_ok(ctx, 16u)) return;
+    rt_call("MaskedImageD1", AB_MASKED_D1, mi, 0, 0, 0, 0, 0);
+    rt_call("MaskedImageC1", AB_MASKED_C1, mi, ctx, 0, 0, 0, 0);
+    xf_have_ctx = xf_have_glu = 0;
+    in_masked_add = 0;
+    masked_depth = 0;
+    rt_log("masked-reset mi=%08x ctx=%08x vt=%08x", mi, ctx, vt);
+}
+static void ab_disarm_fbo_masks(void) {
+    uint32_t glu = game_lua(), n, buf, i, p, next;
+    int guard;
+    if (!glu || !guest_ok(glu, 200u)) return;
+    n = gr32(glu + 192u);
+    buf = gr32(glu + 196u);
+    if (!n || n > 4096u || !buf || !guest_ok(buf, n * 96u)) return;
+    for (i = 0; i < n; i++) {
+        p = buf + i * 96u;
+        guard = 0;
+        while (p && guest_ok(p, 96u) && guard++ < 64) {
+            next = gr32(p + 88u);
+            if (G8(p + 92u)[0] && gr32(p + 36u))
+                gw32(p + 36u, 0);
+            if (!next || next == p) break;
+            p = next;
+        }
+    }
+}
+static void ab_scrub_empty_slot(uint32_t p) {
+    gw32(p + 24u, 0);   /* body */
+    gw32(p + 32u, 0);   /* Image* */
+    gw32(p + 36u, 0);   /* mask / MaskedImage source */
+    gw32(p + 76u, 0);   /* angle (drawGame cos/sin) */
+    G8(p + 92u)[0] = 0;
+    /* Do not zero +88: an unoccupied head may chain to a live overflow
+     * node. Only poison-dangling chains are cut in the walk. */
+}
 static void ab_drop_stale_render_objects(void) {
-    uint32_t glu = game_lua(), world, n, buf, i, p, next, body;
-    int guard, dropped = 0, kept = 0;
+    uint32_t glu = game_lua(), world, n, buf, i, p, next, body, img, mask;
+    int guard, dropped = 0, kept = 0, nmask = 0, nrot = 0;
+    float ang;
     if (!glu || !guest_ok(glu, 200u)) return;
     world = gr32(glu + AB_WORLD_OFF);
     n = gr32(glu + 192u);
@@ -1640,20 +1749,73 @@ static void ab_drop_stale_render_objects(void) {
         guard = 0;
         while (p && guest_ok(p, 96u) && guard++ < 64) {
             next = gr32(p + 88u);
+            if (next && (rt_heap_poisoned(next) || !guest_ok(next, 96u))) {
+                gw32(p + 88u, 0);
+                next = 0;
+            }
             if (G8(p + 92u)[0]) {
                 body = gr32(p + 24u);
-                if (!body || !ab_body_in_world(world, body)) {
-                    G8(p + 92u)[0] = 0;
+                img = gr32(p + 32u);
+                mask = gr32(p + 36u);
+                /* body==0 slots are block definitions from "Loading blocks".
+                 * Instance rows (a body that is gone, a poisoned Image, or a
+                 * leftover mask pointing at freed memory) go stale across
+                 * levels. Do not test rt_heap_poisoned on interior Box2D
+                 * pointers: those are not always the malloc payload start. */
+                if (body && (!ab_body_in_world(world, body) ||
+                             (img && guest_ok(img, 4u) && gr32(img) == 0xDBDBDBDBu) ||
+                             (mask && rt_heap_poisoned(mask)))) {
+                    ab_scrub_empty_slot(p);
                     dropped++;
                 } else {
                     kept++;
+                    if (mask) {
+                        /* FBO bind is a no-op. MaskedImage::add then blits a
+                         * 2x2 and glDisable(TEXTURE_2D) sticks, so the next
+                         * level's ice is untextured. Draw the sprite. */
+                        gw32(p + 36u, 0);
+                        nmask++;
+                    }
+                    ang = U2F(gr32(p + 76u));
+                    if (ang > 0.05f || ang < -0.05f) nrot++;
                 }
+            } else {
+                /* Unoccupied head: leftover Image or mask still draw if
+                 * drawGame ever skips the occupied byte. Zero payload,
+                 * keep a live overflow chain. */
+                gw32(p + 24u, 0);
+                gw32(p + 32u, 0);
+                gw32(p + 36u, 0);
+                gw32(p + 76u, 0);
             }
             if (!next || next == p) break;
             p = next;
         }
     }
-    rt_log("ro-stale drop=%d keep=%d buckets=%u", dropped, kept, n);
+    rt_log("ro-stale drop=%d keep=%d buckets=%u mask=%d rot=%d",
+           dropped, kept, n, nmask, nrot);
+    if (getenv("AB_DUMP_RO") && kept > 0) {
+        int shown = 0;
+        for (i = 0; i < n && shown < 40; i++) {
+            p = buf + i * 96u;
+            guard = 0;
+            while (p && guest_ok(p, 96u) && guard++ < 64 && shown < 40) {
+                next = gr32(p + 88u);
+                if (G8(p + 92u)[0]) {
+                    rt_log("ro-slot bkt=%u p=%08x body=%08x img=%08x mask=%08x ang=%.2f ch=%08x",
+                           i, p, gr32(p + 24u), gr32(p + 32u), gr32(p + 36u),
+                           (double)U2F(gr32(p + 76u)), next);
+                    shown++;
+                } else if (gr32(p + 32u) || gr32(p + 36u) || gr32(p + 88u)) {
+                    rt_log("ro-empty bkt=%u p=%08x img=%08x mask=%08x ch=%08x",
+                           i, p, gr32(p + 32u), gr32(p + 36u), next);
+                    shown++;
+                }
+                if (!next || next == p) break;
+                p = next;
+            }
+        }
+    }
 }
 
 void ab_load_lua_level(const char *name) {
@@ -1678,9 +1840,14 @@ void ab_load_lua_level(const char *name) {
     ab_lua_set_bool("showBG", 1);
     ab_lua_set_bool("showTutorials", 0);
     rt_log("ab_load_lua_level %s", name);
+    imgbake_n = 0;
     fe_reset_matrices();
+    ab_reset_masked_image();
+    ro_clear_pending = 1;
     ab_call_lua("updateLoading");
+    ro_clear_pending = 0;
     ab_drop_stale_render_objects();
+    ab_reset_masked_image();
     /* lua setTheme no-ops if objects.theme is unchanged (L14 then L15
      * are both theme1) and the previous sky tiles stay behind. C++ setTheme
      * always rebuilds. castleCameraTimer 3 skips the castle intro. */
@@ -1759,10 +1926,15 @@ void ab_goto_level(const char *name) {
     ab_lua_set_bool("showBG", 1);
     ab_lua_set_bool("showTutorials", 0);
     rt_log("ab_goto_level %s", name);
+    imgbake_n = 0;
     plat_log_step("goto", rt_heap_used());
     fe_reset_matrices();
+    ab_reset_masked_image();
+    ro_clear_pending = 1;
     ab_call_lua("updateLoading");
+    ro_clear_pending = 0;
     ab_drop_stale_render_objects();
+    ab_reset_masked_image();
     ab_iphone_cameras();
     ab_phys_enable(1);
 }
@@ -1929,6 +2101,12 @@ void ab_phys_snapshot(ab_phys_info *o) {
                 is_pig = 1;
         }
         if (is_pig) {
+            /* A leftover circle from the previous level can sit far left of
+             * this castle (L21 sequential classified 6, isolation 5). */
+            if (lvl_pig_n > 0 && circs[ci].wx < lvl_pig_minx - 80.f)
+                is_pig = 0;
+        }
+        if (is_pig) {
             if (o->pig_n < AB_PHYS_PIG) {
                 o->pig_wx[o->pig_n] = circs[ci].wx;
                 o->pig_wy[o->pig_n] = circs[ci].wy;
@@ -1944,15 +2122,16 @@ void ab_phys_snapshot(ab_phys_info *o) {
     if (o->static_n == 0) { o->stat_ymin = 0.f; o->stat_ymax = 0.f; }
     if (o->dynamic_n == 0) { o->dyn_ymin = 0.f; o->dyn_ymax = 0.f; }
     /* Min zoom can drop a pig from the circle walk (L2-out 1/2). Keep the
-     * captured set so the check still requires every live pig. */
-    if (o->pig_n < lvl_pig_n) {
+     * captured play-scale set. Do not ratchet extras from a bad first
+     * snapshot (L21 7 vs 5 live pigs). */
+    if (o->world_scale < 0.40f && o->pig_n < lvl_pig_n) {
         for (ci = 0; ci < lvl_pig_n && ci < AB_PHYS_PIG; ci++) {
             o->pig_wx[ci] = lvl_pig_wx[ci];
             o->pig_wy[ci] = lvl_pig_wy[ci];
         }
         o->pig_n = lvl_pig_n;
     }
-    if (o->bird_n < lvl_bird_saved_n) {
+    if (o->world_scale < 0.40f && o->bird_n < lvl_bird_saved_n) {
         for (ci = 0; ci < lvl_bird_saved_n && ci < AB_PHYS_BIRD; ci++) {
             o->bird_wx[ci] = lvl_bird_saved_wx[ci];
             o->bird_wy[ci] = lvl_bird_saved_wy[ci];
@@ -1960,7 +2139,8 @@ void ab_phys_snapshot(ab_phys_info *o) {
         o->bird_n = lvl_bird_saved_n;
     }
     circ_logged = 1;
-    ab_note_level_bodies(o);
+    if (!(o->world_scale < 0.40f && o->pig_n <= lvl_pig_n && lvl_pig_n > 0))
+        ab_note_level_bodies(o);
 }
 
 static void ab_note_level_bodies(const ab_phys_info *o) {

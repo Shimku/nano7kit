@@ -157,6 +157,7 @@ IMP(_printf) { args_t a = {1, {r0, r1, r2, r3}, 0}; char buf[512]; format(buf, s
         int err = strstr(buf, "error") || strstr(buf, "Error") || strstr(buf, "PANIC")
                || strstr(buf, "stack traceback");
         rt_log(err ? "luaerr %s" : "game: %s", buf);
+        if (strstr(buf, "Removing physics")) ab_after_remove_physics();
     }
     RET(l); }
 IMP(_NSLog) { UNUSED; RET(0); }

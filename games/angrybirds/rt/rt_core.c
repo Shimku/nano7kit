@@ -23,6 +23,25 @@ extern const uint32_t rt_import_slot_count;
 uint32_t g_imparea;                 /* 32 bytes per import name */
 static uint32_t heap_lo, heap_hi, stack_lo;
 static uint32_t align_faults, align_logged;
+/* Skip just-freed addresses in first-fit so lua_gc + createBox cannot hand
+ * the previous level's body or Image pointer back out of the same slot.
+ * Coalesce turns hundreds of L2 frees into one low hole; first-fit from
+ * the front of that hole is the same address L2 just used. Carve from the
+ * high end so L3 objects do not alias L2 Images while a cache still
+ * holds the pointer. AB_HEAP_NOREUSE also refuses to return the block. */
+#define RFREE_N 512
+static uint32_t rfree[RFREE_N];
+static int rfree_n, rfree_i;
+static int recently_freed(uint32_t b) {
+    int i, n = rfree_n < RFREE_N ? rfree_n : RFREE_N;
+    for (i = 0; i < n; i++) if (rfree[i] == b) return 1;
+    return 0;
+}
+static void note_freed(uint32_t b) {
+    rfree[rfree_i] = b;
+    rfree_i = (rfree_i + 1) % RFREE_N;
+    if (rfree_n < RFREE_N) rfree_n++;
+}
 void rt_check_align8(uint32_t a) {
     if (a & 7u) {
         align_faults++;
@@ -72,6 +91,14 @@ void rt_watch_store(uint32_t a, uint32_t v) {
 static uint32_t free_head, used_bytes, peak_bytes;
 static uint32_t bsize(uint32_t b) { return gr32(b) & ~7u; }
 static int bused(uint32_t b) { return gr32(b) & 1; }
+int rt_heap_poisoned(uint32_t p) {
+    uint32_t b;
+    if (!p) return 1;
+    if (p < heap_lo || p >= heap_hi) return 0;   /* outside / OS slabs */
+    b = p - HEAP_HDR;
+    if (b < heap_lo || b >= heap_hi) return 1;
+    return !bused(b);
+}
 static void bset(uint32_t b, uint32_t size, int used) { gw32(b, size | (uint32_t)used); gw32(b + size - 4, size | (uint32_t)used); }
 static uint32_t fnext(uint32_t b) { return gr32(b + 4); }
 static uint32_t fprev(uint32_t b) { return gr32(b + 8); }
@@ -261,21 +288,38 @@ uint32_t g_malloc(uint32_t n) {
 #endif
     uint32_t need = (n + HEAP_HDR + 4u + 7u) & ~7u;
     if (need < 16) need = 16;
-    for (uint32_t b = free_head; b; b = fnext(b)) {
-        uint32_t size = bsize(b);
-        if (size < need) continue;
-        funlink(b);
-        if (size - need >= 32) {
-            bset(b + need, size - need, 0); fpush(b + need);
-            size = need;
+    {
+        uint32_t b, chosen = 0, fallback = 0;
+        int no_reuse = getenv("AB_HEAP_NOREUSE") != 0;
+        for (b = free_head; b; b = fnext(b)) {
+            uint32_t size = bsize(b);
+            if (size < need) continue;
+            if (!fallback) fallback = b;
+            if (recently_freed(b)) continue;
+            chosen = b;
+            break;
         }
-        bset(b, size, 1);
-        used_bytes += size; if (used_bytes > peak_bytes) peak_bytes = used_bytes;
-        return b + HEAP_HDR;
+        /* Debug: refuse just-freed addresses even if that is the only fit. */
+        if (!chosen && fallback && !no_reuse) chosen = fallback;
+        if (chosen) {
+            uint32_t size = bsize(chosen), alloc = chosen;
+            funlink(chosen);
+            if (size - need >= 32) {
+                /* High end of the hole: payload stays 8-aligned (chosen is
+                 * 4-mod-8, need is 8-aligned) and is not the address that
+                 * lua_gc just freed at the front of the run. */
+                alloc = chosen + size - need;
+                bset(chosen, size - need, 0); fpush(chosen);
+                size = need;
+            }
+            bset(alloc, size, 1);
+            used_bytes += size; if (used_bytes > peak_bytes) peak_bytes = used_bytes;
+            return alloc + HEAP_HDR;
+        }
     }
     /* 8 KB+ sprite new[] can sit on the OS heap when the guest block is packed.
      * Tiny lua cells stay in-guest so the host outside table is not filled. */
-    if (!no_out && n >= 8192u) {
+    if (!no_out && n >= (getenv("AB_HEAP_NOREUSE") ? 256u : 8192u)) {
         uint32_t p = g_malloc_outside(n);
         if (p) {
             rt_log("guest overflow %u to os (used %u hole %u of %u)",
@@ -294,12 +338,24 @@ void g_free(uint32_t p) {
     uint32_t b = p - HEAP_HDR;
     if (b < heap_lo || b >= heap_hi || !bused(b)) { rt_log("bad free %08x", p); return; }
     uint32_t size = bsize(b);
+    {
+        uint32_t psz = size > (HEAP_HDR + 4u) ? size - (HEAP_HDR + 4u) : 0;
+        if (psz) memset(G8(p), 0xDB, psz);
+    }
     used_bytes -= size;
+    if (getenv("AB_HEAP_NOREUSE")) {
+        /* Debug: leak the block so the next new[] cannot reuse this
+         * address. The payload stays poisoned. */
+        note_freed(b);
+        return;
+    }
     uint32_t nb = b + size;
     if (!bused(nb)) { funlink(nb); size += bsize(nb); }
     uint32_t pf = gr32(b - 4);
     if (!(pf & 1)) { uint32_t pb = b - (pf & ~7u); funlink(pb); b = pb; size += pf & ~7u; }
-    bset(b, size, 0); fpush(b);
+    bset(b, size, 0);
+    note_freed(b);
+    fpush(b);
 }
 uint32_t g_realloc(uint32_t p, uint32_t n) {
     uint32_t old, q, osz;
