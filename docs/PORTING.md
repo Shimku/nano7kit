@@ -160,6 +160,40 @@ olievans123's Temple Run port; none of its code is used.
   The host harness showed the blade dying; `tests/test_fruitninja_rc.py` checks the fix.
 - **Writes:** `Fruit Ninja.hbapp` (about 920 KB) and `/Apps/Data/FruitNinja` (about 9.2 MB).
 
+### Angry Birds (iOS, olievans123's engine re-implementation with nano7kit memory changes)
+
+Files: `host/angrybirds.py`, `host/angrybirds_patch.py`, `games/angrybirds/nano/n7_ab.c`.
+
+- **Port:** [nano-angrybirds](https://github.com/olievans123/nano-angrybirds) at
+  `b547023d` (`host/ports.py`), fetched at build time. It is not a recompile: a
+  C/C++ engine written from the 1.0 binary's behaviour (specs in its `analysis/`),
+  with Lua 5.1 and Box2D, runs the game's own Lua bytecode. Its converter cuts every
+  sprite out of your sheets and packs them into 256x128 16-bit pages. The iOS
+  executable is not used, so the build checks `gamelogic.lua` (sha256 `16027cda...`),
+  not the binary. The app is about 300 KB.
+- **Why it, not a recompile:** a recompile of this 1.8 MB binary does not fit in
+  memory with hardware float, and with software float it ran at 13-23 fps. This port
+  reports 45-53 fps on hardware. Its Lua collector runs with pause 110 / step
+  multiplier 400: with Lua's defaults the script's memory doubles before a cycle,
+  which a 2 MB arena cannot hold.
+- **The changes** (applied to the fetched tree, each anchored on a block of the
+  pinned commit, so a moved pin stops the build): no malloc in `payload_entry`, and
+  on the first GL frame the textures earlier nano7kit ports left in the shared GL
+  context are deleted before the arena is made (`gl_left.c`, which now lists every
+  nano7kit GL port); a pre-flight that shows NOT ENOUGH MEMORY unless the 2 MB
+  arena is whole and 3 MB is still free after it (1.75 MB of texture pages plus
+  1.25 MB for the driver); a texture budget of free memory minus that 1.25 MB, at
+  most 3 MB, which the port's least-recently-used page eviction stays inside; a
+  notice naming `log.txt` instead of a plain red or blank screen when the engine
+  stops; and the game's texture names saved for the next port.
+- **Logs** in `/Apps/Data/AngryBirds`: `log.txt` (start-up memory, the pre-flight,
+  the budget, a frame line every 300 frames, script errors), `perf.txt` (frame times
+  after 5 and 30 seconds in a level), `boot.txt` / `prevboot.txt` (breadcrumbs that
+  survive a restart). An empty `trace.once` file there logs up to 96 load and draw
+  checkpoints on the next launch.
+- **Level order:** the game plays `Level1`, `Level57`, `Level53`, `Level3`, `Level6`,
+  `Level2`... (`gamelogic.lua`), so the file numbers are not the level numbers.
+
 ## Adding a game to nano7kit
 
 Follow how PvZ Portable is wired in (`rg "PvZ Portable" host`):

@@ -2,7 +2,7 @@
 
 Survey (2026-10-29): most Home apps live in nanoapps/apps/*/Info.plist.
 Third-party olievans123 ports (Mario 64 / Mario Kart from nano7-untethered;
-Temple Run, Flappy Bird, Doodle Jump from their own repos) are catalogued
+Temple Run, Flappy Bird, Doodle Jump, Angry Birds from their own repos) are catalogued
 here too. Original game files stay out of git.
 
 Helvetica resident is silver_resident, so LVGL / raw / GL apps built for
@@ -161,6 +161,7 @@ CATEGORIES = {
         "Doodle Jump",
         "Fruit Ninja",
         "PvZ Portable",
+        "Angry Birds",
     ),
     "needs-rom": ("Mario Kart", "Mario 64"),
 }
@@ -182,6 +183,10 @@ AUTHORS = {
     "Temple Run": "olievans123 nano-templerun (original iOS app not in git)",
     "Flappy Bird": "olievans123 nano-flappybird (original iOS app not in git)",
     "Doodle Jump": "olievans123 nano-doodlejump (original iOS app not in git)",
+    "Angry Birds": (
+        "olievans123 nano-angrybirds (engine re-implementation; Lua 5.1 by PUC-Rio, MIT; "
+        "Box2D by Erin Catto, zlib); original Rovio Angry Birds 1.0 not in git"
+    ),
     "Fruit Ninja": (
         "nano7kit first-party static recompile (MIT; approach after "
         "olievans123 nano-templerun); original Halfbrick Fruit Ninja 1.0 not in git"
@@ -248,6 +253,9 @@ ALIASES = {
     "pvzportable": "PvZ Portable",
     "pvz-portable": "PvZ Portable",
     "pvz_portable": "PvZ Portable",
+    "angrybirds": "Angry Birds",
+    "angry-birds": "Angry Birds",
+    "angry": "Angry Birds",
     "tictactoe": "Tictactoe",
     "tic-tac-toe": "Tictactoe",
     "lap": "Lap",
@@ -352,6 +360,7 @@ _RISK_BY_NAME = {
     "Doodle Jump": 6,
     "Fruit Ninja": 6,
     "PvZ Portable": 6,
+    "Angry Birds": 6,
     "Lap": 1,
     "JS Hello": 1,
     "JS Hero": 5,

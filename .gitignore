@@ -9,6 +9,7 @@ nanoapps/apps/*/build/
 nanoapps/apps/flappybird/
 nanoapps/apps/doodlejump/
 nanoapps/apps/templerun/
+nanoapps/apps/angrybirds/
 nanoapps/harnesses/*/build/
 nanoapps/system/*/build/
 untether/build/
@@ -43,6 +44,7 @@ untether/artifacts/extra/Data/FlappyBird/
 untether/artifacts/extra/Data/DoodleJump/
 untether/artifacts/extra/Data/FruitNinja/
 untether/artifacts/extra/Data/PvZ/
+untether/artifacts/extra/Data/AngryBirds/
 untether/artifacts/extra/Executables/Mario 64.hbapp
 untether/artifacts/extra/Executables/Mario Kart.hbapp
 untether/artifacts/extra/Executables/Temple Run.hbapp
@@ -50,12 +52,14 @@ untether/artifacts/extra/Executables/Flappy Bird.hbapp
 untether/artifacts/extra/Executables/Doodle Jump.hbapp
 untether/artifacts/extra/Executables/Fruit Ninja.hbapp
 untether/artifacts/extra/Executables/PvZ Portable.hbapp
+untether/artifacts/extra/Executables/Angry Birds.hbapp
 untether/artifacts/extra/Icons/Mario 64.bin
 untether/artifacts/extra/Icons/Mario Kart.bin
 untether/artifacts/extra/Icons/Temple Run.bin
 untether/artifacts/extra/Icons/Flappy Bird.bin
 untether/artifacts/extra/Icons/Doodle Jump.bin
 untether/artifacts/extra/Icons/PvZ Portable.bin
+untether/artifacts/extra/Icons/Angry Birds.bin
 # Fruit Ninja recompile: app shell staged at build time
 nanoapps/apps/fruitninja_rc/
 nanoapps/apps/pvz_portable/

@@ -27,7 +27,7 @@ wInd3x
   patch=untether/patches/wind3x-nano7.patch
   licence=GPL-2.0
 
-nano-templerun / nano-flappybird / nano-doodlejump (olievans123)
+nano-templerun / nano-flappybird / nano-doodlejump / nano-angrybirds (olievans123)
   commits pinned in host/ports.py, fetched only when you build that game
 
 PocketJS

@@ -13,11 +13,19 @@ nano7kit has no game data and never downloads any. You supply a file you own,
 | Mario Kart 64 | Mario Kart 64 (USA) `.z64` | md5 `3a67d9986f54eb282924fca4cd5f6dff` | olievans123 | untested |
 | Flappy Bird | iOS `.ipa` | version 1.2 | olievans123 | untested |
 | Doodle Jump | iOS `.ipa` | version 1.0 | olievans123 | untested |
+| Angry Birds | iOS `.ipa` or `.app` | `com.clickgamer.AngryBirds` 1.0; the build checks the `gamelogic.lua` hash | olievans123, with nano7kit memory changes | untested |
 
 Temple Run is the same port NanoApps offers as experimental. nano7kit changes how it
 takes memory so it gets past the loading screen with music on the iPod: it asks for
 its whole memory block before falling back, draws less scenery when memory is low,
 and uses smaller scenery textures (`host/templerun_patch.py`).
+
+Angry Birds is olievans123's engine re-implementation (`nano-angrybirds`): its own
+engine, Lua 5.1 and Box2D run the game's original Lua scripts, and the build repacks
+your sprite sheets into small 16-bit pages. nano7kit adds a memory check before it
+starts (a NOT ENOUGH MEMORY screen instead of a restart), a texture budget that
+follows free memory, and deletes textures other games left behind
+(`host/angrybirds_patch.py`). It is silent.
 
 NanoApps also has optional Flappy Bird and Doodle Jump ports (in its `ports/`
 folder), which it reports as working on a 2015 nano.
@@ -30,6 +38,7 @@ Without the installer, in Disk Mode:
 ./start nabase add 'Mario 64' --rom mygames/sm64.z64
 ./start nabase add 'Fruit Ninja' --payload mygames/FruitNinja.ipa
 ./start nabase add 'PvZ Portable' --payload mygames/pvz-goty
+./start nabase add 'Angry Birds' --payload mygames/AngryBirds.ipa
 ```
 
 On the nano7-untethered layout use `./start apps add` with the same names

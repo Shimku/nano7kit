@@ -90,6 +90,8 @@ ITEMS: Tuple[Item, ...] = (
          version="1.2"),
     Item("Doodle Jump", "Doodle Jump", "games", "your Doodle Jump 1.0 .ipa", "ipa", tested=False,
          version="1.0"),
+    Item("Angry Birds", "Angry Birds", "games", "your Angry Birds 1.0 .ipa", "ipa", tested=False,
+         bundle="com.clickgamer.AngryBirds", version="1.0"),
     # PocketJS: optional
     Item("JS QuickJS", "JS QuickJS", "pocketjs",
          blurb="home screen with Notes, Talk, Motion Lab, Cafe, Physics, Tilt and more"),

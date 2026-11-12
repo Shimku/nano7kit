@@ -60,12 +60,12 @@ Otherwise see [Full setup](#full-setup) at the bottom.
 | Super Mario 64 | Super Mario 64 (USA) `.z64` | olievans123's |
 | Temple Run | decrypted Temple Run 1.0 `.ipa` | olievans123's, with my memory changes |
 | Fruit Ninja | decrypted Fruit Ninja 1.0 `.ipa` | recompiled here, `games/fruitninja` |
-| Other | Mario Kart, Blocks, Flappy Bird, Doodle Jump, etc. ) | Blocks runs great, other games were not tested but should run |
+| Other | Mario Kart, Blocks, Flappy Bird, Doodle Jump, Angry Birds, etc. ) | Blocks runs great, other games were not tested but should run |
 
 Put the files in `mygames/` (git ignores it) or drag them into Terminal when the
 installer asks. Each file is hash-checked, so only those exact versions work. Nothing
 built from them is committed. Hashes and the untested extras (Mario Kart 64, Flappy
-Bird, Doodle Jump): [docs/GAMES.md](docs/GAMES.md).
+Bird, Doodle Jump, Angry Birds): [docs/GAMES.md](docs/GAMES.md).
 
 ## Writing apps
 

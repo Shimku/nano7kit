@@ -4,7 +4,7 @@ Mario 64 / Mario Kart 64 are native GL ports in this tree (games/ +
 nanoapps/apps/sm64|mk64). They need a user ROM to build; nothing from
 Nintendo is in git.
 
-Temple Run, Flappy Bird and Doodle Jump live in separate GitHub repos.
+Temple Run, Flappy Bird, Doodle Jump and Angry Birds live in separate GitHub repos.
 Those trees contain none of the original game files. This toolkit clones
 them on demand into build/ports/ and builds only when you pass --payload.
 
@@ -53,6 +53,12 @@ PORT_REPOS = {
         "name": "Doodle Jump",
         "folder": "doodlejump",
     },
+    "angrybirds": {
+        "url": "https://github.com/olievans123/nano-angrybirds.git",
+        "commit": "b547023d4be99a54052ce821540548d13596b3a0",
+        "name": "Angry Birds",
+        "folder": "angrybirds",
+    },
 }
 
 # Host / FAT data trees staged next to extra .hbapp files.
@@ -92,12 +98,19 @@ PORT_DATA = {
         "fat": "/Apps/Data/PvZ",
         "required": True,
     },
+    "Angry Birds": {
+        "host": "artifacts/extra/Data/AngryBirds",
+        "fat": "/Apps/Data/AngryBirds",
+        "required": True,
+    },
 }
 
 # PocketJS MicroTS apps (nano7g): RAW_SURFACE, but 1 to 2.2 MB with baked fonts, so slot B too.
 POCKETJS_APPS = frozenset({"JS Hero", "JS Samples", "JS QuickJS"})
-LARGE_GL = frozenset({"Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "PvZ Portable"}) | POCKETJS_APPS
-NEEDS_PAYLOAD = frozenset({"Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "PvZ Portable"})
+LARGE_GL = frozenset({"Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "PvZ Portable",
+                      "Angry Birds"}) | POCKETJS_APPS
+NEEDS_PAYLOAD = frozenset({"Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "PvZ Portable",
+                           "Angry Birds"})
 NEEDS_ROM = frozenset({"Mario 64", "Mario Kart"})
 
 SLOT_B_FAT = "/Apps/Startup/resident-B.hbapp"
@@ -126,15 +139,18 @@ DOODLE_CMD = "./start apps add 'Doodle Jump' --payload /path/to/DoodleJump.ipa"
 TEMPLE_CMD = "./start apps add TempleRun --ipa /path/to/TempleRun.ipa"
 FRUIT_CMD = "./start apps add 'Fruit Ninja' --ipa /path/to/FruitNinja.ipa"
 PVZP_CMD = "./start apps add 'PvZ Portable' --payload /path/to/pvz-goty"
+ANGRY_CMD = "./start nabase add 'Angry Birds' --payload /path/to/AngryBirds.ipa"
 
 # Original iOS bundle ids we will accept. Wrong game files are refused.
 # PvZ (com.popcap.PvZ) is research-only and has no apps add path. PvZ Portable (the PvZ-Portable engine with
 # the user's own PC GOTY files) is a different port with its own name.
 TEMPLE_BUNDLE_ID = "com.imangi.templerun"
 FRUIT_BUNDLE_ID = "com.Halfbrick.Fruit"
+ANGRY_BUNDLE_ID = "com.clickgamer.AngryBirds"
 PAYLOAD_BUNDLES = {
     "Temple Run": TEMPLE_BUNDLE_ID,
     "Fruit Ninja": FRUIT_BUNDLE_ID,
+    "Angry Birds": ANGRY_BUNDLE_ID,
 }
 
 OVERLAY_PLISTS = (
@@ -175,6 +191,16 @@ OVERLAY_PLISTS = (
         "glyph": "seedling",
         "color": "#4f9a2f",
         "executable_key": "pvz",
+    },
+    {
+        # same as nano-angrybirds' port/nano/app/Info.plist, which the build copies in
+        "folder": "angrybirds",
+        "name": "Angry Birds",
+        "bundle_id": "org.nanoapps.angrybirds",
+        "kind": 2,
+        "glyph": "dove",
+        "color": "#2980b9",
+        "executable_key": "angrybirds",
     },
 )
 
@@ -281,6 +307,14 @@ def missing_help(name: str) -> str:
             f"{FRUIT_BUNDLE_ID}, ipa sha256 427538e7...). Silent (no music). Large GL, "
             f"so it goes on slot B like Temple Run. Check first: {FRUIT_CMD} --plan. "
             f"Then: {FRUIT_CMD}"
+        )
+    if name == "Angry Birds":
+        return (
+            "Angry Birds is olievans123/nano-angrybirds (an engine re-implementation that runs "
+            "the game's own Lua scripts; fetched at build time, no game files in git). Pass your "
+            f"own Angry Birds 1.0 .ipa or unpacked .app (bundle {ANGRY_BUNDLE_ID}). The build runs "
+            "on this Mac. Silent (no sound yet). At launch it needs about 5.0 MB free with a "
+            f"2.0 MB largest block, or it shows NOT ENOUGH MEMORY. {ANGRY_CMD}"
         )
     if name == "PvZ Portable":
         return (
@@ -617,6 +651,13 @@ def build_doodle(payload: Path) -> dict:
     return {"name": "Doodle Jump", "data": str(extra_data_dir("Doodle Jump"))}
 
 
+def build_angry(payload: Path) -> dict:
+    """Host-only Angry Birds build from the user's 1.0 ipa (see host/angrybirds.py)."""
+    from .angrybirds import build
+
+    return build(Path(payload))
+
+
 def build_temple(payload: Path) -> dict:
     """Host-only Temple Run build from the user's 1.0 ipa (see host/templerun.py)."""
     from .templerun import build
@@ -675,6 +716,12 @@ def prepare_for_add(
         if payload is not None:
             build_temple(Path(payload))
         return {"name": name, "present": True, "built": payload is not None}
+    if name == "Angry Birds":
+        if payload is None and not ready:
+            raise Refused(missing_help(name))
+        if payload is not None:
+            build_angry(Path(payload))
+        return {"name": name, "present": True, "built": payload is not None}
     if name == "Fruit Ninja":
         if payload is None and not ready:
             raise Refused(missing_help(name))
@@ -710,7 +757,7 @@ def print_status() -> None:
     print("nano7kit third-party ports (olievans123)")
     print("Helvetica silver_resident / 39A10023. Pack cap 8 (grow_cache);")
     print("nogrow overlay raises host cap to 16 (./start apps cap enable).")
-    print("Large GL (Mario, Temple Run, Fruit Ninja, PvZ Portable) uses slot B, not the 576 KB slot A.")
+    print("Large GL (Mario, Temple Run, Fruit Ninja, PvZ Portable, Angry Birds) uses slot B, not the 576 KB slot A.")
     print("iOS-port repos state no OSS licence: credit, do not redistribute")
     print("derived game files. Original iOS apps and Nintendo ROMs stay local.")
     print()
@@ -722,6 +769,7 @@ def print_status() -> None:
         "Doodle Jump",
         "Fruit Ninja",
         "PvZ Portable",
+        "Angry Birds",
     )
     by = {row["name"]: row for row in catalog()}
     for name in wanted:
@@ -734,4 +782,5 @@ def print_status() -> None:
     print("Mario (exact): " + MARIO_CMD)
     print("Fruit Ninja:   " + FRUIT_CMD)
     print("PvZ Portable:  " + PVZP_CMD)
+    print("Angry Birds:   " + ANGRY_CMD)
     print("Disk Mode (Do not disconnect). One extra per reboot.")
