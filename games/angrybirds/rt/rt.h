@@ -20,7 +20,7 @@ extern uint32_t g_lo, g_hi;          /* guest block bounds (addresses) */
 
 #define RET_MAGIC 0xFFFF0001u
 
-/* Image decode buffers of 256 KB or more live on the OS heap (plat_os_alloc).
+/* Image decode buffers of 128 KB or more live on the OS heap (plat_os_alloc).
  * On the nano (32-bit) the guest address is host_ptr - g_mem, so AT stays M+a
  * and the .hbapp does not grow. The 64-bit host harness cannot encode calloc
  * that way; it uses 0xB0000000 slabs and rt_checked/G8 (RT_CHECK). */
@@ -128,6 +128,7 @@ uint32_t g_strdup(const char *s);
 int rt_heap_poisoned(uint32_t p);   /* 1 if p is in a free guest block (UAF) */
 uint32_t rt_heap_used(void), rt_heap_peak(void), rt_heap_size(void);
 uint32_t rt_heap_largest_free(void);
+void rt_heap_dump_free(void);
 /* GameLua::createBox/createCircle: clear leftover RenderObject slots after
  * lua destroy and before the new insert. Generated ENTER() calls this. */
 void ab_on_create_object(void);

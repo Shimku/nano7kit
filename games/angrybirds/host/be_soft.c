@@ -184,7 +184,7 @@ void be_clear(int color, int depth, const float c[4], float d) {
         if (depth) zb[y][x] = d;
     }
 }
-void be_frame_begin(void) { be_frame_tris = be_frame_big = 0; }
+void be_frame_begin(void) { be_frame_tris = be_frame_big = 0; fe_rot_sky_quad = 0; }
 void be_frame_end(void) {
     int y, x, sr = 167, sg = 209, sb = 232, ns = 0;
     long rsum = 0, gsum = 0, bsum = 0;
@@ -336,10 +336,15 @@ void be_tris(const be_state *s, const be_vtx *v, int n) {
                                 gt = &T[theme_ground_be[th]];
                                 break;
                             }
-                    /* Small sky-side 97x97 diamonds must not be retiled -
-                     * that is the L20 brown triangle. Castle ramps are
-                     * bigger or they touch the ground band. */
-                    int terrain = x0 < 60 || (x1 - x0) > 100 || (y1 - y0) > 100;
+                    /* Only retile bodies that touch the ground band.
+                     * Sky-side 97x97 / 194x196 diamonds (lua angle 45 deg)
+                     * used to match wide&&(bbox>100) and float in the sky. */
+                    int terrain = x0 < 60;
+                    /* Clip THEME_GROUND wrap / dirt to the ground band.
+                     * 04/05 sprites that survive the lua skip still paint
+                     * a sky-side diamond when the quad straddles x=70. */
+                    if ((fe_ground_wrap || dirt) && x > 92 && wide)
+                        continue;
                     if ((dirt || (mud && x < 50)) && wide && terrain && gt && fabsf(area) > 400.f) {
                         /* x*2 so a 150px ramp covers more than one 256 tile
                          * and cave holes stay visible. */

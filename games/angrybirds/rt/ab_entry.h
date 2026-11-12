@@ -50,4 +50,6 @@ void ab_cam_fit_play(void);
 void ab_ready_slingshot(void);
 void ab_watch_level(void);
 void ab_unpause(void);
+void ab_show_pause_page(void);         /* inPausePage + PAUSED overlay */
+void ab_lua_collect(void);             /* lua_gc so the 2 MB hole stays >300 KB */
 #endif

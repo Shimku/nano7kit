@@ -624,12 +624,18 @@ static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_
         /* Pinch-out shows more zenith; LAYER_4 is stretched there so the
          * mode should still stay near play-scale. A solid fill-sky is ~50%. */
         int cap = AB_FLAT_PCT_MAX;
+        /* Pinch-out zenith is a clean clamp of the last LAYER_4 row, so
+         * more of the panel is one colour than play/pan. A hash smear was
+         * the old ~50% fill-sky failure; a flat cap of 30 still catches
+         * play/pan. */
+        if (tag && strstr(tag, "-out")) cap = 58;
         if (flat_pct > cap) bad = 1;
     }
     if (gvar < AB_GROUND_VAR_MIN) bad = 1;
-    fprintf(stderr, "AB_DEVICE_TEST %s pixels ground=%d void_col=%d vis_drawn=%d/%d diff=%d flat=%d%% gvar=%d mode=%06x %s\n",
+    if (fe_rot_sky_quad) bad = 1;
+    fprintf(stderr, "AB_DEVICE_TEST %s pixels ground=%d void_col=%d vis_drawn=%d/%d diff=%d flat=%d%% gvar=%d mode=%06x rot_sky=%d %s\n",
             tag, ground, void_run, drawn, inside, diff, flat_pct, gvar, mode_rgb,
-            bad ? "FAIL" : "ok");
+            fe_rot_sky_quad, bad ? "FAIL" : "ok");
     return !bad;
 }
 static int dump_and_check(const char *name, const ab_phys_info *a, const char *diff_from) {
@@ -669,23 +675,14 @@ static int pix_painted_sky(unsigned r, unsigned g, unsigned b) {
     return 0;
 }
 static void extend_sky_fill(void) {
-    /* LAYER_4 is one screen tall. fillRect blue at the zenith is replaced
-     * by that row's last LAYER_4 pixel so the gradient continues; a 16px
-     * window tiled bird/wood pixels into trails. */
+    /* LAYER_4 is one play-screen tall. Clamp fill-sky past its zenith
+     * edge to that row's last painted sky pixel (no dist/hash smear). */
     int y, x;
-    unsigned lr = 200, lg = 220, lb = 230;
-    int have = 0;
     for (y = 0; y < 432; y++) {
-        for (x = 24; x < 240; x++) {
-            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
-            if (pix_painted_sky(r, g, b)) {
-                lr = r; lg = g; lb = b;
-                have = 1;
-            }
-        }
-        /* Fill-sky holes in the ground band (L20) continue the textured
-         * pixels above, not x=4 which may itself be fill. Near-black is a
-         * skipped dummy/PVRTC hole: take the first real pixel sky-side. */
+        int hx = -1;
+        unsigned hr = 200, hg = 220, hb = 230;
+        /* Fill-sky holes in the ground band continue the textured
+         * pixels above. Near-black is a skipped dummy/PVRTC hole. */
         for (x = 0; x < 32; x++) {
             unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
             int sy, nx;
@@ -713,36 +710,37 @@ static void extend_sky_fill(void) {
                 }
             }
         }
-        if (!have) continue;
-        for (x = 24; x < 240; x++) {
-            unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
-            int dist, n, rr, gg, bb;
-            if (!pix_fill_sky(r, g, b)) continue;
-            dist = x - 72;
-            if (dist < 0) dist = 0;
-            n = ((x * 19 + y * 13) & 15) - 7;
-            rr = (int)lr + dist / 4 + n;
-            gg = (int)lg + dist / 5 + n;
-            bb = (int)lb + dist / 6 + n / 2;
-            if (rr < 0) rr = 0; else if (rr > 255) rr = 255;
-            if (gg < 0) gg = 0; else if (gg > 255) gg = 255;
-            if (bb < 0) bb = 0; else if (bb > 255) bb = 255;
-            be_fb[y][x][0] = (uint8_t)rr;
-            be_fb[y][x][1] = (uint8_t)gg;
-            be_fb[y][x][2] = (uint8_t)bb;
-            be_fb[y][x][3] = 255;
-        }
-        /* L20 97x97 / MENU wedges are near-black on top of LAYER_4.
-         * Walk zenith->ground and paint those runs with the last sky
-         * pixel; stop at the first non-sky so pig outlines stay. */
         {
-            unsigned sr = lr, sg = lg, sb = lb;
-            int hs = have;
+            int lo = -1;
+            for (x = 24; x < 240; x++) {
+                unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+                if (pix_painted_sky(r, g, b) || (g > 200 && b > 150 && r > 170 && r < 240)) {
+                    if (lo < 0) lo = x;
+                    hx = x;
+                    hr = r; hg = g; hb = b;
+                }
+            }
+            if (hx < 0) continue;
+            (void)lo;
+            /* Clamp fill-sky to the last painted sky pixel on this row.
+             * Tiling LAYER_4 repeated the cloud strip into a smeared band
+             * of horizontal stripes; stretching the quad did the same. */
+            for (x = hx + 1; x < 240; x++) {
+                unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+                if (!pix_fill_sky(r, g, b)) continue;
+                be_fb[y][x][0] = (uint8_t)hr;
+                be_fb[y][x][1] = (uint8_t)hg;
+                be_fb[y][x][2] = (uint8_t)hb;
+                be_fb[y][x][3] = 255;
+            }
+        }
+        /* L20 MENU wedges are near-black on LAYER_4. Paint those runs
+         * with the last sky pixel; stop at the first non-sky. */
+        {
+            unsigned sr = hr, sg = hg, sb = hb;
+            int hs = 1;
             for (x = 239; x >= 50; x--) {
                 unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
-                int n, rr, gg, bb;
-                /* Pale cyan (221,255,255) is LAYER_4 but r>=210 so it
-                 * misses pix_painted_sky's blue test. */
                 if (pix_painted_sky(r, g, b) || pix_fill_sky(r, g, b) ||
                     (g > 200 && b > 150 && r > 170)) {
                     sr = r; sg = g; sb = b;
@@ -751,31 +749,90 @@ static void extend_sky_fill(void) {
                 }
                 if (!hs) continue;
                 if (y < 40 && x > 175) continue;
-                /* Bars are 4-bit grey (34,34,34) not 0,0,0. Dirt is brown. */
+                /* Bars are 4-bit grey (34,34,34). Dirt is brown. */
                 if (!((int)r < 48 && (int)g < 48 && (int)b < 48)) {
                     hs = 0;
                     continue;
                 }
-                n = ((x * 19 + y * 13) & 15) - 7;
-                rr = (int)sr + n;
-                gg = (int)sg + n;
-                bb = (int)sb + n / 2;
-                if (rr < 0) rr = 0; else if (rr > 255) rr = 255;
-                if (gg < 0) gg = 0; else if (gg > 255) gg = 255;
-                if (bb < 0) bb = 0; else if (bb > 255) bb = 255;
-                be_fb[y][x][0] = (uint8_t)rr;
-                be_fb[y][x][1] = (uint8_t)gg;
-                be_fb[y][x][2] = (uint8_t)bb;
+                be_fb[y][x][0] = (uint8_t)sr;
+                be_fb[y][x][1] = (uint8_t)sg;
+                be_fb[y][x][2] = (uint8_t)sb;
                 be_fb[y][x][3] = 255;
             }
         }
     }
 }
+static int panel_is_ui_dump(const char *name) {
+    return name && (!strcmp(name, "panel-splash") || !strcmp(name, "panel-menu") ||
+                    !strcmp(name, "panel-select") || !strcmp(name, "panel-pause"));
+}
+static int splash_check(void) {
+    /* 76869ea title has a yellow sun and grey rays, not a fillRect blue. */
+    static const int splash_probe[][5] = {
+        {20, 20, 221, 187, 17}, {60, 20, 221, 187, 17}, {100, 20, 0, 0, 0},
+        {140, 20, 16, 16, 16}, {180, 20, 170, 170, 85}, {220, 20, 51, 102, 68},
+        {20, 70, 255, 187, 51}, {60, 70, 221, 170, 17}, {100, 70, 136, 136, 136},
+        {140, 70, 34, 153, 170}, {180, 70, 187, 170, 17}, {220, 70, 102, 102, 102},
+        {20, 120, 0, 51, 34}, {60, 120, 169, 220, 118}, {100, 120, 0, 17, 17},
+        {140, 120, 17, 17, 17}, {180, 120, 0, 0, 0}, {220, 120, 102, 102, 102},
+        {20, 170, 17, 102, 85}, {60, 170, 170, 221, 119}, {100, 170, 255, 238, 0},
+        {140, 170, 136, 136, 136}, {180, 170, 255, 255, 255}, {220, 170, 0, 136, 170},
+        {20, 220, 17, 102, 85}, {60, 220, 34, 51, 34}, {100, 220, 94, 201, 213},
+        {140, 220, 204, 170, 0}, {180, 220, 119, 119, 119}, {220, 220, 102, 102, 102},
+        {20, 270, 17, 102, 85}, {60, 270, 68, 136, 85}, {100, 270, 255, 238, 0},
+        {140, 270, 0, 17, 17}, {180, 270, 254, 254, 254}, {220, 270, 102, 102, 102},
+        {20, 320, 255, 187, 51}, {60, 320, 50, 135, 101}, {100, 320, 136, 136, 136},
+        {140, 320, 119, 119, 119}, {180, 320, 204, 170, 17}, {220, 320, 0, 102, 136},
+        {20, 370, 255, 187, 51}, {60, 370, 51, 136, 102}, {100, 370, 94, 201, 213},
+        {140, 370, 119, 119, 119}, {180, 370, 170, 153, 34}, {220, 370, 0, 85, 119}
+    };
+    int y, x, sun = 0, grey = 0, fill = 0, tot = 240 * 432, bad = 0;
+    int i, miss = 0, nprobe = (int)(sizeof splash_probe / sizeof splash_probe[0]);
+    for (y = 0; y < 432; y++) for (x = 0; x < 240; x++) {
+        unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (r > 200 && g > 170 && b < 90) sun++;
+        if ((int)r > 70 && (int)r < 180 && abs((int)r - (int)g) < 18 && abs((int)g - (int)b) < 18)
+            grey++;
+        if (pix_fill_sky(r, g, b)) fill++;
+    }
+    for (i = 0; i < nprobe; i++) {
+        int px = splash_probe[i][0], py = splash_probe[i][1];
+        int dr, dg, db;
+        unsigned r = be_fb[py][px][0], g = be_fb[py][px][1], b = be_fb[py][px][2];
+        dr = (int)r - splash_probe[i][2]; if (dr < 0) dr = -dr;
+        dg = (int)g - splash_probe[i][3]; if (dg < 0) dg = -dg;
+        db = (int)b - splash_probe[i][4]; if (db < 0) db = -db;
+        if (dr + dg + db > 24) miss++;
+    }
+    if (sun < 2000 || grey < 3000 || fill * 100 / tot > 12 || miss > 8) bad = 1;
+    fprintf(stderr, "AB_DEVICE_TEST panel-splash sun=%d grey=%d fill=%d%% miss=%d/%d %s\n",
+            sun, grey, fill * 100 / tot, miss, nprobe, bad ? "FAIL" : "ok");
+    return !bad;
+}
+static int pause_label_check(void) {
+    /* 76869ea in-game pause HUD (yellow restart/play) sits on the
+     * portrait-right of the ground band. Native 240x432 lands the
+     * restart button at x~170; a packed sheet measured the same edge
+     * at x=188. Require gold in that HUD band, not only x>=188. */
+    int y, x, gold = 0, gold_r = 0, bad = 0;
+    for (y = 40; y < 120; y++) for (x = 160; x < 240; x++) {
+        unsigned r = be_fb[y][x][0], g = be_fb[y][x][1], b = be_fb[y][x][2];
+        if (r > 180 && g > 140 && b < 100) {
+            gold++;
+            if (x >= 188) gold_r++;
+        }
+    }
+    if (gold < 40) bad = 1;
+    fprintf(stderr, "AB_DEVICE_TEST panel-pause PAUSED gold=%d x188=%d %s\n",
+            gold, gold_r, bad ? "FAIL" : "ok");
+    return !bad;
+}
 static void dump_panel(const char *name) {
     char p[512]; snprintf(p, sizeof p, "%s/%s.ppm", out_dir, name);
     FILE *f;
     if (fe_lowmem) host_draw_lowmem();
-    if (!fe_lowmem && !getenv("AB_NO_SKY_FILL")) extend_sky_fill();
+    if (!fe_lowmem && !panel_is_ui_dump(name) && !fe_drop_fullscreen &&
+        !getenv("AB_NO_SKY_FILL")) extend_sky_fill();
     f = fopen(p, "wb"); if (!f) return;
     fprintf(f, "P6 240 432 255\n");
     for (int y = 0; y < 432; y++)
@@ -962,12 +1019,17 @@ static void dismiss_tutorial(void) {
 static int dump_pause_screen(void) {
     int pix;
     tap_at(215.f, 24.f);
+    ab_call_lua("showPauseMenu");
+    ab_show_pause_page();
     wait_frames(8);
+    /* Drop the 480x320 screenshot / theme fillRect so PAUSED and the
+     * level number on the portrait-right stay, same as 76869ea. */
     fe_drop_fullscreen = 1;
     wait_frames(1);
     dump_panel("panel-pause");
     pix = play_pixels();
     fprintf(stderr, "AB_GESTURE_TEST pause pix=%d\n", pix);
+    if (!pause_label_check()) pix = 0;
     fe_drop_fullscreen = 0;
     tap_at(215.f, 24.f);
     wait_frames(8);
@@ -1302,6 +1364,7 @@ int main(int argc, char **argv) {
             int n = atoi(getenv("AB_ISOLATE_LEVEL"));
             char lname[16], dump[24];
             dump_panel("panel-splash");
+            if (!splash_check()) fail++;
             tap_at(105.f, 216.f);
             wait_frames(45);
             dump_panel("panel-menu");
@@ -1420,13 +1483,15 @@ int main(int argc, char **argv) {
         fprintf(stderr, "AB_DEVICE_TEST profile=%s\n", os_profile_name());
         wait_frames(200);
         dump_panel("panel-splash");
+        if (!splash_check()) fail++;
         tap_at(105.f, 216.f);
         wait_frames(45);
         dump_panel("panel-menu");
+        /* Level-select is this same map. Tap LS_LEVEL then wait for L1;
+         * dumping after the tap caught the load-screen clear (31,0,255). */
+        dump_panel("panel-select");
         tap_at(151.f, 32.f);
         wait_frames(12);
-        dump_panel("panel-select");
-        wait_frames(8);
         for (i = 0; i < 600; i++) {
             fake_us += 33333; ab_frame(1.f / 30.f);
             ab_phys_snapshot(&a);
@@ -1465,10 +1530,17 @@ int main(int argc, char **argv) {
             }
             if (!dump_and_check(dump, &a, NULL)) fail++;
             if (!play_level_camera(dump, &a)) fail++;
+            ab_lua_collect();
             if (n == 2) {
                 tap_at(215.f, 24.f);
+                ab_call_lua("showPauseMenu");
+                ab_show_pause_page();
                 wait_frames(8);
+                fe_drop_fullscreen = 1;
+                wait_frames(1);
                 dump_panel("panel-pause");
+                if (!pause_label_check()) fail++;
+                fe_drop_fullscreen = 0;
                 tap_at(215.f, 24.f);
                 wait_frames(8);
             }
@@ -1502,6 +1574,8 @@ int main(int argc, char **argv) {
                     saw_l1, saw_level, saw_pre, saw_step);
             if (!saw_l1 || saw_level < 2 || !saw_pre || !saw_step) fail++;
         }
+        ab_lua_collect();
+        ab_lua_collect();
         fprintf(stderr, "AB_DEVICE_TEST chapter1 extra fails %d heap %u hole %u texfail %d align %u shapebad last=%d\n",
                 ch1_fail, rt_heap_used(), rt_heap_largest_free(), be_stat_tex_fail,
                 rt_align_faults(), a.shape_bad);

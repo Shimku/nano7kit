@@ -17,6 +17,7 @@ int fe_view_h = 480;
 int fe_stat_tris, fe_stat_draws, fe_stat_tex_bytes;
 int fe_stat_ingame_ok, fe_stat_ingame_clip, fe_stat_castle_img;
 int fe_drop_fullscreen;
+int fe_in_level;
 int fe_skip_fbo_blit;
 
 typedef struct { float m[16]; } mat;
@@ -41,6 +42,7 @@ static uint8_t texshift_q[TEXSHIFT_Q];
 static int texshift_qn, texshift_qh;
 static char texshift_last_stem[40];
 int fe_sky_quad, fe_ground_wrap, fe_wrap_hold, fe_skip_draw, fe_theme_n = 1;
+int fe_rot_sky_quad;
 float fe_ground_uw = 1.f, fe_ground_vh = 1.f;
 static int pending_ground_theme, pending_ui;
 static uint32_t fe_theme_ground_gl[4];
@@ -609,19 +611,32 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         bw = maxx - minx; bh = maxy - miny;
         if (bw < 0.f) bw = -bw;
         if (bh < 0.f) bh = -bh;
+        /* LAYER_4 is one play-screen tall. Do not stretch it toward the
+         * portrait-right: that smears the last sky texels into horizontal
+         * stripes. Stop before x=188 is the pause HUD (PAUSED / level
+         * number); pinch-out zenith is clamped in extend_sky_fill instead. */
         {
             int same_c = 1, vi;
             for (vi = 1; vi < n; vi++)
                 if (sv[vi].c[0] != sv[0].c[0] || sv[vi].c[1] != sv[0].c[1] || sv[vi].c[2] != sv[0].c[2])
                     same_c = 0;
             /* Uniform untextured fill (white fade, brown box) is dropped.
-             * Theme sky / beach fillRect must stay: LAYER_4 is one screen
-             * tall and the zenith would otherwise be glClear. */
+             * Theme sky / beach fillRect must stay during play: LAYER_4 is
+             * one screen tall and the zenith would otherwise be glClear.
+             * On splash that same fillRect covers the title sunburst.
+             * On pause it covers PAUSED on the portrait-right. */
             if (!(en_tex && bound_tex) && area > 2000.f && same_c) {
                 unsigned r = sv[0].c[0], g = sv[0].c[1], b = sv[0].c[2];
                 int sky = b > 90 && r < 240;
                 int haze = r > 140 && g > 110 && b > 70 && b < 210;
-                if (!sky && !haze) return;
+                int gold = r > 180 && g > 140 && b < 100;
+                if (gold) {
+                    /* PAUSED / level number on the pause overlay. */
+                } else if (fe_drop_fullscreen || !fe_in_level) {
+                    return;
+                } else if (!sky && !haze) {
+                    return;
+                }
             }
             if (!(en_tex && bound_tex) && area > 80.f && same_c &&
                 sv[0].c[0] < 48 && sv[0].c[1] < 48 && sv[0].c[2] < 48)
@@ -642,13 +657,40 @@ static void emit_tri(const cv *a, const cv *b, const cv *c) {
         /* Pause page composites a near-full screenshot over the menu.
          * Theme 2/3 BACKGROUND/THEME_GROUND fill the same portrait size
          * during play, so only drop it while the pause overlay is up. */
-        if (fe_drop_fullscreen && bound_tex && bw > 190.f && bh > 280.f)
+        /* Drop LAYER_4 / in-game screenshot over the pause menu. MENU_1
+         * (bound_tex>=11) is the pause page with PAUSED / the level number. */
+        if (fe_drop_fullscreen && bound_tex && bound_tex < 11 &&
+            bw > 190.f && bh > 280.f)
             return;
-        /* L20 theme-3 draws MENU_1 as two huge sky wedges. HUD icons
-         * are small and sit at minx~200. */
-        if (bound_tex >= 11 && bw > 80.f && bh > 80.f &&
-            minx > 40.f && minx < 200.f && !fe_drop_fullscreen)
+        /* L20 theme-3 draws MENU_1 as two huge sky wedges (minx~50).
+         * PAUSED and the level number sit at minx~188; HUD icons at
+         * minx~200. The title sunburst is the same atlas at minx>40
+         * on the splash (fe_in_level=0). */
+        if (fe_in_level && bound_tex >= 11 && bw > 80.f && bh > 80.f &&
+            minx > 40.f && minx < 160.f && !fe_drop_fullscreen)
             return;
+        /* Rotated untextured or THEME_GROUND-wrapped quad in the sky:
+         * StaticBlockTheme*_04/05 drawn at native 97/194 px with the lua
+         * 45-degree xf. Real ramps are ~user_scale of that and sit on
+         * the ground band (minx < 70). Skip + flag anything bigger. */
+        {
+            float dx01 = sv[1].x - sv[0].x, dy01 = sv[1].y - sv[0].y;
+            int vi, same_c = 1, rot, sky, flat, hud;
+            for (vi = 1; vi < n; vi++)
+                if (sv[vi].c[0] != sv[0].c[0] || sv[vi].c[1] != sv[0].c[1] || sv[vi].c[2] != sv[0].c[2])
+                    same_c = 0;
+            rot = (dx01 > 8.f && dy01 > 8.f) || (dx01 < -8.f && dy01 < -8.f) ||
+                  (dx01 > 8.f && dy01 < -8.f) || (dx01 < -8.f && dy01 > 8.f);
+            sky = minx > 70.f;
+            flat = (!(en_tex && bound_tex) && same_c) || fe_ground_wrap;
+            hud = miny < 40.f && minx > 175.f;
+            /* Triangle area is half the quad. 8% of the panel as a single
+             * rotated quad => triangle area 4%. */
+            if (rot && sky && flat && !hud && area > (240.f * 432.f * 0.04f)) {
+                fe_rot_sky_quad = 1;
+                return;
+            }
+        }
     }
     if (en_cull && cullmode != 0x408) {
         float area = (sv[1].x - sv[0].x) * (sv[2].y - sv[0].y) - (sv[2].x - sv[0].x) * (sv[1].y - sv[0].y);
@@ -703,7 +745,8 @@ static void draw(uint32_t modep, int first, int count, uint32_t idx_type, uint32
         }
         /* A mixed batch (pinch-out) can include birds; remapping that
          * as one GROUND_BLOCK smears the whole scene. One quad is 4-6. */
-        if (wrap && count > 8) { wrap = 0; fe_ground_wrap = 0; }
+        if (wrap && count > 8) { wrap = 0; fe_ground_wrap = 0; fe_wrap_hold = 0; }
+        if (fe_wrap_hold && wrap) fe_wrap_hold = 0;
         if (wrap && gln && gln < MAXTEX && texh[gln]) {
             st.tex = texh[gln];
             as = NULL;
@@ -936,10 +979,12 @@ void fngl_reset(void) {
     fe_ground_wrap = 0;
     fe_wrap_hold = 0;
     fe_skip_draw = 0;
+    fe_rot_sky_quad = 0;
     fe_theme_n = 1;
     fe_ground_uw = 1.f;
     fe_ground_vh = 1.f;
     fe_lowmem = 0;
+    fe_in_level = 0;
     fe_lowmem_why[0] = 0;
     memset(uv_div, 0, sizeof uv_div);
     fe_reset_matrices();

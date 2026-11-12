@@ -139,12 +139,29 @@ static uint32_t heap_largest_free(void) {
     }
     return best;
 }
+void rt_heap_dump_free(void) {
+    uint32_t b, n = 0, sum = 0;
+    for (b = free_head; b; b = fnext(b)) {
+        uint32_t size = bsize(b);
+        uint32_t payload = size > (HEAP_HDR + 4u) ? size - (HEAP_HDR + 4u) : 0;
+        sum += payload;
+        if (n < 12)
+            rt_log("free[%u] @%08x %u", n, b, payload);
+        n++;
+    }
+    rt_log("free list n=%u sum=%u largest=%u used=%u",
+           n, sum, heap_largest_free(), used_bytes);
+}
 
-/* Large image decode / pixel buffers (256 KB+) live outside the guest block on
- * the nano7kit OS heap, the same way the front end's triangle pool does.
- * Nano (32-bit): guest address is host_ptr - g_mem, so AT remains M+a.
- * Host (64-bit): 0xB0000000 + slot*2MB, looked up in out_slot. */
-#define OUT_MIN    (256u * 1024u)
+/* Large image decode / pixel buffers (128 KB+: INGAME R4G4B4A4 sheets
+ * and 512-wide RGBA) live outside the guest block on the nano7kit OS
+ * heap, the same way the front end's triangle pool does. Leaving 128 KB
+ * sheets in-guest carved the leftover hole to 137 KB by L21. 8 KB+
+ * Image/Box2D objects must stay in-guest: lua walks them as guest
+ * addresses. Nano (32-bit): guest address is host_ptr - g_mem, so AT
+ * remains M+a. Host (64-bit): 0xB0000000 + slot*2MB, looked up in out_slot. */
+#define OUT_MIN    (128u * 1024u)
+#define HOLE_KEEP  300000u
 #define OUT_BASE   0xB0000000u
 #define OUT_MAX    512
 #define OUT_STRIDE (2u << 20)
@@ -274,9 +291,15 @@ uint32_t g_malloc(uint32_t n) {
 #ifndef FN_NANO
     no_out = getenv("AB_NO_OUTSIDE") != 0;
 #endif
-    /* 256 KB+ decode always prefers the OS heap so the 2 MB guest block
-     * stays for lua/Box2D. Anything the guest cannot fit overflows the same way. */
+    /* 128 KB+ decode always prefers the OS heap so the 2 MB guest block
+     * stays for lua/Box2D. 8 KB+ Image/Box2D objects must stay in-guest:
+     * their pointers are stored in lua and walked as guest addresses.
+     * 64 KB+ also prefers OS once the leftover hole cannot spare them.
+     * Anything the guest cannot fit overflows the same way. */
     if (n >= OUT_MIN && !no_out) {
+        uint32_t p = g_malloc_outside(n);
+        if (p) return p;
+    } else if (!no_out && n >= 65536u && heap_largest_free() < HOLE_KEEP + n) {
         uint32_t p = g_malloc_outside(n);
         if (p) return p;
     }
@@ -289,20 +312,31 @@ uint32_t g_malloc(uint32_t n) {
     uint32_t need = (n + HEAP_HDR + 4u + 7u) & ~7u;
     if (need < 16) need = 16;
     {
-        uint32_t b, chosen = 0, fallback = 0;
+        uint32_t b, chosen = 0, chosen_sz = 0xffffffffu, fallback = 0, fallback_sz = 0xffffffffu;
         int no_reuse = getenv("AB_HEAP_NOREUSE") != 0;
         for (b = free_head; b; b = fnext(b)) {
             uint32_t size = bsize(b);
             if (size < need) continue;
-            if (!fallback) fallback = b;
+            /* Address-ordered list still coalesces. Best-fit so 16-byte
+             * lua cells fill the 656-byte holes instead of carving the
+             * leftover 300 KB play hole (first-fit from the front). */
+            if (size < fallback_sz) { fallback = b; fallback_sz = size; }
             if (recently_freed(b)) continue;
-            chosen = b;
-            break;
+            if (size < chosen_sz) { chosen = b; chosen_sz = size; }
         }
         /* Debug: refuse just-freed addresses even if that is the only fit. */
         if (!chosen && fallback && !no_reuse) chosen = fallback;
         if (chosen) {
-            uint32_t size = bsize(chosen), alloc = chosen;
+            uint32_t size, alloc;
+            if (n >= 49152u && heap_largest_free() < HOLE_KEEP + need) {
+                uint32_t p = no_out ? 0 : g_malloc_outside(n);
+                if (p) return p;
+                rt_log("guest skip %u keep hole %u", n, (unsigned)heap_largest_free());
+                malloc_fail++;
+                return 0;
+            }
+            size = bsize(chosen);
+            alloc = chosen;
             funlink(chosen);
             if (size - need >= 32) {
                 /* High end of the hole: payload stays 8-aligned (chosen is

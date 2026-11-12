@@ -144,6 +144,8 @@ static int ab_looks_like_xf(uint32_t p) {
 }
 static int cam_xy_baked;   /* Image::draw x,y already camera-relative */
 static int cam_xy_screen;  /* baked dest is already * scale; xf.sx = 1 */
+static int xf_keep_2x2;    /* GROUND_BLOCK keeps the lua 2x2 (45-degree ramps) */
+static int xf_ui_full;     /* splash/pause 480x320: identity xf, no camera */
 static int in_masked_add;  /* MaskedImage::add composites into an FBO */
 static int in_sprite_draw; /* Sprite::draw: world sheet, not HUD Image::draw */
 static int in_bg_draw;     /* drawBackground / drawForegroundNative tile loop */
@@ -186,6 +188,14 @@ static void ab_masked_xf_restore(void) {
 static void ab_cam_xf_write(uint32_t xf) {
     float tx, ty, sc;
     if (!xf || !guest_ok(xf, 56u)) return;
+    if (xf_ui_full) {
+        gw32(xf + 16u, F2U(1.f)); gw32(xf + 20u, F2U(0.f));
+        gw32(xf + 24u, F2U(0.f)); gw32(xf + 28u, F2U(1.f));
+        gw32(xf + 32u, F2U(0.f)); gw32(xf + 36u, F2U(0.f));
+        gw32(xf + 40u, F2U(1.f)); gw32(xf + 44u, F2U(1.f));
+        gw32(xf + 48u, F2U(0.f)); gw32(xf + 52u, F2U(0.f));
+        return;
+    }
     if (!cam_user_live()) return;
     /* Image::draw dest = (x + xf48 + tx) then * (2*sx/viewport) into NDC.
      * Native xf48/xf52 keep the opening camera; adding our tx on top puts
@@ -202,18 +212,18 @@ static void ab_cam_xf_write(uint32_t xf) {
     gw32(xf + 48u, F2U(0.f));
     gw32(xf + 52u, F2U(0.f));
     /* Keep dest = sprite pivot (UV uses destarg - dest). Identity 2x2 so
-     * Image::draw's clip AABB matches (x+tx)*scale; 90° ice otherwise
-     * inflates min-x NDC past +1 and the sprite never emits. Rotated
-     * GROUND_BLOCK (L20 45° 97x97) must keep a00/a01 or it shears into
-     * black diagonal bars. */
-    {
-        float a01 = U2F(gr32(xf + 20u)), a10 = U2F(gr32(xf + 24u));
-        if (!(fabsf(a01) > 0.05f || fabsf(a10) > 0.05f)) {
-            gw32(xf + 16u, F2U(1.f));
-            gw32(xf + 20u, F2U(0.f));
-            gw32(xf + 24u, F2U(0.f));
-            gw32(xf + 28u, F2U(1.f));
-        }
+     * Image::draw's clip AABB matches (x+tx)*scale; 90 ice otherwise
+     * inflates min-x NDC past +1 and the sprite never emits.
+     * StaticBlockTheme*_04/05 are real immovable box terrain (lua width
+     * 2.42/4.85 m, physicsToWorld 20, sprite 97x97 / 194x196, often
+     * angle +-pi/4). Leave that lua 2x2; xf.sx = user_scale shrinks them
+     * with the camera. Identity + dest-bake at xf.sx=1 left native-size
+     * diamonds floating in the pinch-out sky. */
+    if (!xf_keep_2x2) {
+        gw32(xf + 16u, F2U(1.f));
+        gw32(xf + 20u, F2U(0.f));
+        gw32(xf + 24u, F2U(0.f));
+        gw32(xf + 28u, F2U(1.f));
     }
 }
 static void ab_cam_xf(uint32_t xf) {
@@ -287,33 +297,76 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
             }
         }
         /* Dummy 480x320 BACKGROUND_*_LAYER_4_DUMMY is an empty quad that
-         * shows as black bars (L20). LAYER_4 itself is 478x318. */
+         * shows as black bars (L20). LAYER_4 itself is 478x318. Splash and
+         * the pause overlay are also 480x320 - only skip during
+         * drawBackground so the title sunburst and PAUSED stay. */
         if (img_flag_sp < 16) {
             img_flag_stack[img_flag_sp][0] = fe_sky_quad;
             img_flag_stack[img_flag_sp][1] = fe_ground_wrap;
             img_flag_stack[img_flag_sp][2] = fe_skip_draw;
             img_flag_sp++;
         }
-        /* LAYER_4_DUMMY is 480x320 empty. Drawn outside drawBackground it
-         * is two black triangles (L20). LAYER_4 itself is 478x318. */
-        fe_skip_draw = (srcw >= 479u && srcw <= 481u && srch >= 318u && srch <= 322u);
+        fe_skip_draw = (in_bg_draw && srcw >= 479u && srcw <= 481u &&
+                        srch >= 318u && srch <= 322u);
         fe_sky_quad = (in_bg_draw && srcw >= 400u && srcw <= 480u && srch >= 250u && srch <= 330u);
-        if ((srcw >= 90u && srcw <= 104u && srch >= 90u && srch <= 104u)) {
-            /* 97x97 THEME*_04 is PVRTC-black. Wrapping it onto THEME_GROUND
-             * paints a dirt diamond in the L20 sky; skip_draw punched a
-             * slingshot hole. Leave the sprite: be_soft drops sky-side
-             * PVRTC-black and remaps large ground-side bodies. */
-            fe_ground_wrap = 0;
-        } else if ((srcw >= 90u && srcw <= 104u && srch >= 28u && srch <= 40u) ||
-            (srcw >= 180u && srcw <= 210u && (srch >= 28u && srch <= 40u || srch >= 180u && srch <= 210u)) ||
-            (srcw >= 600u && srcw <= 680u && srch >= 28u && srch <= 40u)) {
-            fe_ground_wrap = 1;
-            /* 256-texel THEME_GROUND. src/40 so a 194x196 body shows
-             * several dirt repeats, not one muddy splat. */
-            fe_ground_uw = (float)srcw / 40.f;
-            fe_ground_vh = (float)srch / 40.f;
-        } else {
-            fe_ground_wrap = 0;
+        {
+            int gblk04 = (srcw >= 90u && srcw <= 104u && srch >= 90u && srch <= 104u);
+            int gblk = gblk04 ||
+                (srcw >= 90u && srcw <= 104u && srch >= 28u && srch <= 40u) ||
+                (srcw >= 180u && srcw <= 210u &&
+                 ((srch >= 28u && srch <= 40u) || (srch >= 180u && srch <= 210u))) ||
+                (srcw >= 600u && srcw <= 680u && srch >= 28u && srch <= 40u);
+            if (gblk04) {
+                /* 97x97 THEME*_04 is PVRTC-black. Wrapping it onto
+                 * THEME_GROUND at native size painted a dirt diamond in
+                 * the sky; it is real StaticBlockTheme*_04 terrain so
+                 * wrap at user_scale instead of skipping the body. */
+                fe_ground_wrap = 1;
+                fe_wrap_hold = 1;
+                fe_ground_uw = (float)srcw / 40.f;
+                fe_ground_vh = (float)srch / 40.f;
+            } else if (gblk) {
+                fe_ground_wrap = 1;
+                fe_wrap_hold = 1;
+                /* 256-texel THEME_GROUND. src/40 so a 194x196 body shows
+                 * several dirt repeats, not one muddy splat. */
+                fe_ground_uw = (float)srcw / 40.f;
+                fe_ground_vh = (float)srch / 40.f;
+            } else {
+                fe_ground_wrap = 0;
+            }
+            if (gblk) {
+                static int nterrain;
+                uint32_t xf = (c && guest_ok(c, 0x10Cu + 56u)) ? c + 0x10Cu : 0;
+                float a00 = xf ? U2F(gr32(xf + 16u)) : 1.f;
+                float a01 = xf ? U2F(gr32(xf + 20u)) : 0.f;
+                float aa = a00 < 0.f ? -a00 : a00;
+                float ab = a01 < 0.f ? -a01 : a01;
+                int diamond = (gblk04 || srch >= 180u) && (aa < 0.85f || ab > 0.25f);
+                const char *def = gblk04 ? "StaticBlockTheme*_04 GROUND_BLOCK_*_04" :
+                    (srch >= 180u ? "StaticBlockTheme*_05 GROUND_BLOCK_*_05" :
+                     (srcw >= 600u ? "StaticBlockTheme*_03 GROUND_BLOCK_*_03" :
+                      (srcw >= 180u ? "StaticBlockTheme*_02 GROUND_BLOCK_*_02" :
+                       "StaticBlockTheme*_01 GROUND_BLOCK_*_01")));
+                /* Identity / 180 platforms (a00~+-1, a01~0) sit on the
+                 * ground. 90-degree and +-pi/4 lua boxes are real
+                 * immovable collision, but THEME_GROUND wrap paints an
+                 * opaque square; those angles put a textured diamond in
+                 * the sky. Skip the sprite; keep 0/180 platforms. */
+                if (diamond) {
+                    fe_skip_draw = 1;
+                    fe_ground_wrap = 0;
+                    xf_keep_2x2 = 0;
+                } else {
+                    xf_keep_2x2 = 1;
+                }
+                if (nterrain < 120) {
+                    rt_log("terrain %s type=static src=%ux%u dest=%.0f,%.0f a00=%.2f a01=%.2f wrap=%d skip=%d tex=INGAME_6/7/8",
+                           def, srcw, srch, (double)x, (double)y,
+                           (double)a00, (double)a01, fe_ground_wrap, diamond);
+                    nterrain++;
+                }
+            }
         }
         if (getenv("AB_DUMP_BG") && (fe_sky_quad || fe_ground_wrap || fe_skip_draw) && imgbake_n < 60) {
             rt_log("draw-flag sky=%d wrap=%d skip=%d src=%ux%u sprite=%d bg=%d theme=%d",
@@ -361,7 +414,20 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
         if (in_bg_draw) {
             /* parallax xf already set */
         } else if (world && !huge && cam_user_live() && r2 && r3) {
-            if (srcw < 250u || srcw == 0u || srcw > 2048u) {
+            int gblk = (srcw >= 90u && srcw <= 104u &&
+                        ((srch >= 28u && srch <= 40u) || (srch >= 90u && srch <= 104u))) ||
+                       (srcw >= 180u && srcw <= 210u &&
+                        ((srch >= 28u && srch <= 40u) || (srch >= 180u && srch <= 210u))) ||
+                       (srcw >= 600u && srcw <= 680u && srch >= 28u && srch <= 40u);
+            /* GROUND_BLOCK extent is srcw pixels of xf.sx. Dest-baking the
+             * pivot with xf.sx=1 left 194x196 sprites at native size, so
+             * pinch-out showed giant dirt diamonds. World dest + xf.sx =
+             * user_scale shrinks them with the camera. */
+            if (gblk) {
+                *r2 = F2U(x - user_left);
+                *r3 = F2U(y - user_top);
+                cam_xy_screen = 0;
+            } else if (srcw < 250u || srcw == 0u || srcw > 2048u) {
                 *r2 = F2U((x - user_left) * user_scale);
                 *r3 = F2U((y - user_top) * user_scale);
                 cam_xy_screen = 1;
@@ -374,14 +440,31 @@ static void ab_icall_patch(uint32_t addr, uint32_t *r0, uint32_t *r1, uint32_t *
             x = U2F(*r2);
             y = U2F(*r3);
         }
-        if (!in_bg_draw && c && guest_ok(c, 0x10Cu + 56u) && (!in_masked_add || cam_xy_baked)) {
-            /* Huge BACKGROUND keeps world dest. Write the swipe camera xf;
-             * leftover identity 2x2 from a dest-baked ice sprite shears
-             * theme-2/3 hills (L21). Do not dest-bake: that warped L1-pan. */
-            if (huge) {
-                if (cam_user_live()) ab_cam_xf_write(c + 0x10Cu);
-            } else if (world || cam_xy_baked) ab_cam_xf_write(c + 0x10Cu);
-            else ab_cam_xf(c + 0x10Cu);
+        {
+            /* Splash/pause/select 480x320 pages: xf_ui_full is identity, but
+             * forcing it on every dest~0,0 overlay hid the level-select map
+             * (native xf has the episode scroll). Only the pause dump uses
+             * identity so leftover world sx does not slide PAUSED off the
+             * portrait-right. */
+            int ui_full = fe_drop_fullscreen && !in_bg_draw &&
+                          srcw >= 479u && srcw <= 481u &&
+                          srch >= 318u && srch <= 322u;
+            if (ui_full) xf_ui_full = 1;
+            if (!in_bg_draw && c && guest_ok(c, 0x10Cu + 56u) &&
+                (!in_masked_add || cam_xy_baked || xf_ui_full)) {
+                /* Huge BACKGROUND keeps world dest. Write the swipe camera xf;
+                 * leftover identity 2x2 from a dest-baked ice sprite shears
+                 * theme-2/3 hills (L21). Do not dest-bake: that warped L1-pan. */
+                if (xf_ui_full) {
+                    ab_cam_xf_write(c + 0x10Cu);
+                } else if (huge) {
+                    if (cam_user_live()) ab_cam_xf_write(c + 0x10Cu);
+                } else if (world || cam_xy_baked) {
+                    ab_cam_xf_write(c + 0x10Cu);
+                } else {
+                    ab_cam_xf(c + 0x10Cu);
+                }
+            }
         }
     }
     if (cam_patching) return;
@@ -415,6 +498,8 @@ static void ab_icall_after(uint32_t addr, uint32_t r0, uint32_t ret) {
         }
         cam_xy_baked = 0;
         cam_xy_screen = 0;
+        xf_keep_2x2 = 0;
+        xf_ui_full = 0;
         return;
     }
     if (addr == 0x6c1b4u && in_sprite_draw > 0) in_sprite_draw--;
@@ -423,11 +508,20 @@ static void ab_icall_after(uint32_t addr, uint32_t r0, uint32_t ret) {
         if (in_masked_add) ab_masked_xf_restore();
         cam_xy_baked = 0;
         cam_xy_screen = 0;
+        xf_keep_2x2 = 0;
+        xf_ui_full = 0;
         if (addr == 0xb15c4u && img_flag_sp > 0) {
+            int had_wrap = fe_ground_wrap;
             img_flag_sp--;
             fe_sky_quad = img_flag_stack[img_flag_sp][0];
             fe_ground_wrap = img_flag_stack[img_flag_sp][1];
             fe_skip_draw = img_flag_stack[img_flag_sp][2];
+            /* Ka3D may glDraw after Image::draw returns. Keep wrap for that
+             * one batch so THEME_GROUND hits the GROUND_BLOCK quad. */
+            if (had_wrap) {
+                fe_ground_wrap = 1;
+                fe_wrap_hold = 1;
+            }
         }
     }
     if (cam_patching) return;
@@ -509,6 +603,8 @@ static void reset_view(void) {
     in_sprite_draw = 0;
     cam_xy_baked = 0;
     cam_xy_screen = 0;
+    xf_keep_2x2 = 0;
+    xf_ui_full = 0;
     ab_cam_clear_play();
     for (i = 0; i < AB_FINGERS; i++) memset(&fed[i], 0, sizeof fed[i]);
 }
@@ -854,6 +950,7 @@ void ab_frame_q(float dt, const ab_tsample *q, int n) {
      * Pinch/pan must run before update so this frame's draw uses the
      * latched camera (after-draw apply left the screenshot one gesture late
      * and cameraFunction could fight the latch). */
+    fe_in_level = cam_user;
     ab_apply_pinch();
     ab_apply_pan();
     ab_cam_fit_play();
@@ -1263,6 +1360,8 @@ static void ab_xf_reset_ctx(void) {
     in_bg_draw = 0;
     cam_xy_baked = 0;
     cam_xy_screen = 0;
+    xf_keep_2x2 = 0;
+    xf_ui_full = 0;
     img_flag_sp = 0;
     fe_skip_draw = 0;
     fe_sky_quad = 0;
@@ -1733,6 +1832,14 @@ void ab_unpause(void) {
     ab_lua_set_number("ingamePausePageScroll", 0.f);
     ab_lua_set_number("pauseBGw", 0.f);
 }
+void ab_show_pause_page(void) {
+    ab_lua_set_bool("paused", 1);
+    ab_lua_set_bool("inPausePage", 1);
+    ab_lua_set_bool("showPausePage", 1);
+    ab_lua_set_bool("pausePageReady", 1);
+    ab_lua_set_number("pausePageTimer", 1.f);
+    ab_lua_set_number("pausePageAlpha", 1.f);
+}
 
 /* GameLua+0xB8 is Hashtable<String,RenderObjectData> (this+8 = glu+192
  * bucket count, +12 buf, stride 96, occupied +92, b2Body* +24, Image*
@@ -1957,6 +2064,7 @@ void ab_load_lua_level(const char *name) {
     ab_log_level(name);
 }
 
+void ab_lua_collect(void) { ab_lua_gc(); }
 static void ab_lua_gc(void) {
     uint32_t glu, L, g;
 #ifndef FN_NANO
@@ -1991,6 +2099,7 @@ static void ab_lua_gc(void) {
         rt_log("lua_gc hole %u -> %u used %u L=%08x",
                (unsigned)hole0, (unsigned)rt_heap_largest_free(),
                (unsigned)rt_heap_used(), L);
+        if (rt_heap_largest_free() < 400000u) rt_heap_dump_free();
     }
 }
 

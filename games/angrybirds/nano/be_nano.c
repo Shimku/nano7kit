@@ -62,6 +62,7 @@ static void flush(void) {
 }
 void be_frame_begin(void) {
     used = batch_from = 0; have_cur = 0;
+    fe_rot_sky_quad = 0;
     be_stat_tris = be_stat_tiny = be_stat_over = be_stat_draws = 0;
     if (!pool_mem()) return;
     glViewport(0, 0, be_panel_w, be_panel_h);
