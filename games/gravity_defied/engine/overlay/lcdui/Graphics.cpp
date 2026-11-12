@@ -1,6 +1,6 @@
 #include "Graphics.h"
 #include "../gd_config.h"
-#include "../nano/gd_font8.h"
+#include "../nano/gd_ui_font.h"
 #include <cmath>
 #include <cstring>
 
@@ -170,12 +170,32 @@ void Graphics::drawArc(int x, int y, int width, int height, int startAngle, int 
 
 void Graphics::fillArc(int x, int y, int w, int h, int startAngle, int arcAngle)
 {
-    (void)x;
-    (void)y;
-    (void)w;
-    (void)h;
     (void)startAngle;
     (void)arcAngle;
+    int xr = w / 2, yr = h / 2;
+    int cx = x + xr, cy = y + yr;
+    int r2;
+    if (xr < 1) xr = 1;
+    if (yr < 1) yr = 1;
+    r2 = xr * xr;
+    for (int yy = -yr; yy <= yr; yy++) {
+        for (int xx = -xr; xx <= xr; xx++) {
+            if (xx * xx * yr * yr + yy * yy * xr * xr <= r2 * yr * yr)
+                _putpixel(cx + xx, cy + yy);
+        }
+    }
+}
+
+void Graphics::fillCircle(int cx, int cy, int r)
+{
+    int r2, yy, xx;
+    if (r < 1) r = 1;
+    r2 = r * r;
+    for (yy = -r; yy <= r; yy++) {
+        for (xx = -r; xx <= r; xx++) {
+            if (xx * xx + yy * yy <= r2) _putpixel(cx + xx, cy + yy);
+        }
+    }
 }
 
 void Graphics::drawImage(Image* const image, int x, int y, int anchor)
@@ -215,28 +235,17 @@ void Graphics::drawChar(char c, int x, int y, int anchor)
 
 void Graphics::drawString(const std::string& s, int x, int y, int anchor)
 {
-    int scale = 1;
-    if (font && font->pixelSize() >= 8) scale = font->pixelSize() / 8;
-    if (scale < 1) scale = 1;
-    int gw = 8 * scale, gh = 8 * scale;
-    int width = (int)s.size() * gw;
-    x = getAnchorX(x, width, anchor);
-    y = getAnchorY(y, gh, anchor);
-    int bold = font && font->bold();
-    for (size_t i = 0; i < s.size(); i++) {
-        const uint8_t *g = gd_glyph8((unsigned char)s[i]);
-        int bx = x + (int)i * gw;
-        for (int r = 0; r < 8; r++) {
-            for (int col = 0; col < 8; col++) {
-                if (!(g[r] & (uint8_t)(1u << col))) continue;
-                for (int sy = 0; sy < scale; sy++)
-                    for (int sx = 0; sx < scale; sx++) {
-                        int px = bx + col * scale + sx;
-                        int py = y + r * scale + sy;
-                        _putpixel(px, py);
-                        if (bold) _putpixel(px + 1, py);
-                    }
-            }
-        }
+    int px = 15;
+    int tw, th;
+    if (font && font->pixelSize() > 0) px = font->pixelSize();
+    tw = gd_ui_text_width(px, s.c_str(), (int)s.size());
+    th = gd_ui_font_height(px);
+    x = getAnchorX(x, tw, anchor);
+    y = getAnchorY(y, th, anchor);
+    gd_ui_draw_text(fb, fbW, fbH, x, y, s.c_str(), (int)s.size(), px, color,
+                    clipX, clipY, clipW, clipH);
+    if (font && font->bold() && px < 19) {
+        gd_ui_draw_text(fb, fbW, fbH, x + 1, y, s.c_str(), (int)s.size(), px, color,
+                        clipX, clipY, clipW, clipH);
     }
 }

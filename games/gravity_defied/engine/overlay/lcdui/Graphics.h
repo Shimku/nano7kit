@@ -35,6 +35,7 @@ public:
     void drawChar(char c, int x, int y, int anchor);
     void fillRect(int x, int y, int w, int h);
     void fillArc(int x, int y, int w, int h, int startAngle, int arcAngle);
+    void fillCircle(int cx, int cy, int r);
     void drawArc(int x, int y, int w, int h, int startAngle, int arcAngle);
     void drawLine(int x1, int y1, int x2, int y2);
     void drawImage(Image* const image, int x, int y, int anchor);

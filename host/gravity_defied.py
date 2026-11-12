@@ -647,7 +647,7 @@ def build(payload: Path, *, force: bool = False) -> dict:
     shutil.copyfile(game_dir() / "nano" / "notice.c", app_dir / "notice.c")
     shutil.copyfile(game_dir() / "nano" / "notice.h", app_dir / "notice.h")
     shutil.copyfile(engine / "src" / "nano" / "gd_plat.c", app_dir / "gd_plat.c")
-    shutil.copyfile(engine / "src" / "nano" / "gd_font8.h", app_dir / "gd_font8.h")
+    shutil.copyfile(engine / "src" / "nano" / "gd_ui_font.h", app_dir / "gd_ui_font.h")
     shutil.copyfile(engine / "src" / "gd_config.h", app_dir / "gd_config.h")
     shutil.copyfile(engine / "src" / "nano" / "gdalloc.h", app_dir / "gdalloc.h")
     shutil.copyfile(engine / "src" / "nano" / "gd_engine.h", app_dir / "gd_engine.h")
@@ -780,7 +780,7 @@ def apply_fetched_sprites(facts: dict, engine: Path) -> int:
 
 
 def _menu_script() -> str:
-    """Splash, main, play, pause, labelled bar, Exit Game from pause then main."""
+    """Splash, main, play, pause, keypad with a held key, Exit Game from pause then main."""
     return "\n".join([
         "wait 3",
         "dump splash",
@@ -793,7 +793,9 @@ def _menu_script() -> str:
         "wait 8",
         "dump gameplay_easy_intro",
         "hold 1 0 0 0",
-        "wait 50",
+        "wait 8",
+        "dump gameplay_key",
+        "wait 42",
         "dump gameplay_easy_intro_ride",
         "hold 0 0 0 0",
         "pause",

@@ -4,16 +4,22 @@
 
 #define GD_SCREEN_W 240
 #define GD_SCREEN_H 432
-#define GD_BAR_H 88
-#define GD_GAME_H (GD_SCREEN_H - GD_BAR_H)
+/* iOS-style 3x3 keypad: 80x42 cells (at least 40 px tall), 3 px green progress. */
+#define GD_PAD_CELL_W 80
+#define GD_PAD_CELL_H 42
+#define GD_PAD_ROWS 3
+#define GD_PROG_H 3
+#define GD_PAD_Y (GD_SCREEN_H - (GD_PAD_ROWS * GD_PAD_CELL_H))
+#define GD_GAME_H (GD_PAD_Y - GD_PROG_H)
+#define GD_BAR_H (GD_SCREEN_H - GD_GAME_H)
 #define GD_DATA_DIR "/Apps/Data/GravityDefied"
-/* Touch bar: BRK 56, lean 32, MENU 64, lean 32, GAS 56. */
-#define GD_Z_BRK  0
-#define GD_Z_LEANL 56
-#define GD_Z_MENU 88
-#define GD_Z_LEANR 152
-#define GD_Z_GAS  184
+#define GD_PAUSE_X (GD_SCREEN_W - 40)
+#define GD_PAUSE_Y 4
+#define GD_PAUSE_W 36
+#define GD_PAUSE_H 40
 #define GD_MENU_ROW_MIN 36
+#define GD_MENU_TEXT_X 24
+#define GD_MENU_MARKER_X 10
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,6 +48,11 @@ int gd_held_gas(void);
 int gd_held_brake(void);
 int gd_held_lean_l(void);
 int gd_held_lean_r(void);
+unsigned gd_held_keys(void);
+void gd_set_key_mask(unsigned mask);
+int gd_pad_digit(int x, int y);
+int gd_hit_pause(int x, int y);
+void gd_set_progress(int p16);
 int gd_tap_fire(void);
 int gd_tap_back(void);
 int gd_tap_pause(void);

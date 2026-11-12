@@ -8,7 +8,7 @@ class CanvasImpl {
     Canvas *canvas;
     int width;
     int height;
-    int prevGas = 0, prevBrake = 0, prevLeft = 0, prevRight = 0;
+    unsigned prevKeys = 0;
     int prevFire = 0, prevBack = 0, prevPause = 0;
     int prevTapX = -1, prevTapY = -1;
 

@@ -13,4 +13,9 @@ rgimad/gravity_defied_cpp (GPL-2.0).
   dlmalloc 2.8.6 (fetched at build)
     Doug Lea, public domain / CC0
 
+  Inter bitmap (menus and keypad digits)
+    Rasmus Andersson / The Inter Project Authors
+    SIL OFL-1.1 (LICENSES/Inter-OFL-1.1.txt)
+    A small ASCII raster; the Inter TTF is not shipped.
+
 nano7kit's own code outside this folder stays MIT.

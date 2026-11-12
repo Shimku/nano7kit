@@ -8,3 +8,7 @@ rgimad/gravity_defied_cpp at pin 91bd283).
 The engine itself is fetched at that pin during the build and is not
 in git. Game data (levels.mrg, sprites) comes from the user's own
 J2ME .jar at install time and is never committed.
+
+The menu and keypad digits use a small ASCII bitmap raster of Inter
+by Rasmus Andersson, SIL OFL-1.1 (LICENSES/Inter-OFL-1.1.txt). The
+Inter TTF is not in this tree.

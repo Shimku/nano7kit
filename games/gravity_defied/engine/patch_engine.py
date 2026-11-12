@@ -213,12 +213,12 @@ int GameMenu::hitRowAtY(int y)
 {
     int var2 = field_101;
     if (field_94 != "") {
-        var2 += font->getBaselinePosition() + 2;
+        var2 += font->getBaselinePosition() + 8;
     }
     if (canvasHeight < 100) {
         ++var2;
     } else {
-        var2 += 4;
+        var2 += 6;
     }
     for (int i = field_105; i < field_106 + 1 && i < (int)vector.size(); ++i) {
         IGameMenuElement *el = vector[i];
@@ -271,7 +271,8 @@ void GameMenu::selectRow(int i)
     field_103 = 2;
     field_110 = 0;
 """,
-        """    field_104 = xPos + 7;
+        """    xPos = 24;
+    field_104 = 24;
     field_103 = 2;
     {
         int need = 36 - font2->getBaselinePosition();
@@ -311,24 +312,10 @@ void GameMenu::selectRow(int i)
             int rowH = var4->isNotTextRender()
                 ? font2->getBaselinePosition() + field_103
                 : (TextRender::getBaselinePosition() < GameCanvas::spriteSizeY[5] ? GameCanvas::spriteSizeY[5] : TextRender::getBaselinePosition()) + field_103;
-            if (i == field_95 && var4->isNotTextRender()) {
-                graphics->setColor(16, 48, 120);
-                graphics->fillRect(0, var2 - 4, canvasWidth, rowH);
-                graphics->setColor(255, 255, 255);
-            } else {
-                graphics->setColor(0, 0, 0);
-            }
+            graphics->setColor(0, 0, 0);
             var4->render(graphics, var2, field_104);
             if (i == field_95 && var4->isNotTextRender()) {
-                int var5 = xPos - micro->gameCanvas->helmetSpriteWidth / 2;
-                int var6 = var2 + font2->getBaselinePosition() / 2 - micro->gameCanvas->helmetSpriteHeight / 2;
-                graphics->setClip(var5, var6, micro->gameCanvas->helmetSpriteWidth, micro->gameCanvas->helmetSpriteHeight);
-                graphics->drawImage(micro->gameCanvas->helmetImage.get(), var5 - micro->gameCanvas->helmetSpriteWidth * (field_110 % 6), var6 - micro->gameCanvas->helmetSpriteHeight * (field_110 / 6), 20);
-                graphics->setClip(0, 0, canvasWidth, canvasHeight);
-                ++field_110;
-                if (field_110 > 30) {
-                    field_110 = 0;
-                }
+                graphics->fillCircle(10, var2 + rowH / 2 - 2, 3);
             }
 
             var2 += rowH;
@@ -338,23 +325,21 @@ void GameMenu::selectRow(int i)
     )
     _sub(
         src / "GameMenu.cpp",
-        """    } else {
-        graphics->setColor(0, 0, 0);
-        var2 = field_101;
-        if (field_94 != "") {
-            graphics->setFont(font);
-            graphics->drawString(field_94, xPos, var2, 20);
+        """            graphics->drawString(field_94, xPos, var2, 20);
+            var2 += font->getBaselinePosition() + 2;
 """,
-        """    } else {
-        graphics->setColor(236, 236, 240);
-        graphics->fillRect(0, 0, canvasWidth, canvasHeight);
-        graphics->setColor(0, 0, 0);
-        var2 = field_101;
-        if (field_94 != "") {
-            graphics->setFont(font);
-            graphics->drawString(field_94, xPos, var2, 20);
+        """            graphics->drawString(field_94, xPos, var2, 20);
+            var2 += font->getBaselinePosition() + 8;
 """,
-        label="GameMenu opaque background",
+        label="GameMenu title gap",
+    )
+    _sub(
+        src / "GameMenu.cpp",
+        """    field_101 = 1;
+""",
+        """    field_101 = 8;
+""",
+        label="GameMenu top padding",
     )
 
     _sub(
@@ -650,28 +635,44 @@ void MenuManager::nanoTap(int x, int y)
 }
 """ + text[i1 + len(wait_end):]
 
-    old_fill = """void MenuManager::fillCanvasWithImage(Graphics* graphics)
+    old_fill = """void MenuManager::method_202(Graphics* var1)
 {
-    for (int y = 0; y < getCanvasHeight(); y += rasterImage->getHeight()) {
-        for (int x = 0; x < getCanvasWidth(); x += rasterImage->getWidth()) {
-            graphics->drawImage(rasterImage.get(), x, y, 20);
-        }
+    if (currentGameMenu != nullptr && !field_377) {
+        micro->gameCanvas->drawGame(var1);
+        fillCanvasWithImage(var1);
+        currentGameMenu->render_76(var1);
     }
 }
 """
-    new_fill = """void MenuManager::fillCanvasWithImage(Graphics* graphics)
+    new_fill = """void MenuManager::method_202(Graphics* var1)
 {
-    if (!rasterImage || rasterImage->getWidth() < 1 || rasterImage->getHeight() < 1) return;
-    for (int y = 0; y < getCanvasHeight(); y += rasterImage->getHeight()) {
-        for (int x = 0; x < getCanvasWidth(); x += rasterImage->getWidth()) {
-            graphics->drawImage(rasterImage.get(), x, y, 20);
-        }
+    if (currentGameMenu != nullptr && !field_377) {
+        micro->gameCanvas->drawGame(var1);
+        currentGameMenu->render_76(var1);
     }
 }
 """
     if old_fill not in text:
-        raise PatchError("MenuManager.cpp: missing fillCanvasWithImage")
+        raise PatchError("MenuManager.cpp: missing method_202")
     text = text.replace(old_fill, new_fill, 1)
+
+    old_raster = """void MenuManager::fillCanvasWithImage(Graphics* graphics)
+{
+    for (int y = 0; y < getCanvasHeight(); y += rasterImage->getHeight()) {
+        for (int x = 0; x < getCanvasWidth(); x += rasterImage->getWidth()) {
+            graphics->drawImage(rasterImage.get(), x, y, 20);
+        }
+    }
+}
+"""
+    new_raster = """void MenuManager::fillCanvasWithImage(Graphics* graphics)
+{
+    (void)graphics;
+}
+"""
+    if old_raster not in text:
+        raise PatchError("MenuManager.cpp: missing fillCanvasWithImage")
+    text = text.replace(old_raster, new_raster, 1)
 
     if '#include "gd_config.h"' not in text:
         text = '#include "gd_config.h"\n' + text
@@ -853,6 +854,20 @@ void MenuManager::hostSetUnlocks(int easy, int medium, int pro)
                       encoding="utf-8")
 
     _sub(
+        src / "GameCanvas.h",
+        """    int field_232 = 2;
+""",
+        """    int field_232 = 0;
+""",
+        label="default phone keypad",
+    )
+
+    gc = src / "GameCanvas.cpp"
+    gct = gc.read_text(encoding="utf-8")
+    if '#include "gd_config.h"' not in gct:
+        gc.write_text('#include "gd_config.h"\n' + gct, encoding="utf-8")
+
+    _sub(
         src / "GameCanvas.cpp",
         """    gamePhysics->method_30(var1, var2);
 }
@@ -863,6 +878,63 @@ void MenuManager::hostSetUnlocks(int easy, int medium, int pro)
 }
 """,
         label="handleUpdatedInput null physics",
+    )
+    _sub(
+        src / "GameCanvas.cpp",
+        """        graphics->drawString("0:00.", width - defaultFontWidth00, height2 - 5, 40);
+        graphics->drawString("00", width - defaultFontWidth00, height2 - 5, 36);
+    } else {
+        setColor(0, 0, 0);
+        graphics->drawString(stringWithTime, width - defaultFontWidth00, height2 - 5, 40);
+        graphics->drawString(time10MsToStringCache[time10MsPart], width - defaultFontWidth00, height2 - 5, 36);
+    }
+""",
+        """        graphics->setFont(FontStorage::getFont(Font::STYLE_PLAIN, Font::SIZE_MEDIUM));
+        graphics->drawString("0:00.00", 8, 8, 20);
+    } else {
+        setColor(0, 0, 0);
+        graphics->setFont(FontStorage::getFont(Font::STYLE_PLAIN, Font::SIZE_MEDIUM));
+        graphics->drawString(stringWithTime + time10MsToStringCache[time10MsPart], 8, 8, 20);
+    }
+""",
+        label="drawTime top left",
+    )
+    _sub(
+        src / "GameCanvas.cpp",
+        """            if (isDrawingTime) {
+                drawTime(micro->gameTimeMs / 10L);
+            }
+""",
+        """            if (isDrawingTime) {
+                drawTime(micro->gameTimeMs / 10L);
+            }
+            if (!Micro::isInGameMenu) {
+                setColor(40, 40, 40);
+                graphics->fillCircle(width - 14, 12, 2);
+                graphics->fillCircle(width - 14, 20, 2);
+                graphics->fillCircle(width - 14, 28, 2);
+            }
+""",
+        label="pause dots",
+    )
+    _sub(
+        src / "GameCanvas.cpp",
+        """void GameCanvas::method_161(int var1, bool mode)
+{
+    int h = mode ? height : height2;
+    setColor(0, 0, 0);
+    graphics->fillRect(1, h - 4, width - 2, 3);
+    setColor(255, 255, 255);
+    graphics->fillRect(2, h - 3, (int)((int64_t)((width - 4) << 16) * (int64_t)var1 >> 16) >> 16, 1);
+}
+""",
+        """void GameCanvas::method_161(int var1, bool mode)
+{
+    (void)mode;
+    gd_set_progress(var1);
+}
+""",
+        label="progress line to keypad",
     )
 
     _sub(

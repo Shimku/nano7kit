@@ -1,6 +1,6 @@
 #include "../gd_config.h"
 #include "gdalloc.h"
-#include "gd_font8.h"
+#include "gd_ui_font.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -12,6 +12,8 @@ static int s_want_home;
 static char s_log[8192];
 static unsigned s_logn;
 static int s_gas, s_brake, s_lean_l, s_lean_r;
+static unsigned s_keys;
+static int s_progress16;
 static int s_fire, s_back, s_pause;
 static int s_tapx = -1, s_tapy = -1;
 
@@ -26,7 +28,7 @@ void gd_host_advance_ms(uint32_t d) { s_host_ms += d; }
 uint32_t gd_host_ms(void) { return s_host_ms; }
 void gd_host_set_buttons(int gas, int brake, int ll, int lr)
 {
-    s_gas = gas; s_brake = brake; s_lean_l = ll; s_lean_r = lr;
+    gd_set_held(gas, brake, ll, lr);
 }
 void gd_host_tap(int fire, int back, int pause, int x, int y)
 {
@@ -64,6 +66,7 @@ int gd_held_gas(void) { return s_gas; }
 int gd_held_brake(void) { return s_brake; }
 int gd_held_lean_l(void) { return s_lean_l; }
 int gd_held_lean_r(void) { return s_lean_r; }
+unsigned gd_held_keys(void) { return s_keys; }
 int gd_tap_fire(void) { return s_fire; }
 int gd_tap_back(void) { return s_back; }
 int gd_tap_pause(void) { return s_pause; }
@@ -76,9 +79,23 @@ void gd_input_reset_edges(void)
     s_tapx = s_tapy = -1;
 }
 
+void gd_set_key_mask(unsigned mask)
+{
+    s_keys = mask & 0x3FEu;
+    s_gas = !!(s_keys & ((1u << 1) | (1u << 2) | (1u << 3)));
+    s_brake = !!(s_keys & ((1u << 5) | (1u << 7) | (1u << 8) | (1u << 9)));
+    s_lean_l = !!(s_keys & ((1u << 1) | (1u << 4) | (1u << 7)));
+    s_lean_r = !!(s_keys & ((1u << 3) | (1u << 6) | (1u << 9)));
+}
+
 void gd_set_held(int gas, int brake, int ll, int lr)
 {
-    s_gas = gas; s_brake = brake; s_lean_l = ll; s_lean_r = lr;
+    unsigned m = 0;
+    if (gas) m |= 1u << 2;
+    if (brake) m |= 1u << 8;
+    if (ll) m |= 1u << 4;
+    if (lr) m |= 1u << 6;
+    gd_set_key_mask(m);
 }
 
 void gd_set_edges(int fire, int back, int pause, int x, int y)
@@ -90,111 +107,82 @@ void gd_set_edges(int fire, int back, int pause, int x, int y)
     s_tapy = y;
 }
 
+void gd_set_progress(int p16)
+{
+    s_progress16 = p16;
+}
+
+int gd_pad_digit(int x, int y)
+{
+    int col, row;
+    if (y < GD_PAD_Y || y >= GD_SCREEN_H || x < 0 || x >= GD_SCREEN_W) return 0;
+    col = x / GD_PAD_CELL_W;
+    row = (y - GD_PAD_Y) / GD_PAD_CELL_H;
+    if (col < 0 || col > 2 || row < 0 || row > 2) return 0;
+    return row * 3 + col + 1;
+}
+
+int gd_hit_pause(int x, int y)
+{
+    return x >= GD_PAUSE_X && x < GD_SCREEN_W && y >= GD_PAUSE_Y && y < GD_PAUSE_Y + GD_PAUSE_H;
+}
+
 int gd_bar_zone(int x)
 {
-    if (x < GD_Z_LEANL) return 0;
-    if (x < GD_Z_MENU) return 1;
-    if (x < GD_Z_LEANR) return 2;
-    if (x < GD_Z_GAS) return 3;
-    return 4;
-}
-
-static void bar_hline(uint32_t *fb, int w, int h, int y, int x0, int x1, uint32_t c)
-{
-    int x;
-    if (y < 0 || y >= h) return;
-    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
-    if (x0 < 0) x0 = 0;
-    if (x1 > w) x1 = w;
-    c |= 0xff000000u;
-    for (x = x0; x < x1; x++) fb[(long)y * w + x] = c;
-}
-
-static void bar_rect(uint32_t *fb, int w, int h, int x, int y, int rw, int rh, uint32_t c)
-{
-    int yy;
-    for (yy = 0; yy < rh; yy++) bar_hline(fb, w, h, y + yy, x, x + rw, c);
-}
-
-static void bar_tri_up(uint32_t *fb, int w, int h, int cx, int y0, int tw, int th, uint32_t c)
-{
-    int row, half;
-    for (row = 0; row < th; row++) {
-        half = ((row + 1) * (tw / 2)) / th;
-        if (half < 1) half = 1;
-        bar_hline(fb, w, h, y0 + row, cx - half, cx + half, c);
-    }
-}
-
-static void bar_tri_left(uint32_t *fb, int w, int h, int x0, int y0, int tw, int th, uint32_t c)
-{
-    int row, dist, len, mid = th / 2;
-    if (mid < 1) mid = 1;
-    for (row = 0; row < th; row++) {
-        dist = row < mid ? row : th - 1 - row;
-        len = 4 + (dist * (tw - 4)) / mid;
-        bar_hline(fb, w, h, y0 + row, x0 + tw - len, x0 + tw, c);
-    }
-}
-
-static void bar_tri_right(uint32_t *fb, int w, int h, int x0, int y0, int tw, int th, uint32_t c)
-{
-    int row, dist, len, mid = th / 2;
-    if (mid < 1) mid = 1;
-    for (row = 0; row < th; row++) {
-        dist = row < mid ? row : th - 1 - row;
-        len = 4 + (dist * (tw - 4)) / mid;
-        bar_hline(fb, w, h, y0 + row, x0, x0 + len, c);
-    }
+    if (x < 0) return 0;
+    if (x >= GD_SCREEN_W) return 2;
+    return x / GD_PAD_CELL_W;
 }
 
 void gd_draw_touch_bar(uint32_t *fb, int w, int h)
 {
-    static const int z0[5] = { GD_Z_BRK, GD_Z_LEANL, GD_Z_MENU, GD_Z_LEANR, GD_Z_GAS };
-    static const int z1[5] = { GD_Z_LEANL, GD_Z_MENU, GD_Z_LEANR, GD_Z_GAS, GD_SCREEN_W };
-    static const char *lab[5] = { "BRK", "<", "MENU", ">", "GAS" };
-    uint32_t idle[5] = { 0xff502018u, 0xff203848u, 0xff303038u, 0xff203848u, 0xff184828u };
-    uint32_t heldc[5] = { 0xffb04018u, 0xff3080b0u, 0xff585868u, 0xff3080b0u, 0xff18b040u };
-    int held[5];
-    int i, y, x, cy, cx, tw, th, ls, lw, lx;
-    uint32_t c, fg = 0xffffffffu;
-    if (!fb || w < GD_SCREEN_W || h < GD_GAME_H + 8) return;
-    held[0] = gd_held_brake();
-    held[1] = gd_held_lean_l();
-    held[2] = 0;
-    held[3] = gd_held_lean_r();
-    held[4] = gd_held_gas();
-    for (y = GD_GAME_H; y < h && y < GD_SCREEN_H; y++) {
-        uint32_t *row = fb + (long)y * w;
-        for (x = 0; x < w && x < GD_SCREEN_W; x++) {
-            int z = gd_bar_zone(x);
-            c = held[z] ? heldc[z] : idle[z];
-            row[x] = c | 0xff000000u;
+    const uint32_t white = 0xffffffffu, grey = 0xffd8d8d8u, line = 0xffc8c8c8u;
+    const uint32_t pressed = 0xffd0d0d0u, ink = 0xff2a2a2au, green = 0xff00cc00u;
+    int d, row, col, x, y, x0, y0, tw, fill;
+    char lab[2];
+    if (!fb || w < GD_SCREEN_W || h < GD_PAD_Y) return;
+
+    y0 = GD_GAME_H;
+    if (y0 < 0) y0 = 0;
+    for (y = y0; y < GD_PAD_Y && y < h; y++) {
+        uint32_t *p = fb + (long)y * w;
+        for (x = 0; x < w && x < GD_SCREEN_W; x++) p[x] = grey;
+    }
+    fill = (int)(((int64_t)GD_SCREEN_W * (int64_t)(s_progress16 < 0 ? 0 : s_progress16)) >> 16);
+    if (fill > GD_SCREEN_W) fill = GD_SCREEN_W;
+    if (fill < 0) fill = 0;
+    for (y = y0; y < GD_PAD_Y && y < h; y++) {
+        uint32_t *p = fb + (long)y * w;
+        for (x = 0; x < fill; x++) p[x] = green;
+    }
+
+    for (d = 1; d <= 9; d++) {
+        row = (d - 1) / 3;
+        col = (d - 1) % 3;
+        x0 = col * GD_PAD_CELL_W;
+        y0 = GD_PAD_Y + row * GD_PAD_CELL_H;
+        for (y = y0; y < y0 + GD_PAD_CELL_H && y < h; y++) {
+            uint32_t *p = fb + (long)y * w;
+            uint32_t c = (s_keys & (1u << d)) ? pressed : white;
+            for (x = x0; x < x0 + GD_PAD_CELL_W && x < w; x++) p[x] = c;
         }
+        lab[0] = (char)('0' + d);
+        lab[1] = 0;
+        tw = gd_ui_text_width(22, lab, 1);
+        gd_ui_draw_text(fb, w, h,
+                        x0 + (GD_PAD_CELL_W - tw) / 2,
+                        y0 + (GD_PAD_CELL_H - gd_ui_font_height(22)) / 2,
+                        lab, 1, 22, ink, x0, y0, GD_PAD_CELL_W, GD_PAD_CELL_H);
     }
-    for (i = 1; i < 5; i++) {
-        for (y = GD_GAME_H; y < h && y < GD_SCREEN_H; y++)
-            fb[(long)y * w + z0[i]] = 0xffe8e8e8u;
+    for (col = 1; col < 3; col++) {
+        x = col * GD_PAD_CELL_W;
+        if (x >= w) break;
+        for (y = GD_PAD_Y; y < h && y < GD_SCREEN_H; y++) fb[(long)y * w + x] = line;
     }
-    cy = GD_GAME_H + 28;
-    th = 28;
-    for (i = 0; i < 5; i++) {
-        cx = (z0[i] + z1[i]) / 2;
-        tw = z1[i] - z0[i] - 12;
-        if (tw < 12) tw = 12;
-        c = 0xfff0f0f0u;
-        if (i == 0) bar_rect(fb, w, h, cx - 12, cy - 12, 24, 24, c);
-        else if (i == 1) bar_tri_left(fb, w, h, cx - tw / 2, cy - th / 2, tw, th, c);
-        else if (i == 2) {
-            bar_rect(fb, w, h, cx - 12, cy - 14, 8, 28, c);
-            bar_rect(fb, w, h, cx + 4, cy - 14, 8, 28, c);
-        } else if (i == 3) bar_tri_right(fb, w, h, cx - tw / 2, cy - th / 2, tw, th, c);
-        else bar_tri_up(fb, w, h, cx, cy - 16, tw, 28, c);
-        ls = 2;
-        lw = (int)strlen(lab[i]) * 8 * ls;
-        lx = cx - lw / 2;
-        if (lx < z0[i] + 2) lx = z0[i] + 2;
-        gd_blit_str(fb, w, h, lx, h - 22, lab[i], ls, fg);
+    for (row = 1; row < 3; row++) {
+        y = GD_PAD_Y + row * GD_PAD_CELL_H;
+        if (y >= h) break;
+        for (x = 0; x < w && x < GD_SCREEN_W; x++) fb[(long)y * w + x] = line;
     }
 }
 

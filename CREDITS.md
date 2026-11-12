@@ -30,7 +30,7 @@ Credits for those are in nano7-untethered.
 | NanoApps compatibility fixes ([NanoBtFix](https://github.com/Merquice/NanoBtFix), [nano7-a1717-dock](https://github.com/Raphmatt/nano7-a1717-dock)) | Merquice, Raphmatt | AirPods H2 and Lightning Dock fixes inside the launcher | as upstream |
 | [PvZ-Portable](https://github.com/wszqkzqk/PvZ-Portable) changes | wszqkzqk, nano7kit | `games/pvz_portable` | LGPL-3.0 |
 | [gravity_defied_cpp](https://github.com/rgimad/gravity_defied_cpp) overlay | rgimad, AntonEvmenenko, Max Logaev, nano7kit; Codebrew | `games/gravity_defied` | GPL-2.0 |
-| [Inter](https://rsms.me/inter/) | Rasmus Andersson | Font in the PocketJS Fonts sample | OFL-1.1 ([LICENSES/Inter-OFL-1.1.txt](LICENSES/Inter-OFL-1.1.txt); also `untether/artifacts/extra/Data/PocketJS/fonts/LICENSE.txt`) |
+| [Inter](https://rsms.me/inter/) | Rasmus Andersson | Font in the PocketJS Fonts sample, and a small ASCII bitmap raster for Gravity Defied menus and the keypad (the Inter TTF is not shipped) | OFL-1.1 ([LICENSES/Inter-OFL-1.1.txt](LICENSES/Inter-OFL-1.1.txt); also `untether/artifacts/extra/Data/PocketJS/fonts/LICENSE.txt`) |
 | [Font Awesome Free](https://fontawesome.com) | Fonticons, Inc. | Home icons drawn from Font Awesome 7 Free Solid-900.otf | SIL OFL-1.1 (font), CC BY 4.0 (SVG/JS icons), MIT (code); [LICENSES/Font-Awesome-Free.txt](LICENSES/Font-Awesome-Free.txt) |
 | Motion Lab studies | yui540 | Motion Lab in JS QuickJS (credit shown on screen) | as upstream |
 

@@ -23,7 +23,6 @@ static const char *note_lines[7];
 static int note_n;
 static uint32_t frames, last_fps_ms, fps_count, fps_shown;
 static int prev_down;
-static int gas_latched;
 
 static int prepare_unload(void)
 {
@@ -53,45 +52,50 @@ static void draw_bar(uint32_t *fb, int w, int h)
     gd_draw_touch_bar(fb, w, h);
 }
 
+static unsigned keys_from_point(int x, int y)
+{
+    int d = gd_pad_digit(x, y);
+    return d ? (1u << d) : 0;
+}
+
 static void apply_touch(const hb_spoint_t *touch)
 {
     int down = touch && touch->down;
     int16_t x = touch ? touch->x : 0;
     int16_t y = touch ? touch->y : 0;
-    int gas = 0, brake = 0, ll = 0, lr = 0;
+    unsigned mask = 0;
     int pause = 0, mx = -1, my = -1;
     int32_t acc[3];
+    hb_touch_t fingers[HB_MAX_FINGERS];
+    int n, i;
 
     hb_accel_read_milli_g(acc);
-    if (acc[0] < -180) ll = 1;
-    if (acc[0] > 180) lr = 1;
+    if (acc[0] < -180) mask |= 1u << 4;
+    if (acc[0] > 180) mask |= 1u << 6;
 
-    if (down && y >= GD_GAME_H) {
-        int zone = gd_bar_zone(x);
-        if (x < 0) zone = 0;
-        if (zone <= 0) { brake = 1; gas_latched = 0; }
-        else if (zone == 1) ll = 1;
-        else if (zone == 2) {
-            if (!prev_down) pause = 1;
-        } else if (zone == 3) lr = 1;
-        else { gas = 1; gas_latched = 1; }
-        if (gas_latched && zone >= 1) gas = 1;
-        if (brake) gas = 0;
-    } else if (!down) {
-        gas_latched = 0;
+    if (down) mask |= keys_from_point(x, y);
+
+    hb_touch_drain_all();
+    n = hb_touch_poll_multi(fingers);
+    for (i = 0; i < n; i++) {
+        if (fingers[i].status == 2) continue;
+        mask |= keys_from_point(fingers[i].x, fingers[i].y);
     }
 
-    if (down && y < GD_GAME_H && !prev_down) {
+    if (down && y < GD_GAME_H && gd_hit_pause(x, y) && !prev_down)
+        pause = 1;
+
+    if (down && y < GD_GAME_H && !pause && !prev_down) {
         mx = x;
         my = y;
         gd_log("input: tap %d,%d", x, y);
     }
-    if ((gas || brake || ll || lr) && (frames % 120u) == 1u) {
-        gd_log("input: gas=%d brake=%d leanL=%d leanR=%d accelx=%d",
-               gas, brake, ll, lr, (int)acc[0]);
+    if ((mask || pause) && (frames % 120u) == 1u) {
+        gd_log("input: keys=%u pause=%d accelx=%d fingers=%d",
+               mask, pause, (int)acc[0], n);
     }
 
-    gd_set_held(gas, brake, ll, lr);
+    gd_set_key_mask(mask);
     gd_set_edges(0, 0, pause, mx, my);
     prev_down = down;
 }
