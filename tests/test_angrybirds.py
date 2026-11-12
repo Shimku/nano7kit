@@ -319,6 +319,8 @@ class SourceTests(unittest.TestCase):
         self.assertIn("ab_clamp_user_view", entry)
         self.assertNotIn("if (mn < 0.32f) mn = 0.32f", entry)
         self.assertIn("panel_check_pigs", host)
+        self.assertIn("pinch_out_pigs_ok", host)
+        self.assertIn("pinch-out needs pan", host)
         self.assertIn("pix_pig_green", host)
         self.assertIn("pan_to_right_limit", host)
         self.assertIn("play_level_camera", host)

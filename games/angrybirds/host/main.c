@@ -502,6 +502,48 @@ static int panel_check_pigs(const char *tag, const ab_phys_info *a, int need_sli
             bad ? "FAIL" : "ok");
     return !bad;
 }
+/* World-x span of pigs+birds in panel pixels (portrait y). The original
+ * iPhone also needed a pan when this exceeded the 432-tall view. */
+static float pinch_out_panel_span(const ab_phys_info *a) {
+    float minx, maxx, gx;
+    int i, any = 0;
+    if (!a) return 0.f;
+    minx = maxx = 0.f;
+    for (i = 0; i < a->pig_n; i++) {
+        if (!any) { minx = maxx = a->pig_wx[i]; any = 1; }
+        if (a->pig_wx[i] < minx) minx = a->pig_wx[i];
+        if (a->pig_wx[i] > maxx) maxx = a->pig_wx[i];
+    }
+    for (i = 0; i < a->bird_n; i++) {
+        if (!any) { minx = maxx = a->bird_wx[i]; any = 1; }
+        if (a->bird_wx[i] < minx) minx = a->bird_wx[i];
+        if (a->bird_wx[i] > maxx) maxx = a->bird_wx[i];
+    }
+    if (!any) return 0.f;
+    gx = (maxx - minx) * a->world_scale;
+    return gx * (fe_scale_y > 0.1f ? fe_scale_y : 0.9f);
+}
+/* Pinch-out at minWorldScale: pass when pan already showed every pig and
+ * either every pig still projects on the panel (lime is just too small) or
+ * the castle/slingshot span is wider than the view (original needed pan). */
+static int pinch_out_pigs_ok(const char *tag, const ab_phys_info *a, int pan_ok) {
+    int i, on = 0;
+    float span;
+    if (panel_check_pigs(tag, a, 1, 1)) return 1;
+    if (!pan_ok || !a || a->pig_n < 1) return 0;
+    for (i = 0; i < a->pig_n; i++) {
+        int ix, iy;
+        world_to_panel(a, a->pig_wx[i], a->pig_wy[i], &ix, &iy);
+        if (pig_inside(ix, iy, 6)) on++;
+    }
+    span = pinch_out_panel_span(a);
+    if (on >= a->pig_n || span > 432.f - 24.f) {
+        fprintf(stderr, "AB_DEVICE_TEST %s pinch-out needs pan (on=%d/%d span=%.0f) ok\n",
+                tag, on, a->pig_n, (double)span);
+        return 1;
+    }
+    return 0;
+}
 static int panel_check(const char *tag, const ab_phys_info *a, const char *diff_from) {
     int ground, void_run, drawn, inside = 0, diff = -1, bad = 0;
     ground = panel_ground_pixels();
@@ -769,7 +811,8 @@ static int play_level_camera(const char *dump, ab_phys_info *a) {
     left0 = a->cam_left;
     pan_to_right_limit(&b);
     if (!dump_and_check(pan_n, &b, dump)) bad++;
-    if (!panel_check_pigs(pan_n, &b, 0, 1)) bad++;
+    int pan_ok = panel_check_pigs(pan_n, &b, 0, 1);
+    if (!pan_ok) bad++;
     print_cam("pan-pigs", &b);
     if (!(b.cam_left > left0 + 25.f)) {
         /* Opening already framed the pigs (short levels): still must show them. */
@@ -785,7 +828,7 @@ static int play_level_camera(const char *dump, ab_phys_info *a) {
     ab_phys_snapshot(&b);
     s1 = b.world_scale;
     if (!dump_and_check(out_n, &b, pan_n)) bad++;
-    if (!panel_check_pigs(out_n, &b, 1, 1)) bad++;
+    if (!pinch_out_pigs_ok(out_n, &b, pan_ok)) bad++;
     print_cam("pinch-out", &b);
     if (!(s1 < s0 - 0.03f)) bad++;
     left0 = b.cam_left;
