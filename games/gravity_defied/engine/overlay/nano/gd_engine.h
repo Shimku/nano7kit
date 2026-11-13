@@ -20,6 +20,9 @@ void gd_engine_note_physics(int v);
 void gd_engine_select_row(int row);
 void gd_engine_pick_row(int row);
 void gd_engine_set_unlocks(int easy, int medium, int pro);
+int gd_engine_cam_x(void);
+int gd_engine_game_time(void);
+int gd_engine_phys_ticks(void);
 #endif
 #ifdef __cplusplus
 }

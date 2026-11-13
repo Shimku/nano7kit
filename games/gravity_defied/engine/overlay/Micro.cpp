@@ -21,11 +21,38 @@ Micro::~Micro() { if (g_micro == this) g_micro = nullptr; }
 
 void Micro::setNumPhysicsLoops(int value) { numPhysicsLoops = value; }
 
+void Micro::resetPhysClock()
+{
+    physLastMs = (int)gd_millis();
+    physAccMs = 0;
+    physClockOn = 1;
+}
+
+int Micro::takePhysicsTicks()
+{
+    int now, dt, n;
+    if (!physClockOn) resetPhysClock();
+    now = (int)gd_millis();
+    dt = now - physLastMs;
+    physLastMs = now;
+    if (dt < 0) dt = 0;
+    if (dt > GD_TICK_MS * GD_TICK_CATCHUP) dt = GD_TICK_MS * GD_TICK_CATCHUP;
+    physAccMs += dt;
+    n = 0;
+    while (physAccMs >= GD_TICK_MS && n < GD_TICK_CATCHUP) {
+        physAccMs -= GD_TICK_MS;
+        n++;
+    }
+    return n;
+}
+
 void Micro::gameToMenu()
 {
     gameCanvas->removeMenuCommand();
     isInGameMenu = true;
     menuManager->addOkAndBackCommands();
+    physClockOn = 0;
+    physAccMs = 0;
 }
 
 void Micro::menuToGame()
@@ -34,6 +61,8 @@ void Micro::menuToGame()
     isInGameMenu = false;
     gameCanvas->addMenuCommand();
     if (gameCanvas) gameCanvas->isDrawingTime = true;
+    resetPhysClock();
+    gd_tilt_recalibrate();
 }
 
 int64_t Micro::goLoadingStep()
@@ -114,17 +143,23 @@ void Micro::restart(bool var1)
             levelLoader->getName(menuManager->getCurrentLevel(), menuManager->getCurrentTrack()), 3000);
     }
     gameCanvas->method_129();
+    resetPhysClock();
+    gd_tilt_recalibrate();
 }
 
 void Micro::destroyApp(bool var1)
 {
     (void)var1;
+    if (field_242) {
+        gd_log_close();
+        return;
+    }
     field_249 = false;
     field_242 = true;
     if (menuManager)
         menuManager->saveSmthToRecordStoreAndCloseIt();
-    gd_log("quit: destroyApp saved, requesting home");
-    gd_request_home("destroyApp");
+    gd_request_home("destroyApp saved, requesting home");
+    gd_log_close();
 }
 
 void Micro::requestQuit() { destroyApp(true); }
@@ -159,8 +194,58 @@ void Micro::goalLoop()
     /* Blocking 1 s loop removed; tick() uses goalUntil. */
 }
 
+int Micro::runPhysicsFrame()
+{
+    int i, var5 = 0;
+    for (i = numPhysicsLoops; i > 0; --i) {
+        if (field_248) gameTimeMs += 20L;
+        if (timeMs == 0L) timeMs = Time::currentTimeMillis();
+        var5 = gamePhysics->updatePhysics();
+#ifdef GD_HOST
+        gd_engine_note_physics(var5);
+#endif
+        if (var5 == 5) {
+            static int crash_n;
+            if ((++crash_n % 60) == 1)
+                gd_log("physics: crash n=%d gas=%d t=%d", crash_n, gd_held_gas(), (int)(gameTimeMs / 10));
+        }
+        if (var5 == 3 && field_246 == 0L) {
+            field_246 = Time::currentTimeMillis() + 3000L;
+            gameCanvas->scheduleGameTimerTask("Crashed", 3000);
+        }
+        if (var5 == 5 && field_246 == 0L) {
+            /* Original sleeps about 1s then restarts. Immediate restart on a
+             * spawn overlap turned into a crash loop; settleSpawn should stop
+             * that, and this delay still matches the phone. */
+            field_246 = Time::currentTimeMillis() + 1000L;
+            gameCanvas->scheduleGameTimerTask("Crashed", 1000);
+        }
+        if (field_246 != 0L && field_246 < Time::currentTimeMillis()) restart(true);
+        if (var5 == 5) {
+            /* restart is delayed via field_246 */
+        } else if (var5 == 4) {
+            timeMs = 0L;
+            gameTimeMs = 0L;
+        } else if (var5 == 1 || var5 == 2) {
+            if (var5 == 2) gameTimeMs -= 10L;
+            if (!gamePhysics->field_69)
+                gameCanvas->scheduleGameTimerTask("Wheelie!", 1000);
+            else
+                gameCanvas->scheduleGameTimerTask("Finished", 1000);
+            goalUntil = (int)gd_millis() + 1000;
+            field_248 = var5 != 4;
+            return var5;
+        }
+        field_248 = var5 != 4;
+    }
+    gamePhysics->method_53();
+    return var5;
+}
+
 void Micro::tick()
 {
+    int ticks, t, outcome;
+
     if (!field_249) return;
 
     if (!isInited) {
@@ -198,9 +283,6 @@ void Micro::tick()
             gd_log("quit: currentGameMenu null");
             gd_request_home("menu-null");
         }
-        if (wasInMenu && !isInGameMenu) {
-            /* handled below */
-        }
         wasInMenu = 1;
         if (isInGameMenu) return;
     }
@@ -210,6 +292,8 @@ void Micro::tick()
         if (menuManager->method_196()) restart(true);
     }
 
+    ticks = takePhysicsTicks();
+
     if (goalUntil) {
         if ((int)gd_millis() >= goalUntil) {
             goalUntil = 0;
@@ -218,13 +302,17 @@ void Micro::tick()
             gameCanvas->repaint();
             return;
         }
-        for (int i = numPhysicsLoops; i > 0; --i) {
-            if (gamePhysics->updatePhysics() == 5) {
-                goalUntil = 0;
-                return;
+        for (t = 0; t < ticks; t++) {
+            int i;
+            for (i = numPhysicsLoops; i > 0; --i) {
+                if (gamePhysics->updatePhysics() == 5) {
+                    goalUntil = 0;
+                    gameCanvas->repaint();
+                    return;
+                }
             }
+            gamePhysics->method_53();
         }
-        gamePhysics->method_53();
         gameCanvas->repaint();
         return;
     }
@@ -235,50 +323,14 @@ void Micro::tick()
         menuManager->method_211(var5);
     }
 
-    for (int i = numPhysicsLoops; i > 0; --i) {
-        if (field_248) gameTimeMs += 20L;
-        if (timeMs == 0L) timeMs = Time::currentTimeMillis();
-        int var5 = gamePhysics->updatePhysics();
-#ifdef GD_HOST
-        gd_engine_note_physics(var5);
-#endif
-        if (var5 == 5) {
-            static int crash_n;
-            if ((++crash_n % 60) == 1)
-                gd_log("physics: crash n=%d gas=%d t=%d", crash_n, gd_held_gas(), (int)(gameTimeMs / 10));
-        }
-        if (var5 == 3 && field_246 == 0L) {
-            field_246 = Time::currentTimeMillis() + 3000L;
-            gameCanvas->scheduleGameTimerTask("Crashed", 3000);
-        }
-        if (var5 == 5 && field_246 == 0L) {
-            /* Original sleeps about 1s then restarts. Immediate restart on a
-             * spawn overlap turned into a crash loop; settleSpawn should stop
-             * that, and this delay still matches the phone. */
-            field_246 = Time::currentTimeMillis() + 1000L;
-            gameCanvas->scheduleGameTimerTask("Crashed", 1000);
-        }
-        if (field_246 != 0L && field_246 < Time::currentTimeMillis()) restart(true);
-        if (var5 == 5) {
-            /* restart is delayed via field_246 */
-        } else if (var5 == 4) {
-            timeMs = 0L;
-            gameTimeMs = 0L;
-        } else if (var5 == 1 || var5 == 2) {
-            if (var5 == 2) gameTimeMs -= 10L;
-            if (!gamePhysics->field_69)
-                gameCanvas->scheduleGameTimerTask("Wheelie!", 1000);
-            else
-                gameCanvas->scheduleGameTimerTask("Finished", 1000);
-            goalUntil = (int)gd_millis() + 1000;
-            field_248 = var5 != 4;
+    for (t = 0; t < ticks; t++) {
+        outcome = runPhysicsFrame();
+        if (outcome == 1 || outcome == 2) {
             gameCanvas->repaint();
             return;
         }
-        field_248 = var5 != 4;
     }
 
-    gamePhysics->method_53();
     gameCanvas->repaint();
 }
 

@@ -50,6 +50,7 @@ void gd_engine_quit(void)
     if (s_micro) s_micro->requestQuit();
     RecordStore::shutdown();
     FontStorage::clearAll();
+    gd_log_close();
 }
 
 int gd_engine_in_menu(void)
@@ -75,8 +76,10 @@ void gd_engine_dump_stats(char *buf, unsigned n)
 
 #ifdef GD_HOST
 #include "LevelLoader.h"
+#include "GamePhysics.h"
 
 static int s_outcome;
+static int s_phys_ticks;
 static char s_track_name[48];
 
 void gd_host_key(int code)
@@ -93,7 +96,7 @@ void gd_host_key_up(int code)
         s_micro->gameCanvas->keyReleased(code);
 }
 
-void gd_engine_clear_result(void) { s_outcome = 0; }
+void gd_engine_clear_result(void) { s_outcome = 0; s_phys_ticks = 0; }
 
 int gd_engine_track_result(void) { return s_outcome; }
 
@@ -101,6 +104,7 @@ const char *gd_engine_track_name(void) { return s_track_name; }
 
 void gd_engine_note_physics(int v)
 {
+    s_phys_ticks++;
     if (!s_outcome && (v == 1 || v == 2 || v == 3 || v == 5))
         s_outcome = v;
 }
@@ -141,4 +145,18 @@ void gd_engine_set_unlocks(int easy, int medium, int pro)
     if (!s_micro || !s_micro->menuManager) return;
     s_micro->menuManager->hostSetUnlocks(easy, medium, pro);
 }
+
+int gd_engine_cam_x(void)
+{
+    if (!s_micro || !s_micro->gamePhysics) return 0;
+    return s_micro->gamePhysics->getCamPosX();
+}
+
+int gd_engine_game_time(void)
+{
+    if (!s_micro) return 0;
+    return (int)s_micro->gameTimeMs;
+}
+
+int gd_engine_phys_ticks(void) { return s_phys_ticks; }
 #endif

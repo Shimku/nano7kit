@@ -820,7 +820,7 @@ def _tracks_script() -> str:
             if (level, track) in dumps:
                 slug = LEVEL_NAMES[level].lower() + "_" + TRACK_NAMES[level][track].lower().replace(" ", "_").replace("%", "pct")
                 lines.append(f"dump gameplay_{slug}")
-            lines += ["hold 1 0 0 0", "until 600", "hold 0 0 0 0", "wait 4"]
+            lines += ["hold 1 0 0 0", "until 18000", "hold 0 0 0 0", "wait 4"]
     lines += ["quit", ""]
     return "\n".join(lines)
 
@@ -832,10 +832,13 @@ def _save_script() -> str:
         "dump menu_main_save",
         "pick 1",
         "wait 6",
+        "row 6",
+        "wait 2",
+        "dump menu_options_tilt",
         "pick 1",
         "wait 4",
         "dump menu_options_shadows",
-        "pick 7",
+        "pick 8",
         "wait 6",
         "unlocks 2 4 1",
         "row 4",
@@ -866,6 +869,132 @@ def _pause_quit_script() -> str:
         "wait 4",
         "",
     ])
+
+
+def _speed_script() -> str:
+    """Hold gas for 3 s of simulated time on a flat track, then report camx."""
+    return "\n".join([
+        "wait 70",
+        "track 0 0 0",
+        "holdms 500",
+        "hold 1 0 0 0",
+        "holdms 3000",
+        "report",
+        "hold 0 0 0 0",
+        "quit",
+        "",
+    ])
+
+
+def _multitouch_script() -> str:
+    """Two fingers held, one slides to another cell, one lifts."""
+    # 3x3 keypad: cell 80x42, origin (0, 306). Digit 2 gas, 4 lean left, 6 lean right.
+    return "\n".join([
+        "wait 70",
+        "track 0 0 0",
+        "wait 8",
+        "finger 0 120 327",
+        "finger 1 40 369",
+        "report",
+        "finger 1 200 369",
+        "report",
+        "fingerup 0",
+        "report",
+        "fingerup 1",
+        "report",
+        "quit",
+        "",
+    ])
+
+
+def _tilt_off_script() -> str:
+    """Accelerometer must not inject keys while Tilt to lean is Off."""
+    return "\n".join([
+        "wait 70",
+        "track 0 0 0",
+        "wait 8",
+        "accel 400",
+        "report",
+        "accel -400",
+        "report",
+        "accel 0",
+        "tilt 1",
+        "report",
+        "accel 400",
+        "report",
+        "quit",
+        "",
+    ])
+
+
+def _parse_speed(blob: str) -> dict:
+    camx = gametime = phys = None
+    for line in blob.splitlines():
+        if "speed: camx=" in line:
+            parts = dict(kv.split("=", 1) for kv in line.split("speed: ", 1)[1].split() if "=" in kv)
+            try:
+                camx = int(parts.get("camx", "0"))
+                gametime = int(parts.get("gametime", "0"))
+                phys = int(parts.get("phys", "0"))
+            except ValueError:
+                pass
+    return {"camx": camx, "gametime": gametime, "phys": phys}
+
+
+def _write_contact_sheet(art: Path, pngs: List[Path]) -> Optional[Path]:
+    """Lay out a few host dumps, including the Options row for Tilt to lean."""
+    want = [
+        "menu_main.png",
+        "menu_options_tilt.png",
+        "menu_options_shadows.png",
+        "gameplay_easy_intro.png",
+        "gameplay_key.png",
+        "menu_ingame.png",
+        "menu_pause_quit.png",
+        "notice.png",
+    ]
+    by_name = {p.name: p for p in pngs}
+    cells = [by_name[n] for n in want if n in by_name]
+    if not cells:
+        return None
+    decoded = []
+    for p in cells:
+        try:
+            w, h, rgba = decode_png(p.read_bytes())
+        except Exception:
+            continue
+        decoded.append((p.stem, w, h, rgba))
+    if not decoded:
+        return None
+    cols = 4
+    pad = 8
+    cell_w = max(w for _, w, _, _ in decoded)
+    cell_h = max(h for _, _, h, _ in decoded)
+    rows = (len(decoded) + cols - 1) // cols
+    sw = cols * cell_w + (cols + 1) * pad
+    sh = rows * cell_h + (rows + 1) * pad
+    out = bytearray(sw * sh * 4)
+    for i in range(sw * sh):
+        out[i * 4:i * 4 + 4] = bytes((32, 32, 36, 255))
+    for i, (_name, w, h, rgba) in enumerate(decoded):
+        c, r = i % cols, i // cols
+        x0 = pad + c * (cell_w + pad)
+        y0 = pad + r * (cell_h + pad)
+        for y in range(h):
+            src = y * w * 4
+            dst = ((y0 + y) * sw + x0) * 4
+            out[dst:dst + w * 4] = rgba[src:src + w * 4]
+    dest = art / "contact_sheet.png"
+    write_png_rgba(dest, sw, sh, bytes(out))
+    extra_art = Path("/opt/cursor/artifacts/gravity-defied")
+    try:
+        extra_art.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(dest, extra_art / dest.name)
+        for p in cells:
+            shutil.copyfile(p, extra_art / p.name)
+    except OSError:
+        pass
+    return dest
 
 
 def _loaded_line(blob: str) -> str:
@@ -981,6 +1110,10 @@ def host_test(*, artifacts: Optional[Path] = None) -> dict:
     if data.exists():
         shutil.rmtree(data)
     stage_payload_data(facts, data)
+    flat_data = out / "host-flat-data"
+    if flat_data.exists():
+        shutil.rmtree(flat_data)
+    shutil.copytree(data, flat_data)
     classic = engine / "assets" / "levels.mrg"
     if classic.is_file() and classic.stat().st_size > 1000:
         shutil.copyfile(classic, data / "levels.mrg")
@@ -1035,9 +1168,19 @@ def host_test(*, artifacts: Optional[Path] = None) -> dict:
 
     _wipe_saves(data)
     tracks_log, tracks_rc = run(
-        ["--free", bt_free, "--largest", bt_lg, "--frames", "20000"],
+        ["--free", bt_free, "--largest", bt_lg, "--step-ms", "30", "--frames", "25000"],
         _tracks_script(),
         "tracks",
+        allow_rc=(0, 1),
+    )
+
+    hi_free = str(6 * 1024 * 1024)
+    hi_lg = str(4 * 1024 * 1024)
+    _wipe_saves(data)
+    tracks_hi_log, tracks_hi_rc = run(
+        ["--free", hi_free, "--largest", hi_lg, "--step-ms", "30", "--frames", "25000"],
+        _tracks_script(),
+        "tracks_high",
         allow_rc=(0, 1),
     )
 
@@ -1084,21 +1227,161 @@ def host_test(*, artifacts: Optional[Path] = None) -> dict:
         raise Refused(f"pause relaunch lost save/unlocks: {loaded_pause}")
     if "shadows=1" not in loaded_relaunch or "tracks=2,4,1" not in loaded_relaunch:
         raise Refused(f"main-menu save/unlocks did not survive relaunch: {loaded_relaunch}")
+    if "tilt=1" not in loaded_pause or "tilt=1" not in loaded_relaunch:
+        raise Refused(f"Tilt to lean default Off was not saved: {loaded_pause} / {loaded_relaunch}")
+
+    _wipe_saves(data)
+    save_hi_log, save_hi_rc = run(
+        ["--free", hi_free, "--largest", hi_lg, "--frames", "400"],
+        _save_script(),
+        "save_main_high",
+        allow_rc=(0,),
+    )
+    if "input: Exit Game" not in save_hi_log:
+        raise Refused("high-mem save_main did not fire Exit Game from Main")
+    pause_hi_log, pause_hi_rc = run(
+        ["--free", hi_free, "--largest", hi_lg, "--frames", "400"],
+        _pause_quit_script(),
+        "save_pause_high",
+        allow_rc=(0,),
+    )
+    if "input: Exit Game" not in pause_hi_log:
+        raise Refused("high-mem pause quit did not fire Exit Game")
+    (data / "GDTRStates").write_bytes(b"\xff" * 64)
+    corrupt_hi_log, corrupt_hi_rc = run(
+        ["--free", hi_free, "--largest", hi_lg, "--frames", "80"],
+        "wait 50\ndump after_corrupt_high\nquit\n",
+        "corrupt_high",
+        allow_rc=(0,),
+    )
+
+    _wipe_saves(flat_data)
+    speed9_log, speed9_rc = run(
+        ["--free", hi_free, "--largest", hi_lg, "--step-ms", "9", "--frames", "800"],
+        _speed_script(),
+        "speed_9ms",
+        allow_rc=(0, 1),
+        data_dir=flat_data,
+    )
+    _wipe_saves(flat_data)
+    speed33_log, speed33_rc = run(
+        ["--free", hi_free, "--largest", hi_lg, "--step-ms", "33", "--frames", "400"],
+        _speed_script(),
+        "speed_33ms",
+        allow_rc=(0, 1),
+        data_dir=flat_data,
+    )
+    s9 = _parse_speed(speed9_log)
+    s33 = _parse_speed(speed33_log)
+    if s9["camx"] is None or s33["camx"] is None:
+        raise Refused(f"speed test missing camx: 9ms={s9} 33ms={s33}")
+    if s9["camx"] == 0 and s33["camx"] == 0:
+        raise Refused(f"speed test bike did not move: 9ms={s9} 33ms={s33}")
+    denom = max(abs(s9["camx"]), abs(s33["camx"]), 1)
+    cam_rel = abs(s9["camx"] - s33["camx"]) / float(denom)
+    if cam_rel > 0.15:
+        raise Refused(
+            f"gas distance depends on frame rate: 9ms camx={s9['camx']} vs 33ms camx={s33['camx']} rel={cam_rel:.3f}"
+        )
+    pdenom = max(s9.get("phys") or 1, s33.get("phys") or 1, 1)
+    phys_rel = abs((s9.get("phys") or 0) - (s33.get("phys") or 0)) / float(pdenom)
+    if phys_rel > 0.15:
+        raise Refused(
+            f"physics tick count depends on frame rate: 9ms phys={s9.get('phys')} vs 33ms phys={s33.get('phys')} rel={phys_rel:.3f}"
+        )
+    for label, sp in (("9ms", s9), ("33ms", s33)):
+        gt = sp["gametime"]
+        if gt is None or gt < 2500 or gt > 8000:
+            raise Refused(f"{label} gameTimeMs {gt} is not ~3.5s of original 30 ms ticks")
+        if (sp.get("phys") or 0) < 150:
+            raise Refused(f"{label} phys ticks {sp.get('phys')} is too few for 3.5s at 2 loops / 30 ms")
+
+    _wipe_saves(flat_data)
+    mt_log, mt_rc = run(
+        ["--free", hi_free, "--largest", hi_lg, "--frames", "200"],
+        _multitouch_script(),
+        "multitouch",
+        allow_rc=(0, 1),
+        data_dir=flat_data,
+    )
+    mt_keys = []
+    for line in mt_log.splitlines():
+        if "speed: camx=" in line and "keys=" in line:
+            parts = dict(kv.split("=", 1) for kv in line.split("speed: ", 1)[1].split() if "=" in kv)
+            try:
+                mt_keys.append(int(parts.get("keys", "-1")))
+            except ValueError:
+                pass
+    if mt_keys[:4] != [4 | 16, 4 | 64, 64, 0]:
+        raise Refused(f"multitouch key sequence {mt_keys[:4]} is not [20, 68, 64, 0] (two-hold, slide, lift, lift)")
+
+    _wipe_saves(flat_data)
+    tilt_log, tilt_rc = run(
+        ["--free", hi_free, "--largest", hi_lg, "--frames", "200"],
+        _tilt_off_script(),
+        "tilt_off",
+        allow_rc=(0, 1),
+        data_dir=flat_data,
+    )
+    tilt_reports = []
+    for line in tilt_log.splitlines():
+        if "speed: camx=" in line and "keys=" in line:
+            parts = dict(kv.split("=", 1) for kv in line.split("speed: ", 1)[1].split() if "=" in kv)
+            try:
+                tilt_reports.append({
+                    "keys": int(parts.get("keys", "-1")),
+                    "tilt": int(parts.get("tilt", "-1")),
+                    "accelx": int(parts.get("accelx", "0")),
+                })
+            except ValueError:
+                pass
+    if len(tilt_reports) < 4:
+        raise Refused(f"tilt test missing reports: {tilt_reports}")
+    if tilt_reports[0]["keys"] != 0 or tilt_reports[1]["keys"] != 0:
+        raise Refused(f"tilt Off still injected keys: {tilt_reports[:2]}")
+    if tilt_reports[0]["tilt"] != 0 or tilt_reports[1]["tilt"] != 0:
+        raise Refused(f"tilt option was not Off by default: {tilt_reports[:2]}")
+    if tilt_reports[3]["keys"] == 0 or tilt_reports[3]["tilt"] != 1:
+        raise Refused(f"tilt On did not lean: {tilt_reports[2:]}")
+
+    def _check_log_file(d: Path, name: str) -> None:
+        p = d / "log.txt"
+        raw = p.read_bytes() if p.is_file() else b""
+        if b"\x00" in raw:
+            raise Refused(f"{name} log.txt contains NUL / junk bytes")
+        if raw and not raw.endswith(b"\n"):
+            raise Refused(f"{name} log.txt does not end with a newline")
+        text = raw.decode("utf-8", "replace")
+        if text.count("engine: start") != 1:
+            raise Refused(f"{name} log.txt engine: start count={text.count('engine: start')} (want 1)")
+        if "quit: destroyApp saved" in text and text.count("quit: destroyApp saved") != 1:
+            raise Refused(f"{name} log.txt duplicated quit lines")
+
+    _check_log_file(data, "classic")
+    _check_log_file(flat_data, "flat")
 
     pngs = _ppms_to_pngs(art)
+    sheet = _write_contact_sheet(art, [Path(p) for p in pngs])
     tracks = _parse_tracks(tracks_log)
     missing_tracks = [r for r in tracks if r.get("result") in (None, "missing")]
     if len(tracks) != 30 or missing_tracks:
         raise Refused(f"expected a result for all 30 tracks, got {len(tracks)} ({missing_tracks[:3]})")
+    tracks_hi = _parse_tracks(tracks_hi_log)
+    missing_hi = [r for r in tracks_hi if r.get("result") in (None, "missing")]
+    if len(tracks_hi) != 30 or missing_hi:
+        raise Refused(f"high-mem expected 30 tracks, got {len(tracks_hi)} ({missing_hi[:3]})")
     mem = {}
     for label, blob in (
         ("bluetooth_music", menu_log),
         ("one_mb", low_log),
         ("tracks", tracks_log),
+        ("tracks_high", tracks_hi_log),
         ("tiny", tiny_log),
     ):
         arena, peak, fails = _peak_fails(blob)
         mem[label] = {"arena": arena, "peak": peak, "fails": fails}
+        if fails:
+            raise Refused(f"{label} alloc fails={fails}")
     shadows_loaded = [
         ln for ln in (save1_log + save2_log + save3_log).splitlines()
         if "save: loaded" in ln
@@ -1107,6 +1390,7 @@ def host_test(*, artifacts: Optional[Path] = None) -> dict:
         "binary": str(binary),
         "artifacts": str(art),
         "pngs": [str(p) for p in pngs],
+        "contact_sheet": str(sheet) if sheet else "",
         "notice_tiny": tiny_log[-800:],
         "notice_tiny_rc": tiny_rc,
         "menus": menu_log[-1500:],
@@ -1116,15 +1400,25 @@ def host_test(*, artifacts: Optional[Path] = None) -> dict:
         "tracks_log": tracks_log[-2500:],
         "tracks_rc": tracks_rc,
         "tracks": tracks,
+        "tracks_high": tracks_hi,
+        "tracks_high_rc": tracks_hi_rc,
         "save_main_rc": save1_rc,
         "save_pause_rc": save2_rc,
         "save_relaunch_rc": save3_rc,
+        "save_high_rc": save_hi_rc,
+        "pause_high_rc": pause_hi_rc,
+        "corrupt_high_rc": corrupt_hi_rc,
         "save_bytes": save_bytes,
         "save_loaded": shadows_loaded,
         "save_loaded_pause": loaded_pause,
         "save_loaded_relaunch": loaded_relaunch,
         "corrupt": corrupt_log[-800:],
         "corrupt_rc": corrupt_rc,
+        "speed_9ms": s9,
+        "speed_33ms": s33,
+        "speed_cam_rel": cam_rel,
+        "multitouch_keys": mt_keys[:4],
+        "tilt_reports": tilt_reports,
         "mem": mem,
         "ppm_count": len(list(art.glob("*.ppm"))),
         "sprite_pngs": n_art,

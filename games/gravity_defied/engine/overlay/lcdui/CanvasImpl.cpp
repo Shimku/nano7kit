@@ -49,7 +49,8 @@ void CanvasImpl::processEvents()
             if ((keys & bit) && !(prevKeys & bit)) canvas->publicKeyPressed(code);
             if (!(keys & bit) && (prevKeys & bit)) canvas->publicKeyReleased(code);
         }
-        /* Restart clears activeKeys; keep held J2ME digits asserted. */
+        /* method_164 zeros activeKeys on restart. Re-assert is a boolean set,
+         * not a repeated tap: handleUpdatedInput reads the flag array. */
         for (d = 1; d <= 9; d++) {
             if (keys & (1u << d)) canvas->publicKeyPressed(48 + d);
         }

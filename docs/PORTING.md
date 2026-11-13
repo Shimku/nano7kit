@@ -169,9 +169,10 @@ Files: `games/gravity_defied` (GPL-2.0), `host/gravity_defied.py`.
   J2ME game by Codebrew (Tors, Set, Per), 2004. Game data (`levels.mrg`, sprites)
   comes from your own jar and is never committed.
 - **Device layer:** RAW_SURFACE framebuffer (240x432 XRGB8888), an iOS-style 3x3
-  phone keypad (J2ME keys 1-9) under a 3 px green progress line, accelerometer
-  lean, dlmalloc arena in `HB_APP_AUX_BLOCK`, a small Inter OFL bitmap font,
-  silent. Float code is built in ARM state (`-marm`, VFPv4-D16).
+  phone keypad (J2ME keys 1-9) under a 3 px green progress line, per-finger
+  multi-touch, optional Tilt to lean (Off by default), a 30 ms physics tick
+  matching the original J2ME loop, dlmalloc arena in `HB_APP_AUX_BLOCK`, a small
+  Inter OFL bitmap font, silent. Float code is built in ARM state (`-marm`, VFPv4-D16).
 - **Upstream edits at pin:** cap the bike-part loop in `GamePhysics::method_39`,
   `RecordEnumerationImpl::destroy()` is a no-op so progress saves, menu `TextRender`
   objects are deleted, blocking `Micro::run` / `goalLoop` / `MenuManager::method_201`

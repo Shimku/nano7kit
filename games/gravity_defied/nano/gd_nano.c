@@ -26,9 +26,9 @@ static int prev_down;
 
 static int prepare_unload(void)
 {
-    gd_engine_quit();
-    gd_log("quit: prepare_unload");
-    gd_log_flush();
+    if (!gd_want_home())
+        gd_engine_quit();
+    gd_log_close();
     return 1;
 }
 
@@ -52,35 +52,36 @@ static void draw_bar(uint32_t *fb, int w, int h)
     gd_draw_touch_bar(fb, w, h);
 }
 
-static unsigned keys_from_point(int x, int y)
-{
-    int d = gd_pad_digit(x, y);
-    return d ? (1u << d) : 0;
-}
-
 static void apply_touch(const hb_spoint_t *touch)
 {
     int down = touch && touch->down;
     int16_t x = touch ? touch->x : 0;
     int16_t y = touch ? touch->y : 0;
-    unsigned mask = 0;
     int pause = 0, mx = -1, my = -1;
     int32_t acc[3];
     hb_touch_t fingers[HB_MAX_FINGERS];
-    int n, i;
+    int n, i, live = 0;
 
     hb_accel_read_milli_g(acc);
-    if (acc[0] < -180) mask |= 1u << 4;
-    if (acc[0] > 180) mask |= 1u << 6;
-
-    if (down) mask |= keys_from_point(x, y);
+    gd_set_accel_x((int)acc[0]);
 
     hb_touch_drain_all();
     n = hb_touch_poll_multi(fingers);
+    gd_fingers_clear();
     for (i = 0; i < n; i++) {
-        if (fingers[i].status == 2) continue;
-        mask |= keys_from_point(fingers[i].x, fingers[i].y);
+        int id = (int)fingers[i].touch_id;
+        if (fingers[i].status == 2) {
+            gd_finger_up(id);
+            continue;
+        }
+        gd_finger_at(id, fingers[i].x, fingers[i].y);
+        live++;
     }
+    /* Compositor point is a fallback when the OS queues are empty. Mixing it
+     * with poll_multi stuck or dropped cells when a second finger moved. */
+    if (live == 0 && down)
+        gd_finger_at(0, x, y);
+    gd_recompute_keys();
 
     if (down && y < GD_GAME_H && gd_hit_pause(x, y) && !prev_down)
         pause = 1;
@@ -90,12 +91,7 @@ static void apply_touch(const hb_spoint_t *touch)
         my = y;
         gd_log("input: tap %d,%d", x, y);
     }
-    if ((mask || pause) && (frames % 120u) == 1u) {
-        gd_log("input: keys=%u pause=%d accelx=%d fingers=%d",
-               mask, pause, (int)acc[0], n);
-    }
 
-    gd_set_key_mask(mask);
     gd_set_edges(0, 0, pause, mx, my);
     prev_down = down;
 }
@@ -190,8 +186,7 @@ void hb_raw_frame(const hb_spoint_t *touch)
         static const char *bye[3] = { "SAVED", "PRESS HOME", "TO RETURN" };
         notice_draw_fb(fb, w, h, bye, 3);
         if (state != 3) {
-            gd_log("quit: path Exit Game / destroyApp, Home unloads the surface");
-            gd_log_flush();
+            gd_log_close();
             state = 3;
         }
         return;
@@ -205,8 +200,7 @@ void hb_raw_frame(const hb_spoint_t *touch)
     draw_bar(fb, w, h);
 
     if (gd_want_home()) {
-        gd_log("quit: path Exit Game / destroyApp, Home unloads the surface");
-        gd_log_flush();
+        gd_log_close();
         state = 3;
         return;
     }
@@ -219,8 +213,9 @@ void hb_raw_frame(const hb_spoint_t *touch)
         fps_shown = fps_count * 1000u / (dt ? dt : 1u);
         gd_log("fps: %u arena_used=%u peak=%u fails=%u",
                (unsigned)fps_shown, gd_arena_used(), gd_arena_peak(), gd_arena_fails());
+        gd_log_input_state("1s");
         fps_count = 0;
         last_fps_ms = now;
-        if ((frames & 63u) == 0) gd_log_flush();
+        gd_log_flush();
     }
 }

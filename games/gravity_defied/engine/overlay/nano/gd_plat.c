@@ -9,10 +9,18 @@ static char s_dir[256] = GD_DATA_DIR;
 static uint32_t *s_fb;
 static int s_fbw, s_fbh;
 static int s_want_home;
-static char s_log[8192];
+static char s_log[16384];
 static unsigned s_logn;
+static int s_log_closed;
 static int s_gas, s_brake, s_lean_l, s_lean_r;
 static unsigned s_keys;
+static unsigned s_hold_mask;
+static int s_finger_on[GD_MAX_FINGERS];
+static int s_finger_digit[GD_MAX_FINGERS];
+static int s_tilt_on;
+static int s_tilt_cal;
+static int s_tilt_base;
+static int s_accel_x;
 static int s_progress16;
 static int s_fire, s_back, s_pause;
 static int s_tapx = -1, s_tapy = -1;
@@ -57,6 +65,7 @@ int gd_fb_h(void) { return s_fbh; }
 int gd_want_home(void) { return s_want_home; }
 void gd_request_home(const char *why)
 {
+    if (s_want_home) return;
     s_want_home = 1;
     gd_log("quit: %s", why ? why : "home");
     gd_log_flush();
@@ -88,6 +97,26 @@ void gd_set_key_mask(unsigned mask)
     s_lean_r = !!(s_keys & ((1u << 3) | (1u << 6) | (1u << 9)));
 }
 
+void gd_recompute_keys(void)
+{
+    unsigned m = s_hold_mask;
+    int i, d;
+    for (i = 0; i < GD_MAX_FINGERS; i++) {
+        if (s_finger_on[i] && s_finger_digit[i] > 0)
+            m |= 1u << (unsigned)s_finger_digit[i];
+    }
+    if (s_tilt_on) {
+        if (!s_tilt_cal) {
+            s_tilt_base = s_accel_x;
+            s_tilt_cal = 1;
+        }
+        d = s_accel_x - s_tilt_base;
+        if (d <= -GD_TILT_DEAD) m |= 1u << 4;
+        if (d >= GD_TILT_DEAD) m |= 1u << 6;
+    }
+    gd_set_key_mask(m);
+}
+
 void gd_set_held(int gas, int brake, int ll, int lr)
 {
     unsigned m = 0;
@@ -95,7 +124,70 @@ void gd_set_held(int gas, int brake, int ll, int lr)
     if (brake) m |= 1u << 8;
     if (ll) m |= 1u << 4;
     if (lr) m |= 1u << 6;
-    gd_set_key_mask(m);
+    s_hold_mask = m;
+    gd_recompute_keys();
+}
+
+void gd_fingers_clear(void)
+{
+    int i;
+    for (i = 0; i < GD_MAX_FINGERS; i++) {
+        s_finger_on[i] = 0;
+        s_finger_digit[i] = 0;
+    }
+}
+
+void gd_finger_at(int id, int x, int y)
+{
+    if (id < 0 || id >= GD_MAX_FINGERS) return;
+    s_finger_on[id] = 1;
+    s_finger_digit[id] = gd_pad_digit(x, y);
+}
+
+void gd_finger_up(int id)
+{
+    if (id < 0 || id >= GD_MAX_FINGERS) return;
+    s_finger_on[id] = 0;
+    s_finger_digit[id] = 0;
+}
+
+void gd_set_tilt_enabled(int on)
+{
+    s_tilt_on = on ? 1 : 0;
+    if (!s_tilt_on) s_tilt_cal = 0;
+    gd_recompute_keys();
+}
+
+int gd_tilt_enabled(void) { return s_tilt_on; }
+
+void gd_tilt_recalibrate(void)
+{
+    s_tilt_cal = 0;
+}
+
+void gd_set_accel_x(int milli_g)
+{
+    s_accel_x = milli_g;
+}
+
+int gd_accel_x(void) { return s_accel_x; }
+
+void gd_log_input_state(const char *why)
+{
+    char buf[200];
+    int n = 0, i, nf = 0;
+    for (i = 0; i < GD_MAX_FINGERS; i++)
+        if (s_finger_on[i]) nf++;
+    n += snprintf(buf + n, sizeof buf - (unsigned)n,
+                  "input: keys=%u tilt=%d accelx=%d fingers=%d",
+                  s_keys, s_tilt_on, s_accel_x, nf);
+    for (i = 0; i < GD_MAX_FINGERS && n < (int)sizeof buf - 12; i++)
+        n += snprintf(buf + n, sizeof buf - (unsigned)n, " f%d=%d",
+                      i, s_finger_on[i] ? s_finger_digit[i] : 0);
+    if (why && why[0])
+        gd_log("%s %s", buf, why);
+    else
+        gd_log("%s", buf);
 }
 
 void gd_set_edges(int fire, int back, int pause, int x, int y)
@@ -191,6 +283,7 @@ void gd_log(const char *fmt, ...)
     char line[240];
     va_list ap;
     int n;
+    if (s_log_closed) return;
     va_start(ap, fmt);
     n = vsnprintf(line, sizeof line, fmt, ap);
     va_end(ap);
@@ -198,17 +291,23 @@ void gd_log(const char *fmt, ...)
     if ((unsigned)n > sizeof line - 2) n = (int)sizeof line - 2;
     line[n++] = '\n';
     line[n] = 0;
-    if (s_logn + (unsigned)n + 1 >= sizeof s_log) {
-        gd_log_flush();
-        s_logn = 0;
-        s_log[0] = 0;
+    if (s_logn + (unsigned)n > sizeof s_log) {
+        unsigned drop = s_logn + (unsigned)n - (unsigned)sizeof s_log;
+        if (drop < s_logn) {
+            memmove(s_log, s_log + drop, s_logn - drop);
+            s_logn -= drop;
+        } else {
+            s_logn = 0;
+        }
     }
-    memcpy(s_log + s_logn, line, (unsigned)n + 1);
+    memcpy(s_log + s_logn, line, (unsigned)n);
     s_logn += (unsigned)n;
 #ifdef GD_HOST
     fputs(line, stderr);
 #endif
 }
+
+int gd_log_closed(void) { return s_log_closed; }
 
 #ifdef GD_HOST
 #include <stdlib.h>
@@ -308,39 +407,21 @@ void gd_fs_list(void (*cb)(const char *name, void *ctx), void *ctx)
 
 void gd_log_flush(void)
 {
-    static char old[12288];
-    unsigned have;
-    if (!s_logn) return;
-    have = 0;
-    {
-        char p[640];
-        FILE *f;
-        host_path(p, sizeof p, "log.txt");
-        f = fopen(p, "rb");
-        if (f) {
-            have = (unsigned)fread(old, 1, sizeof old, f);
-            fclose(f);
-        }
-    }
-    if (have + s_logn > sizeof old) {
-        unsigned drop = have + s_logn - (unsigned)sizeof old;
-        if (drop < have) {
-            memmove(old, old + drop, have - drop);
-            have -= drop;
-        } else {
-            have = 0;
-        }
-    }
-    memcpy(old + have, s_log, s_logn);
-    gd_fs_write("log.txt", old, have + s_logn);
-    s_logn = 0;
-    s_log[0] = 0;
+    if (s_log_closed || !s_logn) return;
+    gd_fs_write("log.txt", s_log, s_logn);
+}
+
+void gd_log_close(void)
+{
+    if (s_log_closed) return;
+    gd_log_flush();
+    s_log_closed = 1;
 }
 
 void gd_fatal(const char *why)
 {
     gd_log("fatal: %s", why ? why : "?");
-    gd_log_flush();
+    gd_log_close();
     abort();
 }
 
@@ -419,32 +500,23 @@ void gd_fs_list(void (*cb)(const char *name, void *ctx), void *ctx)
 void gd_log_flush(void)
 {
     char p[192];
-    static char old[12288];
-    unsigned have;
-    if (!s_logn) return;
+    if (s_log_closed || !s_logn) return;
     snprintf(p, sizeof p, "%s/log.txt", s_dir);
-    have = hb_fs_read(p, old, sizeof old);
-    if (have > sizeof old) have = (unsigned)sizeof old;
-    if (have + s_logn > sizeof old) {
-        unsigned drop = have + s_logn - (unsigned)sizeof old;
-        if (drop < have) {
-            memmove(old, old + drop, have - drop);
-            have -= drop;
-        } else {
-            have = 0;
-        }
-    }
-    memcpy(old + have, s_log, s_logn);
     hb_fs_mkdir(s_dir);
-    hb_fs_write(p, old, have + s_logn);
-    s_logn = 0;
-    s_log[0] = 0;
+    hb_fs_write(p, s_log, s_logn);
+}
+
+void gd_log_close(void)
+{
+    if (s_log_closed) return;
+    gd_log_flush();
+    s_log_closed = 1;
 }
 
 void gd_fatal(const char *why)
 {
     gd_log("fatal: %s", why ? why : "?");
-    gd_log_flush();
+    gd_log_close();
     for (;;) {}
 }
 #endif

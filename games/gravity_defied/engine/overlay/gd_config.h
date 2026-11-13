@@ -20,6 +20,12 @@
 #define GD_MENU_ROW_MIN 36
 #define GD_MENU_TEXT_X 24
 #define GD_MENU_MARKER_X 10
+/* Original Micro::run slept so each outer frame was at least 30 ms, with
+ * numPhysicsLoops (2) physics updates per frame. */
+#define GD_TICK_MS 30
+#define GD_TICK_CATCHUP 3
+#define GD_TILT_DEAD 180
+#define GD_MAX_FINGERS 8
 
 #ifdef __cplusplus
 extern "C" {
@@ -27,6 +33,8 @@ extern "C" {
 
 void gd_log(const char *fmt, ...);
 void gd_log_flush(void);
+void gd_log_close(void);
+int gd_log_closed(void);
 void gd_fatal(const char *why);
 int gd_fs_read(const char *rel, void *buf, unsigned max);
 int gd_fs_write(const char *rel, const void *buf, unsigned n);
@@ -66,6 +74,17 @@ void gd_draw_touch_bar(uint32_t *fb, int w, int h);
 unsigned gd_arena_used(void);
 unsigned gd_arena_peak(void);
 unsigned gd_arena_fails(void);
+
+void gd_fingers_clear(void);
+void gd_finger_at(int id, int x, int y);
+void gd_finger_up(int id);
+void gd_set_tilt_enabled(int on);
+int gd_tilt_enabled(void);
+void gd_tilt_recalibrate(void);
+void gd_set_accel_x(int milli_g);
+int gd_accel_x(void);
+void gd_recompute_keys(void);
+void gd_log_input_state(const char *why);
 
 #ifdef GD_HOST
 void gd_host_set_root(const char *p);

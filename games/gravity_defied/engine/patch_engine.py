@@ -586,11 +586,72 @@ void GameMenu::selectRow(int i)
         return;
 """,
             """        field_360 = field_371;
-        gd_log("save: loaded leagues=%d levels=%d tracks=%d,%d,%d shadows=%d",
+        gd_log("save: loaded leagues=%d levels=%d tracks=%d,%d,%d shadows=%d tilt=%d",
                (int)availableLeagues, (int)field_344,
                (int)field_342[0], (int)field_342[1], (int)field_342[2],
-               (int)isDisabledShadows);
+               (int)isDisabledShadows, (int)isDisableTilt);
         return;
+""",
+        ),
+        (
+            """        isDisableLookAhead = method_217(4, isDisableLookAhead);
+""",
+            """        isDisableLookAhead = method_217(4, isDisableLookAhead);
+        isDisableTilt = method_217(13, isDisableTilt);
+        gd_set_tilt_enabled(isDisableTilt == 0);
+""",
+        ),
+        (
+            """        lookAheadSetting = new SettingsStringRender("Look ahead", isDisableLookAhead, this, field_374, true, micro, gameMenuOptions, false);
+        clearHighscoreSetting = new TimerOrMotoPartOrMenuElem("Clear highscore", gameMenuConfirmClear, this);
+""",
+            """        lookAheadSetting = new SettingsStringRender("Look ahead", isDisableLookAhead, this, field_374, true, micro, gameMenuOptions, false);
+        tiltSetting = new SettingsStringRender("Tilt to lean", isDisableTilt, this, field_374, true, micro, gameMenuOptions, false);
+        clearHighscoreSetting = new TimerOrMotoPartOrMenuElem("Clear highscore", gameMenuConfirmClear, this);
+""",
+        ),
+        (
+            """        gameMenuOptions->addMenuElement(lookAheadSetting);
+        gameMenuOptions->addMenuElement(clearHighscoreSetting);
+""",
+            """        gameMenuOptions->addMenuElement(lookAheadSetting);
+        gameMenuOptions->addMenuElement(tiltSetting);
+        gameMenuOptions->addMenuElement(clearHighscoreSetting);
+""",
+        ),
+        (
+            """    setValue(4, (int8_t)lookAheadSetting->getCurrentOptionPos());
+""",
+            """    setValue(4, (int8_t)lookAheadSetting->getCurrentOptionPos());
+    setValue(13, (int8_t)tiltSetting->getCurrentOptionPos());
+""",
+        ),
+        (
+            """            if (menuElement == lookAheadSetting) {
+                micro->gamePhysics->setEnableLookAhead(lookAheadSetting->getCurrentOptionPos() == 0);
+                return;
+            }
+""",
+            """            if (menuElement == lookAheadSetting) {
+                micro->gamePhysics->setEnableLookAhead(lookAheadSetting->getCurrentOptionPos() == 0);
+                return;
+            }
+
+            if (menuElement == tiltSetting) {
+                isDisableTilt = (int8_t)tiltSetting->getCurrentOptionPos();
+                gd_set_tilt_enabled(isDisableTilt == 0);
+                gd_log("input: tilt to lean %s", isDisableTilt == 0 ? "On" : "Off");
+                return;
+            }
+""",
+        ),
+        (
+            """    lookAheadSetting->setCurentOptionPos(0);
+""",
+            """    lookAheadSetting->setCurentOptionPos(0);
+    tiltSetting->setCurentOptionPos(1);
+    isDisableTilt = 1;
+    gd_set_tilt_enabled(0);
 """,
         ),
     ]
@@ -699,6 +760,7 @@ void MenuManager::hostStartTrack(int level, int track, int league)
     field_357 = true;
     micro->menuToGame();
     micro->restart(true);
+    gd_tilt_recalibrate();
 }
 
 void MenuManager::hostSetUnlocks(int easy, int medium, int pro)
@@ -724,6 +786,17 @@ void MenuManager::hostSetUnlocks(int easy, int medium, int pro)
 
     mh = src / "MenuManager.h"
     ht = mh.read_text(encoding="utf-8")
+    if "tiltSetting" not in ht:
+        ht = ht.replace(
+            "    SettingsStringRender* lookAheadSetting;\n",
+            "    SettingsStringRender* lookAheadSetting;\n"
+            "    SettingsStringRender* tiltSetting;\n",
+        )
+        ht = ht.replace(
+            "    int8_t isDisableLookAhead = 0;\n",
+            "    int8_t isDisableLookAhead = 0;\n"
+            "    int8_t isDisableTilt = 1;\n",
+        )
     if "void nanoTap" not in ht:
         ht = ht.replace("    void processKeyCode(int keyCode);\n};",
                         "    void processKeyCode(int keyCode);\n    void nanoTap(int x, int y);\n"
@@ -731,7 +804,6 @@ void MenuManager::hostSetUnlocks(int easy, int medium, int pro)
                         "    void hostStartTrack(int level, int track, int league);\n"
                         "    void hostSetUnlocks(int easy, int medium, int pro);\n"
                         "#endif\n};")
-        mh.write_text(ht, encoding="utf-8")
     elif "hostStartTrack" not in ht:
         ht = ht.replace("    void nanoTap(int x, int y);\n};",
                         "    void nanoTap(int x, int y);\n"
@@ -739,7 +811,7 @@ void MenuManager::hostSetUnlocks(int easy, int medium, int pro)
                         "    void hostStartTrack(int level, int track, int league);\n"
                         "    void hostSetUnlocks(int easy, int medium, int pro);\n"
                         "#endif\n};")
-        mh.write_text(ht, encoding="utf-8")
+    mh.write_text(ht, encoding="utf-8")
 
     rm = src / "RecordManager.cpp"
     rt = rm.read_text(encoding="utf-8")

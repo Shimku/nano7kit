@@ -28,6 +28,8 @@ static unsigned max_frames = 4000;
 static int dump_every;
 static FILE *script;
 static int until_left;
+static int until_clock_only;
+static uint32_t step_ms = 16;
 
 static uint32_t pick_block(uint32_t free_b, uint32_t largest)
 {
@@ -117,7 +119,43 @@ static int run_line(char *line, unsigned frame)
     }
     if (strcmp(cmd, "until") == 0) {
         until_left = a > 0 ? a : 1;
-        return until_left;
+        until_clock_only = 0;
+        return 1;
+    }
+    if (strcmp(cmd, "holdms") == 0) {
+        until_left = a > 0 ? a : 1;
+        until_clock_only = 1;
+        return 1;
+    }
+    if (strcmp(cmd, "finger") == 0) {
+        gd_finger_at(a, b, c);
+        gd_recompute_keys();
+        gd_log("input: finger %d at %d,%d digit=%d keys=%u", a, b, c, gd_pad_digit(b, c), gd_held_keys());
+        return 0;
+    }
+    if (strcmp(cmd, "fingerup") == 0) {
+        gd_finger_up(a);
+        gd_recompute_keys();
+        gd_log("input: fingerup %d keys=%u", a, gd_held_keys());
+        return 0;
+    }
+    if (strcmp(cmd, "accel") == 0) {
+        gd_set_accel_x(a);
+        gd_recompute_keys();
+        gd_log("input: accelx=%d keys=%u tilt=%d", gd_accel_x(), gd_held_keys(), gd_tilt_enabled());
+        return 0;
+    }
+    if (strcmp(cmd, "tilt") == 0) {
+        gd_set_tilt_enabled(a);
+        gd_log("input: tilt=%d", gd_tilt_enabled());
+        return 0;
+    }
+    if (strcmp(cmd, "report") == 0) {
+        gd_log("speed: camx=%d gametime=%d phys=%d keys=%u tilt=%d accelx=%d",
+               gd_engine_cam_x(), gd_engine_game_time(), gd_engine_phys_ticks(),
+               gd_held_keys(), gd_tilt_enabled(), gd_accel_x());
+        gd_log_input_state("report");
+        return 0;
     }
     if (strcmp(cmd, "dump") == 0) {
         char name[64];
@@ -160,7 +198,9 @@ int main(int argc, char **argv)
                 fprintf(stderr, "cannot open script\n");
                 return 2;
             }
-        } else if (strcmp(argv[i], "--notice") == 0) want_notice = 1;
+        }         else if (strcmp(argv[i], "--notice") == 0) want_notice = 1;
+        else if (strcmp(argv[i], "--step-ms") == 0 && i + 1 < argc)
+            step_ms = (uint32_t)strtoul(argv[++i], 0, 0);
         else {
             fprintf(stderr, "unknown arg %s\n", argv[i]);
             return 2;
@@ -202,10 +242,12 @@ int main(int argc, char **argv)
     }
     if (gd_arena_init(arena, arena_size) != 0) gd_fatal("arena");
     gd_log("heap: arena %u", (unsigned)arena_size);
+    if (step_ms == 0) step_ms = 1;
+    gd_log("host: step_ms=%u", (unsigned)step_ms);
     gd_engine_start(mrg, data_dir);
 
     for (frame = 0; frame < max_frames; frame++) {
-        gd_host_advance_ms(16);
+        gd_host_advance_ms(step_ms);
         if (script && wait_left <= 0 && until_left <= 0) {
             if (fgets(line, sizeof line, script)) {
                 int w = run_line(line, frame);
@@ -220,24 +262,28 @@ int main(int argc, char **argv)
         if (until_left > 0) {
             int r = gd_engine_track_result();
             const char *nm = gd_engine_track_name();
-            if (r == 1 || r == 2) {
+            if (!until_clock_only && (r == 1 || r == 2)) {
                 gd_log("track: result=finish code=%d frame=%u name=%s", r, frame, nm);
                 until_left = 0;
                 wait_left = 0;
-            } else if (r == 3 || r == 5) {
+            } else if (!until_clock_only && (r == 3 || r == 5)) {
                 gd_log("track: result=crash code=%d frame=%u name=%s", r, frame, nm);
                 until_left = 0;
                 wait_left = 0;
             } else {
-                until_left--;
-                if (until_left == 0) {
-                    gd_log("track: result=timeout frame=%u name=%s", frame, nm);
+                until_left -= (int)step_ms;
+                if (until_left <= 0) {
+                    if (!until_clock_only)
+                        gd_log("track: result=timeout frame=%u name=%s", frame, nm);
+                    until_left = 0;
                     wait_left = 0;
+                    until_clock_only = 0;
                 }
             }
         }
         if (gd_want_home()) {
             gd_log("quit: path Exit Game / destroyApp (host process exit)");
+            gd_log_close();
             if (ppm_dir[0]) {
                 char path[640];
                 snprintf(path, sizeof path, "%s/menu_exit.ppm", ppm_dir);
@@ -259,7 +305,7 @@ int main(int argc, char **argv)
     }
     gd_log("done: frames=%u used=%u peak=%u fails=%u want_home=%d",
            frame, gd_arena_used(), gd_arena_peak(), gd_arena_fails(), gd_want_home());
-    gd_log_flush();
+    gd_log_close();
     if (script) fclose(script);
     /* Keep the arena until process exit, same as HB_APP_AUX_BLOCK on the iPod. */
     (void)arena;

@@ -15,6 +15,12 @@ class Micro {
     int menuArmed = 0;
     int goalUntil = 0;
     int wasInMenu = 0;
+    int physAccMs = 0;
+    int physLastMs = 0;
+    int physClockOn = 0;
+    void resetPhysClock();
+    int takePhysicsTicks();
+    int runPhysicsFrame();
 
 public:
     GameCanvas *gameCanvas = nullptr;
