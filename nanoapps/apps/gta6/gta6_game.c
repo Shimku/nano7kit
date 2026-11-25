@@ -1314,40 +1314,6 @@ static void draw_hud(G6Game *g, uint32_t *fb, int w, int h)
     draw_minimap(g, fb, w, h);
 }
 
-static int in_ell(int x, int y, int cx, int cy, int rx, int ry)
-{
-    long dx = x - cx, dy = y - cy;
-    if (rx < 1) rx = 1;
-    if (ry < 1) ry = 1;
-    return dx * dx * ry * ry + dy * dy * rx * rx <= (long)rx * rx * ry * ry;
-}
-
-static int six_hit(int x, int y, int cx, int cy, int k)
-{
-    int t = k / 3;
-    int lo, li, uo, ui, stem;
-    if (t < 8) t = 8;
-    lo = in_ell(x, y, cx, cy + k / 5, k, (k * 9) / 10);
-    li = in_ell(x, y, cx, cy + k / 5, k - t, (k * 9) / 10 - t);
-    uo = in_ell(x, y, cx - k / 12, cy - (k * 5) / 8, (k * 7) / 8, (k * 5) / 8);
-    ui = in_ell(x, y, cx - k / 12, cy - (k * 5) / 8, (k * 7) / 8 - t, (k * 5) / 8 - t);
-    stem = (x >= cx - k && x <= cx - k + t && y >= cy - (k * 5) / 8 && y <= cy + k / 5);
-    return (lo && !li) || ((uo && !ui) && y < cy - k / 10 && x < cx + k / 4) || stem;
-}
-
-static int palm_in6(int x, int y, int cx, int cy, int k)
-{
-    int lx = x - (cx - k);
-    int ly = y - (cy - k);
-    if (lx > k - 16 && lx < k - 11 && ly > k && ly < k + k) return 1;
-    if (lx > 20 && lx < 25 && ly > k / 2 && ly < k + k / 2) return 1;
-    if (lx > k + 8 && lx < k + 13 && ly > k / 3 && ly < k) return 1;
-    if (ly > k - 8 && ly < k && lx > k - 34 && lx < k + 2) return 1;
-    if (ly > k / 2 - 6 && ly < k / 2 + 2 && lx > 6 && lx < 38) return 1;
-    if (ly > k / 3 - 4 && ly < k / 3 + 2 && lx > k && lx < k + 28) return 1;
-    return 0;
-}
-
 static uint32_t sun_grad(int y, int y0, int y1)
 {
     int n = y1 - y0, t;
@@ -1355,83 +1321,108 @@ static uint32_t sun_grad(int y, int y0, int y1)
     t = y - y0;
     if (t < 0) t = 0;
     if (t > n) t = n;
-    if (t < n / 2) return lerp(0xff2a2878, 0xffff2d8a, t, n / 2);
-    return lerp(0xffff2d8a, 0xffffc080, t - n / 2, n - n / 2);
+    if (t < n / 2) return lerp(0xff1a2068, 0xffff2d8a, t, n / 2);
+    return lerp(0xffff2d8a, 0xffffb060, t - n / 2, n - n / 2);
 }
 
-static int gta_mask(int x, int y, int cx, int cy, int s)
+static int near_seg(int px, int py, int x0, int y0, int x1, int y1, int t)
 {
-    int gx = cx, gy = cy - 22 * s;
-    int tx = cx, ty = cy - 2 * s;
-    int ax = cx, ay = cy + 20 * s;
-    /* g: bowl + right descender */
-    if (in_ell(x, y, gx, gy, 11 * s, 9 * s) && !in_ell(x, y, gx - s / 2, gy, 5 * s, 4 * s))
-        return 1;
-    if (x >= gx + 5 * s && x <= gx + 11 * s && y >= gy && y <= gy + 16 * s) return 1;
-    /* t: stem + bar */
-    if (x >= tx - 3 * s && x <= tx + 4 * s && y >= ty - 14 * s && y <= ty + 12 * s) return 1;
-    if (x >= tx - 12 * s && x <= tx + 12 * s && y >= ty - 14 * s && y <= ty - 7 * s) return 1;
-    /* a: bowl + right stem */
-    if (in_ell(x, y, ax, ay, 11 * s, 9 * s) && !in_ell(x, y, ax - s / 2, ay, 5 * s, 4 * s))
-        return 1;
-    if (x >= ax + 5 * s && x <= ax + 11 * s && y >= ay - 8 * s && y <= ay + 10 * s) return 1;
+    int dx = x1 - x0, dy = y1 - y0;
+    int vx = px - x0, vy = py - y0;
+    int len2 = dx * dx + dy * dy;
+    int tnum, cx, cy, ddx, ddy;
+    if (t < 1) t = 1;
+    if (len2 < 1) {
+        ddx = px - x0;
+        ddy = py - y0;
+        return ddx * ddx + ddy * ddy <= t * t;
+    }
+    tnum = vx * dx + vy * dy;
+    if (tnum <= 0) {
+        ddx = px - x0;
+        ddy = py - y0;
+        return ddx * ddx + ddy * ddy <= t * t;
+    }
+    if (tnum >= len2) {
+        ddx = px - x1;
+        ddy = py - y1;
+        return ddx * ddx + ddy * ddy <= t * t;
+    }
+    cx = x0 + (int)(((long)tnum * dx) / len2);
+    cy = y0 + (int)(((long)tnum * dy) / len2);
+    ddx = px - cx;
+    ddy = py - cy;
+    return ddx * ddx + ddy * ddy <= t * t;
+}
+
+/* Original VI mark: thick V (two slants) + vertical I. Not a third-party glyph. */
+#define VI_Y0  64
+#define VI_Y1  268
+#define VI_VLX 32
+#define VI_VRX 150
+#define VI_AX  91
+#define VI_IX  188
+#define VI_TV  17
+#define VI_TI  13
+
+static int vi_core(int x, int y, int grow)
+{
+    int tv = VI_TV + grow, ti = VI_TI + grow;
+    return near_seg(x, y, VI_VLX, VI_Y0, VI_AX, VI_Y1, tv)
+        || near_seg(x, y, VI_VRX, VI_Y0, VI_AX, VI_Y1, tv)
+        || near_seg(x, y, VI_IX, VI_Y0, VI_IX, VI_Y1, ti);
+}
+
+static int palm_in_vi(int x, int y)
+{
+    int lx = x - 20, ly = y - 70;
+    if (lx > 28 && lx < 34 && ly > 40 && ly < 150) return 1;
+    if (lx > 90 && lx < 96 && ly > 20 && ly < 120) return 1;
+    if (ly > 36 && ly < 44 && lx > 12 && lx < 50) return 1;
+    if (ly > 18 && ly < 26 && lx > 74 && lx < 112) return 1;
+    if (x > VI_IX - 6 && x < VI_IX + 6 && y > 90 && y < 200) return 1;
     return 0;
 }
 
-static void draw_gta_stack(uint32_t *fb, int w, int h, int cx, int cy, int s, int fade)
+static void text_outline(uint32_t *fb, int w, int h, int x, int y, const char *s, int scale, uint32_t fg, uint32_t ol)
 {
-    int x, y, ox, oy;
-    uint32_t sh = lerp(0, 0xff4a2068, fade, 256);
-    uint32_t ol = lerp(0, 0xff08060c, fade, 256);
-    uint32_t fg = lerp(0, 0xfff8f4ee, fade, 256);
-    int pad = 4 * s + 6;
-    for (y = cy - 40 * s; y <= cy + 34 * s; y++) {
-        for (x = cx - 16 * s; x <= cx + 16 * s; x++) {
-            int hit = 0, ring = 0;
-            if (gta_mask(x - 3, y - 4, cx, cy, s)) pset(fb, w, h, x, y, sh);
-            for (oy = -2; oy <= 2 && !ring; oy++)
-                for (ox = -2; ox <= 2; ox++)
-                    if (gta_mask(x + ox, y + oy, cx, cy, s)) ring = 1;
-            hit = gta_mask(x, y, cx, cy, s);
-            if (hit) pset(fb, w, h, x, y, fg);
-            else if (ring) pset(fb, w, h, x, y, ol);
-        }
-    }
-    (void)pad;
+    int ox, oy;
+    for (oy = -2; oy <= 2; oy++)
+        for (ox = -2; ox <= 2; ox++)
+            if (ox || oy)
+                g6_text5(fb, w, h, x + ox, y + oy, s, scale, ol);
+    g6_text5(fb, w, h, x, y, s, scale, fg);
 }
 
-static void draw_logo6(uint32_t *fb, int w, int h, int cx, int cy, int k, int fade)
+static void draw_logo_vi(uint32_t *fb, int w, int h, int fade)
 {
-    int x, y, dx, dy;
-    int x0 = cx - k - 8, y0 = cy - k - 6;
-    int x1 = cx + k + 8, y1 = cy + k + k / 3 + 8;
-    if (x0 < 0) x0 = 0;
+    int x, y;
+    int y0 = VI_Y0 - 10, y1 = VI_Y1 + 10;
+    uint32_t orange = lerp(0, 0xffff8a3a, fade, 256);
+    uint32_t outline = lerp(0, 0xff2a1048, fade, 256);
+    uint32_t white = lerp(0, 0xfff8f4ee, fade, 256);
+    uint32_t black = lerp(0, 0xff08060c, fade, 256);
     if (y0 < 0) y0 = 0;
-    if (x1 > w) x1 = w;
     if (y1 > h) y1 = h;
     for (y = y0; y < y1; y++) {
-        uint32_t gcol = lerp(0, sun_grad(y, y0, y1), fade, 256);
-        uint32_t orange = lerp(0, 0xffff8a3a, fade, 256);
-        uint32_t outline = lerp(0, 0xff2a1048, fade, 256);
-        for (x = x0; x < x1; x++) {
-            if (six_hit(x, y, cx, cy, k)) {
-                int edge = !six_hit(x - 2, y, cx, cy, k) || !six_hit(x + 2, y, cx, cy, k)
-                        || !six_hit(x, y - 2, cx, cy, k) || !six_hit(x, y + 2, cx, cy, k);
-                uint32_t c = edge ? orange : gcol;
-                if (!edge && palm_in6(x, y, cx, cy, k))
-                    c = lerp(c, 0xff3a1848, 1, 2);
+        uint32_t gcol = lerp(0, sun_grad(y, VI_Y0, VI_Y1), fade, 256);
+        for (x = 0; x < w; x++) {
+            int core = vi_core(x, y, 0);
+            int inner = vi_core(x, y, -3);
+            int ring = vi_core(x, y, 5);
+            if (core) {
+                uint32_t c = inner ? gcol : orange;
+                if (inner && palm_in_vi(x, y))
+                    c = lerp(c, 0xff2a1040, 1, 2);
                 pset(fb, w, h, x, y, c);
-            } else {
-                int ring = 0;
-                for (dy = -5; dy <= 5 && !ring; dy++)
-                    for (dx = -5; dx <= 5; dx++)
-                        if (dx * dx + dy * dy <= 25 && six_hit(x + dx, y + dy, cx, cy, k))
-                            ring = 1;
-                if (ring) pset(fb, w, h, x, y, outline);
+            } else if (ring) {
+                pset(fb, w, h, x, y, outline);
             }
         }
     }
-    draw_gta_stack(fb, w, h, cx, cy - k / 8, k / 22 < 2 ? 2 : k / 22, fade);
+    /* Upright capital GTA, bitmap font, black outline. */
+    text_outline(fb, w, h, 84, 148, "GTA", 4, white, black);
+    text_outline(fb, w, h, 90, 286, "GTA 6", 2, white, black);
 }
 
 static void disc(uint32_t *fb, int w, int h, int cx, int cy, int r, uint32_t c)
@@ -1487,11 +1478,11 @@ static void draw_title(G6Game *g, uint32_t *fb, int w, int h)
         fade = t >= 100 ? 256 : (t - 52) * 256 / 48;
         if (fade > 256) fade = 256;
         if (fade < 0) fade = 0;
-        draw_logo6(fb, w, h, 120, 188, 76, fade);
+        draw_logo_vi(fb, w, h, fade);
     }
     if (t >= 110) {
         uint32_t pulse = ((g->frames / 10) & 1) ? 0xffffffffu : 0xffc9ada7;
-        g6_text5(fb, w, h, 40, 352, "TAP TO PLAY", 2, pulse);
+        g6_text5(fb, w, h, 54, 352, "TAP TO PLAY", 2, pulse);
         g6_text5(fb, w, h, 8, 390, G6_TAG, 1, 0xff8a93a8);
     }
 }

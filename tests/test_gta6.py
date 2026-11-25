@@ -220,6 +220,9 @@ class HostPlayTests(unittest.TestCase):
             self.assertGreater(CONTACT.stat().st_size, 1000)
             w, h, rgb = read_ppm(d / "title.ppm")
             self.assertEqual((w, h), (240, 432))
+            title = ROOT / "docs" / "images" / "gta6-title.png"
+            write_png(title, w, h, rgb)
+            self.assertTrue(title.is_file())
             # title screen should not be the red low-mem fill
             px = rgb[100 * 3 * w + 120 * 3]
             self.assertNotEqual(rgb[0], 0x4c)

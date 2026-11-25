@@ -168,71 +168,86 @@ def _make_png(fa_name: str, rgb: Tuple[int, int, int], dest: Path, initials: str
     img.resize((SIZE, SIZE), Image.LANCZOS).save(dest)
 
 
-def _in_ell(x: int, y: int, cx: int, cy: int, rx: int, ry: int) -> bool:
-    if rx < 1 or ry < 1:
-        return False
-    dx, dy = x - cx, y - cy
-    return dx * dx * ry * ry + dy * dy * rx * rx <= rx * rx * ry * ry
-
-
-def _six_hit(x: int, y: int, cx: int, cy: int, k: int) -> bool:
-    t = max(6, k // 3)
-    lo = _in_ell(x, y, cx, cy + k // 5, k, (k * 9) // 10)
-    li = _in_ell(x, y, cx, cy + k // 5, k - t, (k * 9) // 10 - t)
-    uo = _in_ell(x, y, cx - k // 12, cy - (k * 5) // 8, (k * 7) // 8, (k * 5) // 8)
-    ui = _in_ell(x, y, cx - k // 12, cy - (k * 5) // 8, (k * 7) // 8 - t, (k * 5) // 8 - t)
-    stem = cx - k <= x <= cx - k + t and cy - (k * 5) // 8 <= y <= cy + k // 5
-    return (lo and not li) or ((uo and not ui) and y < cy - k // 10 and x < cx + k // 4) or stem
+def _near_seg(px: int, py: int, x0: int, y0: int, x1: int, y1: int, t: int) -> bool:
+    dx, dy = x1 - x0, y1 - y0
+    vx, vy = px - x0, py - y0
+    len2 = dx * dx + dy * dy
+    if t < 1:
+        t = 1
+    if len2 < 1:
+        return vx * vx + vy * vy <= t * t
+    tnum = vx * dx + vy * dy
+    if tnum <= 0:
+        return vx * vx + vy * vy <= t * t
+    if tnum >= len2:
+        ddx, ddy = px - x1, py - y1
+        return ddx * ddx + ddy * ddy <= t * t
+    cx = x0 + tnum * dx // len2
+    cy = y0 + tnum * dy // len2
+    ddx, ddy = px - cx, py - cy
+    return ddx * ddx + ddy * ddy <= t * t
 
 
 def _make_gta6_png(dest: Path) -> None:
-    """Home icon: original sunset-6 with stacked white GTA. Not a third-party mark."""
-    from PIL import Image, ImageDraw
+    """Home icon: original sunset VI. Not a third-party mark. Stdlib PNG, no Pillow."""
+    import struct
+    import zlib
 
-    SS, S = 4, SIZE * 4
-    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    x0, y0 = int(round(CIRC_X0 * SS)), int(round(CIRC_Y0 * SS))
-    dw, dh = int(round(CIRC_W * SS)), int(round(CIRC_H * SS))
-    mask = Image.new("L", (S, S), 0)
-    ImageDraw.Draw(mask).ellipse([x0, y0, x0 + dw, y0 + dh], fill=255)
-    px = Image.new("RGBA", (S, S), (8, 6, 16, 255))
-    cx, cy, k = S // 2, S // 2 + 8, 118
-    pix = px.load()
-    for y in range(S):
-        ty = min(1.0, max(0.0, (y - (cy - k)) / max(1, 2 * k)))
+    n = SIZE
+    rgba = bytearray(n * n * 4)
+    vl, vr, ax = (18, 18), (68, 18), (43, 96)
+    ix, iy0, iy1 = 88, 18, 96
+    tv, ti = 9, 7
+    cx = cy = n // 2
+    cr = 44
+
+    def put(x: int, y: int, r: int, g: int, b: int, a: int) -> None:
+        if 0 <= x < n and 0 <= y < n:
+            i = (y * n + x) * 4
+            rgba[i : i + 4] = bytes((r, g, b, a))
+
+    def vi(x: int, y: int, grow: int) -> bool:
+        return (
+            _near_seg(x, y, vl[0], vl[1], ax[0], ax[1], tv + grow)
+            or _near_seg(x, y, vr[0], vr[1], ax[0], ax[1], tv + grow)
+            or _near_seg(x, y, ix, iy0, ix, iy1, ti + grow)
+        )
+
+    for y in range(n):
+        ty = min(1.0, max(0.0, (y - 16) / 84.0))
         if ty < 0.5:
             u = ty * 2
-            r, g, b = int(42 + (255 - 42) * u), int(40 + (45 - 40) * u), int(120 + (138 - 120) * u)
+            r, g, b = int(26 + 229 * u), int(32 + 13 * u), int(104 + 34 * u)
         else:
             u = (ty - 0.5) * 2
-            r, g, b = int(255 + (255 - 255) * u), int(45 + (192 - 45) * u), int(138 + (128 - 138) * u)
-        for x in range(S):
-            if _six_hit(x, y, cx, cy, k):
-                pix[x, y] = (r, g, b, 255)
-            elif any(
-                _six_hit(x + dx, y + dy, cx, cy, k)
-                for dy in range(-8, 9)
-                for dx in range(-8, 9)
-                if dx * dx + dy * dy <= 64
-            ):
-                pix[x, y] = (42, 16, 72, 255)
-    d = ImageDraw.Draw(px)
-    d.fontmode = "L"
-    try:
-        from PIL import ImageFont
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42 * SS // 4)
-    except Exception:
-        font = None
-    gta = "GTA"
-    if font:
-        bb = d.textbbox((0, 0), gta, font=font)
-        tw, th = bb[2] - bb[0], bb[3] - bb[1]
-        tx, ty = cx - tw // 2 - bb[0], cy - th // 2 - 18 * SS // 4 - bb[1]
-        d.text((tx + 3, ty + 4), gta, font=font, fill=(48, 16, 72, 255))
-        d.text((tx, ty), gta, font=font, fill=(248, 244, 238, 255))
-    px.putalpha(mask)
+            r, g, b = 255, int(45 + 147 * u), int(138 - 10 * u)
+        for x in range(n):
+            if (x - cx) * (x - cx) + (y - cy + 2) * (y - cy + 2) > cr * cr:
+                continue
+            if vi(x, y, 0):
+                if vi(x, y, -2):
+                    put(x, y, r, g, b, 255)
+                else:
+                    put(x, y, 255, 138, 58, 255)
+            elif vi(x, y, 4):
+                put(x, y, 42, 16, 72, 255)
+            else:
+                put(x, y, 8, 6, 16, 255)
+
+    raw = b"".join(b"\x00" + bytes(rgba[y * n * 4 : (y + 1) * n * 4]) for y in range(n))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    ihdr = struct.pack(">IIBBBBB", n, n, 8, 6, 0, 0, 0)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    px.resize((SIZE, SIZE), Image.LANCZOS).save(dest)
+    dest.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
 
 
 def encode_icon_bin(png: Path, icon_id: int) -> bytes:
