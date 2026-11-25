@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>	<string>org.nano7kit.gta6</string>
+	<key>CFBundleName</key>		<string>GTA 6</string>
+	<key>CFBundleExecutable</key>	<string>gta6</string>
+	<key>HBAppKind</key>			<integer>1</integer>
+	<key>HBIconGlyph</key>		<string>car</string>
+	<key>HBIconColor</key>		<string>#ff2d6a</string>
+</dict>
+</plist>

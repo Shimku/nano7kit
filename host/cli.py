@@ -349,14 +349,18 @@ def cmd_nabase(args) -> int:
         print("NABASE_RESTORE_OK")
         return 0
     if sub == "add":
+        from .app_catalog import resolve_name
         from .ports import prepare_for_add
 
         rom = getattr(args, "rom", None)
         payload = getattr(args, "payload", None)
+        resolved = []
         for name in args.names:
-            prepare_for_add(name, rom=Path(rom).expanduser() if rom else None,
+            key = resolve_name(name) or name
+            resolved.append(key)
+            prepare_for_add(key, rom=Path(rom).expanduser() if rom else None,
                             payload=Path(payload).expanduser() if payload else None)
-        nabase.add(root, args.names)
+        nabase.add(root, resolved)
         print("APPS_OK")
         return 0
     if sub == "remove":

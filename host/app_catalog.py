@@ -143,6 +143,7 @@ CATEGORIES = {
         "Snake",
         "Sudoku",
         "Tetris",
+        "GTA 6",
         "Tictactoe",
         "Tilt Ball",
         "Tower",
@@ -151,7 +152,7 @@ CATEGORIES = {
     "cards": ("Chess", "Freecell", "Heads Up", "Mahjong", "Solitaire", "Holdem"),
     "graphics": ("Benchmark", "OpenGL", "Stress", "Widgets"),
     "diagnostic": ("BigLoad", "FPUTest", "GLBench", "Probe"),
-    "first-party": ("Lap", "JS Hello", "JS Hero", "JS Samples", "JS QuickJS", "Free RAM"),
+    "first-party": ("Lap", "JS Hello", "JS Hero", "JS Samples", "JS QuickJS", "Free RAM", "GTA 6"),
     "hardware-tested": ("Blocks", "Game Boy", "Probe"),
     "ports": (
         "Mario Kart",
@@ -191,6 +192,10 @@ AUTHORS = {
         "layer; dlmalloc by Doug Lea (CC0); your own PopCap PvZ GOTY files, not in git"
     ),
     "Lap": "nano7kit first-party (MIT); NanoApps SDK (MIT)",
+    "GTA 6": (
+        "nano7kit first-party joke (MIT); original Mangrove Key art and writing; "
+        "NanoApps SDK (MIT)"
+    ),
     "Free RAM": "nano7kit first-party LVGL memory probe (MIT); NanoApps SDK (MIT)",
     "JS Hello": (
         "nano7kit first-party PocketJS HAL prototype (MIT); "
@@ -252,6 +257,10 @@ ALIASES = {
     "tic-tac-toe": "Tictactoe",
     "lap": "Lap",
     "stopwatch": "Lap",
+    "gta6": "GTA 6",
+    "gta-6": "GTA 6",
+    "gta 6": "GTA 6",
+    "gta": "GTA 6",
     "jshello": "JS Hello",
     "js-hello": "JS Hello",
     "pockethello": "JS Hello",
@@ -353,6 +362,7 @@ _RISK_BY_NAME = {
     "Fruit Ninja": 6,
     "PvZ Portable": 6,
     "Lap": 1,
+    "GTA 6": 1,
     "JS Hello": 1,
     "JS Hero": 5,
     "JS Samples": 5,

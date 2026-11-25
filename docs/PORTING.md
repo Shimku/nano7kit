@@ -22,8 +22,10 @@ The C SDK is in `nanoapps/sdk/`.
 ./start package my_app                    # or a .nanoapp zip in nanoapps/build/packages/
 ```
 
-`nanoapps/apps/lap` is a small example. Someone else's `.nanoapp` folder (it holds
-`manifest.napp`, `app.hbapp` and `icon.bin`) can be copied into `/Apps` in Disk Mode.
+`nanoapps/apps/lap` is a small example. `./start nabase add 'GTA 6'` builds the
+first-party Mangrove Key joke (original art, no payload). Someone else's `.nanoapp`
+folder (it holds `manifest.napp`, `app.hbapp` and `icon.bin`) can be copied into
+`/Apps` in Disk Mode.
 NanoApps advises keeping an app under about 0.5 MB. Bigger ones need the parts below.
 
 ## A JavaScript app

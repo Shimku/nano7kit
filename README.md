@@ -78,6 +78,7 @@ In C, with the NanoApps SDK (NanoApps apps run unchanged on this launcher):
 ./start sdk new my_app --title "My App"
 ./start sdk build my_app
 ./start nabase add "My App"        # Disk Mode
+./start nabase add 'GTA 6'         # joke caper, no extra files
 ```
 
 Porting a big game: [docs/PORTING.md](docs/PORTING.md) walks through Mario 64, PvZ,

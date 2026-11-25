@@ -77,6 +77,8 @@ ITEMS: Tuple[Item, ...] = (
     Item("Clock", "Clock", "apps"),
     Item("Calendar", "Calendar", "apps"),
     Item("Lap", "Lap", "apps", blurb="stopwatch"),
+    Item("GTA 6", "GTA 6", "apps", tested=False,
+         blurb="Mangrove Key crime caper (joke, original art)"),
     # Games: bring your own file
     Item("Mario 64", "Mario 64", "games", "your Super Mario 64 (USA) .z64 ROM", "rom"),
     Item("Mario Kart 64", "Mario Kart", "games", "your Mario Kart 64 (USA) .z64 ROM", "rom", tested=False),

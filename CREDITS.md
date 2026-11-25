@@ -40,6 +40,7 @@ Credits for those are in nano7-untethered.
   is read on refresh, and only re-reading the catalog after USB marked the disk
   dirty) and `.nanoapp` packaging for Paint and Free RAM
 - the PocketJS nano 7G target, JS QuickJS, JS Hero, JS Samples and Free RAM
+- GTA 6, a first-party RAW_SURFACE joke set in original Mangrove Key (no third-party game data)
 - the PvZ Portable port and the Fruit Ninja recompile (the approach follows
   olievans123's Temple Run port; none of its code is used)
 - memory changes to olievans123's Temple Run port, applied at build time
