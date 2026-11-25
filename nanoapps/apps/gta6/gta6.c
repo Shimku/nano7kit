@@ -21,8 +21,6 @@ static int s_state; /* 0 wait, 1 run, 2 short, 3 bye */
 static uint32_t *s_fb;
 static int s_w, s_h;
 
-int hb_audio_play_wav(const char *path, uint32_t vol);
-
 static void log_flush(void)
 {
     const char *line;
@@ -184,7 +182,6 @@ void hb_raw_init(int w, int h)
 void hb_raw_frame(const hb_spoint_t *t)
 {
     uint32_t now, dt;
-    int steps, i;
     const char *bye[] = { "SAVED", "PRESS HOME", "TO RETURN" };
 
     if (s_state == 2) {
@@ -213,10 +210,7 @@ void hb_raw_frame(const hb_spoint_t *t)
     dt = now - s_last_ms;
     s_last_ms = now;
     g6_set_time(s_g, now);
-    steps = (int)(dt / G6_TICK_MS);
-    if (steps < 1) steps = 1;
-    if (steps > 4) steps = 4;
-    for (i = 0; i < steps; i++) g6_tick(s_g);
+    g6_advance(s_g, dt);
     if (g6_horn(s_g))
         hb_audio_play_wav(HORN_PATH, 80);
     if (s_g->log_ready) log_flush();

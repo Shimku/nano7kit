@@ -1,5 +1,8 @@
 #!/usr/bin/python3
 """GTA 6 NanoApp: catalog name, memory plan, host play, contact sheet."""
+import math
+import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -152,6 +155,12 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("#define G6_BLOCK_MIN  0x18000u", src)
         self.assertIn('#define G6_TITLE      "GTA 6"', src)
         self.assertIn('#define G6_DATA_DIR   "/Apps/Data/GTA6"', src)
+        self.assertIn("#define G6_WALK_PX_S  40", src)
+        self.assertIn("#define G6_CAR_PX_S   120", src)
+        self.assertIn("#define G6_CAR_ACC_MS 1500", src)
+        self.assertIn("#define G6_STEER_DEG_S 180", src)
+        self.assertIn("#define G6_DT_MAX_MS  50", src)
+        self.assertIn("#define G6_JOY_DEAD_PCT 15", src)
         self.assertEqual(g6.BLOCK_MAX, 0x40000)
         self.assertEqual(g6.FAT_DATA, "/Apps/Data/GTA6")
         nano = (APP / "gta6.c").read_text()
@@ -160,6 +169,9 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("prepare_unload", nano)
         self.assertIn("log.txt", nano)
         self.assertIn("hb_audio_play_wav", nano)
+        self.assertIn("g6_advance", nano)
+        self.assertIn("hb_time_uptime_ms", nano)
+        self.assertNotRegex(nano, r"(?m)^\s*(int|bool)\s+hb_audio_play_wav\s*\(")
 
 
 class MemoryTests(unittest.TestCase):
@@ -239,6 +251,44 @@ class HostPlayTests(unittest.TestCase):
             self.assertEqual(rgb[0], 0x4c)
             self.assertEqual(rgb[1], 0x0a)
             self.assertEqual(rgb[2], 0x0a)
+
+    def _stick_dist(self, fps: int):
+        out = run_host("--stick-ms", "1000", "--fps", str(fps))
+        m = re.search(
+            r"STICK fps=(\d+) ms=(\d+) dx=(-?\d+) dy=(-?\d+) in_bounds=(\d+)",
+            out,
+        )
+        self.assertIsNotNone(m, out)
+        dx, dy = int(m.group(3)), int(m.group(4))
+        inb = int(m.group(5))
+        dist = math.hypot(dx, dy)
+        self.assertEqual(inb, 1, out)
+        return dist, out
+
+    def test_stick_distance_frame_rate_independent(self):
+        d30, out30 = self._stick_dist(30)
+        d200, out200 = self._stick_dist(200)
+        expect = 40.0
+        self.assertGreater(d30, 1.0, out30)
+        self.assertLess(d30, 80.0, out30)
+        self.assertAlmostEqual(d30, expect, delta=expect * 0.10, msg=out30)
+        self.assertAlmostEqual(d200, expect, delta=expect * 0.10, msg=out200)
+        self.assertLess(abs(d30 - d200) / max(d30, d200, 1.0), 0.10, out30 + out200)
+
+
+class ArmCompileTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("arm-none-eabi-gcc"), "arm-none-eabi-gcc not installed")
+    def test_arm_compile_gta6_against_sdk_headers(self):
+        r = subprocess.run(
+            ["make", "-C", str(APP), "armcheck"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(r.returncode, 0, r.stdout + "\n" + r.stderr)
+        self.assertIn("ARM_COMPILE ok", r.stdout)
+        obj = APP / "build" / "gta6_arm.o"
+        self.assertTrue(obj.is_file())
 
 
 if __name__ == "__main__":

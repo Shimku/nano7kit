@@ -11,9 +11,18 @@
 #define G6_SCR_W      240
 #define G6_SCR_H      432
 #define G6_TICK_MS    30
+#define G6_DT_MAX_MS  50
+#define G6_STEP_CAP   4
+#define G6_WALK_PX_S  40
+#define G6_CAR_PX_S   120
+#define G6_CAR_ACC_MS 1500
+#define G6_STEER_DEG_S 180
+#define G6_JOY_DEAD_PCT 15
 #define G6_MAP_W      72
 #define G6_MAP_H      96
 #define G6_TILE       16
+#define G6_WORLD_W    (G6_MAP_W * G6_TILE)
+#define G6_WORLD_H    (G6_MAP_H * G6_TILE)
 #define G6_MAX_ENT    36
 #define G6_MAX_FINGERS 8
 #define G6_BLOCK_MAX  0x40000u
@@ -89,6 +98,9 @@ int g6_init(G6Game *g, uint32_t free_b, uint32_t largest, uint32_t arena);
 void g6_set_time(G6Game *g, uint32_t ms);
 void g6_set_fingers(G6Game *g, const G6Finger *f, int n);
 void g6_tick(G6Game *g);
+void g6_advance(G6Game *g, uint32_t dt_ms);
+int g6_player_px(const G6Game *g);
+int g6_player_py(const G6Game *g);
 void g6_draw(G6Game *g, uint32_t *fb, int w, int h);
 int g6_want_home(const G6Game *g);
 int g6_low_mem(const G6Game *g);

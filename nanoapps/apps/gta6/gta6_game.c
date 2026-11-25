@@ -74,6 +74,60 @@ static int16_t isin(uint8_t a)
     return icos((uint8_t)(a - 64u));
 }
 
+static int isqrt(int n)
+{
+    unsigned x, y, z;
+    if (n <= 0) return 0;
+    x = (unsigned)n;
+    y = x;
+    for (;;) {
+        z = (y + x / y) >> 1;
+        if (z >= y) return (int)y;
+        y = z;
+    }
+}
+
+static void clamp_ent(G6Ent *e)
+{
+    int32_t minv = 8 << 8;
+    int32_t maxx = (G6_WORLD_W - 8) << 8;
+    int32_t maxy = (G6_WORLD_H - 8) << 8;
+    if (!e) return;
+    if (e->x < minv) e->x = minv;
+    if (e->y < minv) e->y = minv;
+    if (e->x > maxx) e->x = maxx;
+    if (e->y > maxy) e->y = maxy;
+}
+
+static void map_stick(int dx, int dy, int *ax, int *ay)
+{
+    int d2 = dx * dx + dy * dy;
+    int r2 = JOY_R * JOY_R;
+    int d, dead, span, lin, mag;
+    if (d2 > r2) {
+        d = isqrt(d2);
+        if (d < 1) d = 1;
+        dx = dx * JOY_R / d;
+        dy = dy * JOY_R / d;
+        d = JOY_R;
+    } else {
+        d = isqrt(d2);
+    }
+    dead = (JOY_R * G6_JOY_DEAD_PCT) / 100;
+    if (d <= dead) {
+        *ax = 0;
+        *ay = 0;
+        return;
+    }
+    span = JOY_R - dead;
+    if (span < 1) span = 1;
+    lin = (d - dead) * 256 / span;
+    if (lin > 256) lin = 256;
+    mag = lin * lin / 256;
+    *ax = dx * mag / d;
+    *ay = dy * mag / d;
+}
+
 static uint32_t rnd(G6Game *g)
 {
     g->rng = g->rng * 1664525u + 1013904223u;
@@ -453,14 +507,7 @@ void g6_set_fingers(G6Game *g, const G6Finger *f, int n)
         if (in_r(f[i].x, f[i].y, BTN_BX, BTN_BY, 24)) { b = 1; continue; }
         if (in_r(f[i].x, f[i].y, BTN_SX, BTN_SY, 20)) { s = 1; continue; }
         if (f[i].x < 110 && f[i].y > 310) {
-            int dx = f[i].x - JOY_CX;
-            int dy = f[i].y - JOY_CY;
-            if (dx < -JOY_R) dx = -JOY_R;
-            if (dx > JOY_R) dx = JOY_R;
-            if (dy < -JOY_R) dy = -JOY_R;
-            if (dy > JOY_R) dy = JOY_R;
-            jx = dx;
-            jy = dy;
+            map_stick(f[i].x - JOY_CX, f[i].y - JOY_CY, &jx, &jy);
             got = 1;
         }
     }
@@ -472,8 +519,8 @@ void g6_set_fingers(G6Game *g, const G6Finger *f, int n)
         g->joyx = 0;
         g->joyy = jy;
     } else if (got) {
-        g->joyx = (jx * 256) / JOY_R;
-        g->joyy = (jy * 256) / JOY_R;
+        g->joyx = jx;
+        g->joyy = jy;
     } else {
         g->joyx = 0;
         g->joyy = 0;
@@ -504,6 +551,7 @@ static void leave_car(G6Game *g, G6Ent *e)
         ny = c->y + ((int32_t)isin((uint8_t)(c->ang + 64)) * 14);
         e->x = nx;
         e->y = ny;
+        clamp_ent(e);
         c->speed = 0;
         c->flags &= (uint8_t)~F_MARK;
     }
@@ -538,63 +586,88 @@ static void hit_building(G6Game *g, G6Ent *c, int32_t ox, int32_t oy)
     else g->hp = 0;
 }
 
+static int car_max_speed(const G6Ent *c)
+{
+    /* 8.8 pixels per 30 ms tick. 120 px/s -> 922. */
+    int maxs = (G6_CAR_PX_S * G6_TICK_MS * 256) / 1000;
+    if (c && c->kind == K_POL) maxs = (maxs * 11) / 10;
+    return maxs;
+}
+
 static void drive(G6Game *g, G6Ent *c, int gas, int brk, int steer)
 {
     int32_t ox = c->x, oy = c->y;
     int t, grip = (g->who == 1) ? 6 : 5;
-    int maxs = 2200;
-    if (c->kind == K_POL) maxs = 2400;
-    if (gas) c->speed = (int16_t)(c->speed + 55);
+    int maxs = car_max_speed(c);
+    int acc = (maxs * G6_TICK_MS) / G6_CAR_ACC_MS;
+    int aspeed;
+    if (acc < 1) acc = 1;
+    if (gas < 0) gas = 0;
+    if (gas > 256) gas = 256;
+    if (steer > 256) steer = 256;
+    if (steer < -256) steer = -256;
+    if (gas) c->speed = (int16_t)(c->speed + acc * gas / 256);
     if (brk) {
-        if (c->speed > 80) c->speed = (int16_t)(c->speed - 90);
-        else if (c->speed < -80) c->speed = (int16_t)(c->speed + 90);
+        if (c->speed > acc) c->speed = (int16_t)(c->speed - acc * 2);
+        else if (c->speed < -acc) c->speed = (int16_t)(c->speed + acc * 2);
         else c->speed = 0;
         c->slide = (int16_t)(c->slide * 3 / 4);
+    } else if (!gas) {
+        if (c->speed > acc / 4) c->speed = (int16_t)(c->speed - acc / 4);
+        else if (c->speed < -acc / 4) c->speed = (int16_t)(c->speed + acc / 4);
+        else c->speed = 0;
     }
     if (c->speed > maxs) c->speed = (int16_t)maxs;
-    if (c->speed < -900) c->speed = -900;
-    if (steer) {
-        int turn = (steer * (int)c->speed) / 18000;
-        if (turn > 12) turn = 12;
-        if (turn < -12) turn = -12;
+    if (c->speed < -(maxs / 3)) c->speed = (int16_t)(-(maxs / 3));
+    aspeed = c->speed;
+    if (aspeed < 0) aspeed = -aspeed;
+    if (steer && aspeed > 12) {
+        /* 180 deg/s at full analog and top speed (256 ang = 360 deg). */
+        int turn = (steer * 3 / 200) * aspeed / maxs;
+        if (turn > 6) turn = 6;
+        if (turn < -6) turn = -6;
         c->ang = (uint8_t)(c->ang + turn);
-        c->slide = (int16_t)(c->slide + steer / 8);
+        c->slide = (int16_t)(c->slide + steer / 32);
     }
     c->slide = (int16_t)((int)c->slide * grip / 8);
-    if (c->speed > 0) c->speed = (int16_t)(c->speed - c->speed / 18);
-    else if (c->speed < 0) c->speed = (int16_t)(c->speed - c->speed / 18);
     c->x += ((int32_t)icos(c->ang) * c->speed) / 256;
     c->y += ((int32_t)isin(c->ang) * c->speed) / 256;
     c->x += ((int32_t)icos((uint8_t)(c->ang + 64)) * c->slide) / 256;
     c->y += ((int32_t)isin((uint8_t)(c->ang + 64)) * c->slide) / 256;
+    clamp_ent(c);
     t = pix_tile(g, c->x, c->y);
     if (solid_car(t) && t != T_BRIDGE) hit_building(g, c, ox, oy);
     if (t == T_SWAMP) {
         c->speed = (int16_t)(c->speed * 3 / 4);
-        c->slide = (int16_t)(c->slide + 8);
+        c->slide = (int16_t)(c->slide + 4);
     }
+    clamp_ent(c);
 }
 
-static void walk(G6Game *g, G6Ent *e, int vx, int vy, int spd)
+static void walk(G6Game *g, G6Ent *e, int vx, int vy, int px_s)
 {
     int32_t ox = e->x, oy = e->y;
+    int32_t dx, dy;
     int t;
-    e->x += vx * spd;
-    e->y += vy * spd;
+    dx = (int32_t)vx * px_s * G6_TICK_MS / 1000;
+    dy = (int32_t)vy * px_s * G6_TICK_MS / 1000;
+    e->x += dx;
+    e->y += dy;
     t = pix_tile(g, e->x, e->y);
     if (solid_foot(t)) {
         e->x = ox;
         e->y = oy;
+        clamp_ent(e);
         return;
     }
     if (t == T_OCEAN) {
-        e->x = ox + vx * spd / 3;
-        e->y = oy + vy * spd / 3;
+        e->x = ox + dx / 3;
+        e->y = oy + dy / 3;
         if (g->hp > 0 && (g->tick_n & 7u) == 0) g->hp--;
     }
     if (t == T_SWAMP && (g->tick_n & 15u) == 0 && g->hp > 0) g->hp--;
+    clamp_ent(e);
     if (vx || vy) {
-        /* 256-angle from stick */
         if (vx > 40 && vy > 40) e->ang = 32;
         else if (vx > 40 && vy < -40) e->ang = 224;
         else if (vx < -40 && vy > 40) e->ang = 96;
@@ -610,7 +683,7 @@ static void hit_ped(G6Game *g, G6Ent *c)
 {
     int i;
     int32_t cx = c->x >> 8, cy = c->y >> 8;
-    if (c->speed < 400 && c->speed > -400) return;
+    if (c->speed < 200 && c->speed > -200) return;
     for (i = 0; i < G6_MAX_ENT; i++) {
         int dx, dy;
         if (!(g->ent[i].flags & F_ALIVE) || g->ent[i].kind != K_PED) continue;
@@ -644,8 +717,7 @@ static void ai_car(G6Game *g, G6Ent *c, int cop)
             if (d < -128) d += 256;
             steer = d * 4;
         }
-        if (c->speed > 1600) brk = 0;
-        gas = 1;
+        gas = 256;
         drive(g, c, gas, brk, steer);
         return;
     }
@@ -655,12 +727,12 @@ static void ai_car(G6Game *g, G6Ent *c, int cop)
         c->speed = (int16_t)(c->speed / 2);
     }
     if (rni(g, 80) == 0) c->ang = (uint8_t)(c->ang + (rni(g, 2) ? 64 : -64));
-    drive(g, c, 1, 0, 0);
+    drive(g, c, 180, 0, 0);
 }
 
 static void ai_ped(G6Game *g, G6Ent *e)
 {
-    int spd = g->wanted ? 90 : 40;
+    int spd = g->wanted ? 28 : 18;
     if (e->cool) { e->cool--; }
     else {
         e->dirx = (int8_t)(rni(g, 3) - 1);
@@ -672,7 +744,7 @@ static void ai_ped(G6Game *g, G6Ent *e)
         e->dirx = (int8_t)((e->x > p->x) ? 1 : -1);
         e->diry = (int8_t)((e->y > p->y) ? 1 : -1);
     }
-    walk(g, e, e->dirx * 80, e->diry * 80, spd);
+    walk(g, e, e->dirx * 256, e->diry * 256, spd);
 }
 
 static void ai_gator(G6Game *g, G6Ent *e)
@@ -704,7 +776,7 @@ static void partner_follow(G6Game *g)
                 b->flags |= F_INCAR | F_PASS;
                 b->car = a->car;
             } else {
-                walk(g, b, dx > 0 ? 80 : -80, dy > 0 ? 80 : -80, 70);
+                walk(g, b, dx > 0 ? 256 : -256, dy > 0 ? 256 : -256, 36);
             }
         } else {
             b->x = a->x;
@@ -716,7 +788,7 @@ static void partner_follow(G6Game *g)
     dx = (a->x - b->x) >> 8;
     dy = (a->y - b->y) >> 8;
     if (dx * dx + dy * dy > 18 * 18)
-        walk(g, b, dx > 4 ? 80 : dx < -4 ? -80 : 0, dy > 4 ? 80 : dy < -4 ? -80 : 0, 60);
+        walk(g, b, dx > 4 ? 256 : dx < -4 ? -256 : 0, dy > 4 ? 256 : dy < -4 ? -256 : 0, 36);
 }
 
 static void mission_setup(G6Game *g, int id)
@@ -829,7 +901,7 @@ static void wanted_tick(G6Game *g)
         if (dx * dx + dy * dy < 160 * 160) seen = 1;
         if (dx * dx + dy * dy < 16 * 16) {
             G6Ent *c = car_of(g, p);
-            int slow = c ? (c->speed < 120 && c->speed > -120) : 1;
+            int slow = c ? (c->speed < 80 && c->speed > -80) : 1;
             if (slow) g->bust_cd++;
             else g->bust_cd = 0;
         }
@@ -907,7 +979,7 @@ static void handle_edges(G6Game *g)
     if (g->btn_a && !g->prev_a) {
         if (p->flags & F_INCAR) {
             G6Ent *c = car_of(g, p);
-            if (!c || c->speed < 200) leave_car(g, p);
+            if (!c || c->speed < 48) leave_car(g, p);
         } else {
             int ci = near_car(g, p);
             if (ci >= 0) enter_car(g, p, ci);
@@ -944,9 +1016,11 @@ static void play_tick(G6Game *g)
     if (p->flags & F_INCAR) {
         G6Ent *c = car_of(g, p);
         if (c) {
-            int gas = (g->joyy < -30) || (g->joyx || g->joyy);
-            if (g->joyy > 40) gas = 0;
-            drive(g, c, gas, g->btn_b || g->joyy > 50, g->joyx);
+            int mag = isqrt(g->joyx * g->joyx + g->joyy * g->joyy);
+            int gas = mag;
+            int brk = g->btn_b || (g->joyy > 80);
+            if (brk) gas = 0;
+            drive(g, c, gas, brk, g->joyx);
             hit_ped(g, c);
             p->x = c->x;
             p->y = c->y;
@@ -954,7 +1028,7 @@ static void play_tick(G6Game *g)
             if (c->kind == K_POL && (g->tick_n & 31u) == 0) bump_wanted(g, 1);
         }
     } else {
-        spd = (g->who == 0) ? 78 : 62;
+        spd = G6_WALK_PX_S;
         walk(g, p, g->joyx, g->joyy, spd);
     }
     partner_follow(g);
@@ -964,6 +1038,9 @@ static void play_tick(G6Game *g)
         else if (g->ent[i].kind == K_POL) ai_car(g, &g->ent[i], 1);
         else if (g->ent[i].kind == K_PED) ai_ped(g, &g->ent[i]);
         else if (g->ent[i].kind == K_GATOR) ai_gator(g, &g->ent[i]);
+    }
+    for (i = 0; i < G6_MAX_ENT; i++) {
+        if (g->ent[i].flags & F_ALIVE) clamp_ent(&g->ent[i]);
     }
     wanted_tick(g);
     mission_tick(g);
@@ -980,24 +1057,47 @@ static void play_tick(G6Game *g)
     {
         int32_t tx = p->x - ((G6_SCR_W / 2) << 8);
         int32_t ty = p->y - ((200) << 8);
-        g->camx += (tx - g->camx) / 6;
-        g->camy += (ty - g->camy) / 6;
+        g->camx += (tx - g->camx) / 8;
+        g->camy += (ty - g->camy) / 8;
     }
 }
 
 void g6_tick(G6Game *g)
 {
-    uint32_t step;
     if (!g || g->low_mem) return;
-    g->acc_ms += G6_TICK_MS;
-    /* host sets time; device may too. Always one physics step per call. */
-    (void)step;
     g->tick_n++;
     g->frames++;
     if (g->mode == G6_TITLE_MODE) handle_edges(g);
     else if (g->mode == G6_PLAY) play_tick(g);
     else handle_edges(g);
     if (g->arena_size > g->arena_peak) g->arena_peak = g->arena_size;
+}
+
+void g6_advance(G6Game *g, uint32_t dt_ms)
+{
+    int steps = 0;
+    if (!g || g->low_mem) return;
+    if (dt_ms > G6_DT_MAX_MS) dt_ms = G6_DT_MAX_MS;
+    g->acc_ms += dt_ms;
+    while (g->acc_ms >= (uint32_t)G6_TICK_MS && steps < G6_STEP_CAP) {
+        g->acc_ms -= (uint32_t)G6_TICK_MS;
+        g6_tick(g);
+        steps++;
+    }
+    if (steps >= G6_STEP_CAP && g->acc_ms >= (uint32_t)G6_TICK_MS)
+        g->acc_ms = (uint32_t)(G6_TICK_MS - 1);
+}
+
+int g6_player_px(const G6Game *g)
+{
+    if (!g) return 0;
+    return (int)(g->ent[g->who & 1].x >> 8);
+}
+
+int g6_player_py(const G6Game *g)
+{
+    if (!g) return 0;
+    return (int)(g->ent[g->who & 1].y >> 8);
 }
 
 /* ---------------- draw ---------------- */
@@ -1676,6 +1776,7 @@ void g6_debug_pose(G6Game *g, int px, int py, int in_car)
     p = who(g);
     p->x = (int32_t)px << 8;
     p->y = (int32_t)py << 8;
+    clamp_ent(p);
     g->camx = p->x - ((G6_SCR_W / 2) << 8);
     g->camy = p->y - (200 << 8);
     g->hp = 100;
@@ -1712,7 +1813,7 @@ void g6_debug_wanted(G6Game *g, int stars)
         int i = spawn(g, K_POL, p->x + (20 << 8), p->y - (12 << 8), p->ang);
         if (i >= 0) {
             g->ent[i].pal = 2;
-            g->ent[i].speed = 800;
+            g->ent[i].speed = 400;
         }
     }
 }

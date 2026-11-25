@@ -123,6 +123,37 @@ static int run_demo(G6Game *g, uint32_t *fb, const char *dir)
     return 0;
 }
 
+static int run_stick(G6Game *g, int ms, int fps)
+{
+    G6Finger f;
+    int frames, i, x0, y0, x1, y1, dx, dy, dt, inb;
+    if (fps < 1) fps = 1;
+    if (ms < 1) ms = 1;
+    g6_debug_pose(g, 32 * G6_TILE + 8, 40 * G6_TILE + 8, 0);
+    x0 = g6_player_px(g);
+    y0 = g6_player_py(g);
+    f.id = 0;
+    f.x = 48;
+    f.y = 378 - 36;
+    f.down = 1;
+    frames = (ms * fps) / 1000;
+    if (frames < 1) frames = 1;
+    dt = 1000 / fps;
+    if (dt < 1) dt = 1;
+    for (i = 0; i < frames; i++) {
+        g6_set_fingers(g, &f, 1);
+        g6_advance(g, (uint32_t)dt);
+    }
+    x1 = g6_player_px(g);
+    y1 = g6_player_py(g);
+    dx = x1 - x0;
+    dy = y1 - y0;
+    inb = (x1 >= 8 && y1 >= 8 && x1 <= G6_WORLD_W - 8 && y1 <= G6_WORLD_H - 8);
+    printf("STICK fps=%d ms=%d dx=%d dy=%d in_bounds=%d px=%d py=%d ticks=%u\n",
+           fps, ms, dx, dy, inb, x1, y1, g6_ticks(g));
+    return inb ? 0 : 1;
+}
+
 static int long_play(G6Game *g)
 {
     uint32_t peak0, i;
@@ -162,6 +193,8 @@ int main(int argc, char **argv)
     int do_long = 0;
     int do_demo = 0;
     int do_home = 0;
+    int stick_ms = 0;
+    int stick_fps = 30;
     int fail = 0;
     int i;
 
@@ -176,6 +209,8 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--long")) do_long = 1;
         else if (!strcmp(argv[i], "--demo")) do_demo = 1;
         else if (!strcmp(argv[i], "--home")) do_home = 1;
+        else if (!strcmp(argv[i], "--stick-ms") && i + 1 < argc) stick_ms = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--fps") && i + 1 < argc) stick_fps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--tight")) {
             free_b = (uint32_t)(3.9 * 1024 * 1024);
             largest = 2u * 1024u * 1024u;
@@ -242,6 +277,7 @@ int main(int argc, char **argv)
         printf("HOME want=%d mode=%d\n", g6_want_home(g), g6_mode(g));
         if (!g6_want_home(g)) fail = 1;
     }
+    if (stick_ms) fail |= run_stick(g, stick_ms, stick_fps);
     if (save_path) {
         uint8_t buf[128];
         size_t n = 0;
