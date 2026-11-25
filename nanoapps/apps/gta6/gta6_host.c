@@ -87,6 +87,7 @@ static void idle(G6Game *g, int frames)
 static int run_demo(G6Game *g, uint32_t *fb, const char *dir)
 {
     char path[512];
+    idle(g, 125);
     snprintf(path, sizeof path, "%s/title.ppm", dir);
     g6_draw(g, fb, G6_SCR_W, G6_SCR_H);
     write_ppm(path, fb, G6_SCR_W, G6_SCR_H);
@@ -234,6 +235,7 @@ int main(int argc, char **argv)
     if (do_demo && dump) run_demo(g, fb, dump);
     if (do_long) fail |= long_play(g);
     if (do_home) {
+        tap(g, 120, 330, 1);
         tap(g, 120, 330, 1);
         tap(g, 210, 10, 1);
         tap(g, 120, 280, 1);

@@ -168,6 +168,73 @@ def _make_png(fa_name: str, rgb: Tuple[int, int, int], dest: Path, initials: str
     img.resize((SIZE, SIZE), Image.LANCZOS).save(dest)
 
 
+def _in_ell(x: int, y: int, cx: int, cy: int, rx: int, ry: int) -> bool:
+    if rx < 1 or ry < 1:
+        return False
+    dx, dy = x - cx, y - cy
+    return dx * dx * ry * ry + dy * dy * rx * rx <= rx * rx * ry * ry
+
+
+def _six_hit(x: int, y: int, cx: int, cy: int, k: int) -> bool:
+    t = max(6, k // 3)
+    lo = _in_ell(x, y, cx, cy + k // 5, k, (k * 9) // 10)
+    li = _in_ell(x, y, cx, cy + k // 5, k - t, (k * 9) // 10 - t)
+    uo = _in_ell(x, y, cx - k // 12, cy - (k * 5) // 8, (k * 7) // 8, (k * 5) // 8)
+    ui = _in_ell(x, y, cx - k // 12, cy - (k * 5) // 8, (k * 7) // 8 - t, (k * 5) // 8 - t)
+    stem = cx - k <= x <= cx - k + t and cy - (k * 5) // 8 <= y <= cy + k // 5
+    return (lo and not li) or ((uo and not ui) and y < cy - k // 10 and x < cx + k // 4) or stem
+
+
+def _make_gta6_png(dest: Path) -> None:
+    """Home icon: original sunset-6 with stacked white GTA. Not a third-party mark."""
+    from PIL import Image, ImageDraw
+
+    SS, S = 4, SIZE * 4
+    img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    x0, y0 = int(round(CIRC_X0 * SS)), int(round(CIRC_Y0 * SS))
+    dw, dh = int(round(CIRC_W * SS)), int(round(CIRC_H * SS))
+    mask = Image.new("L", (S, S), 0)
+    ImageDraw.Draw(mask).ellipse([x0, y0, x0 + dw, y0 + dh], fill=255)
+    px = Image.new("RGBA", (S, S), (8, 6, 16, 255))
+    cx, cy, k = S // 2, S // 2 + 8, 118
+    pix = px.load()
+    for y in range(S):
+        ty = min(1.0, max(0.0, (y - (cy - k)) / max(1, 2 * k)))
+        if ty < 0.5:
+            u = ty * 2
+            r, g, b = int(42 + (255 - 42) * u), int(40 + (45 - 40) * u), int(120 + (138 - 120) * u)
+        else:
+            u = (ty - 0.5) * 2
+            r, g, b = int(255 + (255 - 255) * u), int(45 + (192 - 45) * u), int(138 + (128 - 138) * u)
+        for x in range(S):
+            if _six_hit(x, y, cx, cy, k):
+                pix[x, y] = (r, g, b, 255)
+            elif any(
+                _six_hit(x + dx, y + dy, cx, cy, k)
+                for dy in range(-8, 9)
+                for dx in range(-8, 9)
+                if dx * dx + dy * dy <= 64
+            ):
+                pix[x, y] = (42, 16, 72, 255)
+    d = ImageDraw.Draw(px)
+    d.fontmode = "L"
+    try:
+        from PIL import ImageFont
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42 * SS // 4)
+    except Exception:
+        font = None
+    gta = "GTA"
+    if font:
+        bb = d.textbbox((0, 0), gta, font=font)
+        tw, th = bb[2] - bb[0], bb[3] - bb[1]
+        tx, ty = cx - tw // 2 - bb[0], cy - th // 2 - 18 * SS // 4 - bb[1]
+        d.text((tx + 3, ty + 4), gta, font=font, fill=(48, 16, 72, 255))
+        d.text((tx, ty), gta, font=font, fill=(248, 244, 238, 255))
+    px.putalpha(mask)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    px.resize((SIZE, SIZE), Image.LANCZOS).save(dest)
+
+
 def encode_icon_bin(png: Path, icon_id: int) -> bytes:
     sys.path.insert(0, str(_ipodhax_dir()))
     from ipodhax.silverdb.pack import encode_image  # type: ignore
@@ -192,7 +259,13 @@ def generate_icon(
     dest = Path(dest)
     png = dest.with_suffix(".png")
     initials = "".join(ch for ch in label if ch.isalnum())[:2] or "NA"
-    _make_png(glyph, hex_rgb(color), png, initials)
+    if label == "GTA 6":
+        try:
+            _make_gta6_png(png)
+        except Exception:
+            _make_png(glyph, hex_rgb(color), png, initials)
+    else:
+        _make_png(glyph, hex_rgb(color), png, initials)
     dest.write_bytes(encode_icon_bin(png, assign_app_id(bundle_id)))
     try:
         png.unlink()

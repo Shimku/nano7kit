@@ -131,7 +131,7 @@ void hb_raw_init(int w, int h)
     const char *short_lines[] = {
         "NOT ENOUGH MEMORY",
         "PAUSE MUSIC",
-        "TURN BLUETOOTH OFF",
+        "OR BLUETOOTH",
         "THEN REOPEN"
     };
 
@@ -191,7 +191,7 @@ void hb_raw_frame(const hb_spoint_t *t)
         const char *lines[] = {
             "NOT ENOUGH MEMORY",
             "PAUSE MUSIC",
-            "TURN BLUETOOTH OFF",
+            "OR BLUETOOTH",
             "THEN REOPEN"
         };
         g6_notice_draw(hb_raw_fb(), hb_raw_w(), hb_raw_h(), lines, 4);

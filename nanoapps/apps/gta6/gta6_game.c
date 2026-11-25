@@ -29,6 +29,7 @@
 #define BTN_SY 376
 #define PAUSE_X 200
 #define PAUSE_Y 6
+#define G6_INTRO 130
 
 static const int16_t COST[65] = {
     256,256,256,255,255,254,253,252,251,250,248,247,245,243,241,239,237,
@@ -38,20 +39,16 @@ static const int16_t COST[65] = {
 };
 
 static const char *const YAP[] = {
-    "YAP: @tidebait nia just took my hatchback",
-    "YAP: #FinallyOnNano is trending. 12 people.",
-    "YAP: wade says the sequel is a beach cooler",
+    "YAP: hatchback stolen on Palm Deck",
     "KEY MAN WRESTLES GATOR FOR LAST BATTERY",
     "KEY MAN LISTS A NANO AS A DEPENDENT",
-    "KEY MAN PAYS THE CAUSEWAY TOLL IN GRAPES",
-    "HOLD 96.1: six years of hold music, then this",
+    "KEY MAN PAYS CAUSEWAY TOLL IN GRAPES",
+    "HOLD 96.1: six years of hold music",
     "SWAMP SHUFFLE: all gators, no brakes",
-    "CLICK FM: we waited. we got 240 pixels.",
-    "YAP: trailer 3 is a rumour. this is a nano.",
-    "CITY HALL: the budget is 'maybe next spring'",
-    "YAP: if you can steal it, it was yours"
+    "CLICK FM: sunsets delayed until Friday",
+    "YAP: neon outage on the wharf"
 };
-#define YAP_N 12
+#define YAP_N 8
 
 static const char *const RADIO[] = {
     "HOLD 96.1", "SWAMP SHUFFLE", "CLICK FM", "NANO HITS", "GATOR TALK"
@@ -410,7 +407,7 @@ int g6_init(G6Game *g, uint32_t free_b, uint32_t largest, uint32_t arena)
     g->mode = G6_TITLE_MODE;
     g->hp = 100;
     g->money = 0;
-    set_ticker(g, "YAP: finally out. on iPod nano.");
+    set_ticker(g, G6_TAG);
     g6_note(g, "init: title");
     return 1;
 }
@@ -494,7 +491,7 @@ static void enter_car(G6Game *g, G6Ent *e, int ci)
     bump_wanted(g, 1);
     g->horn = 1;
     g6_note(g, "car: borrowed");
-    set_ticker(g, "YAP: a hatchback just grew legs");
+    set_ticker(g, "WANTED");
 }
 
 static void leave_car(G6Game *g, G6Ent *e)
@@ -624,7 +621,6 @@ static void hit_ped(G6Game *g, G6Ent *c)
             g->ent[i].flags = 0;
             bump_wanted(g, 1);
             g->money += 5;
-            set_ticker(g, "YAP: pedestrian became a headline");
         }
     }
 }
@@ -689,7 +685,7 @@ static void ai_gator(G6Game *g, G6Ent *e)
         e->y += (dy > 0 ? 200 : -200);
         if (d < 12 * 12 && g->hp > 8) {
             g->hp -= 8;
-            set_ticker(g, "KEY MAN: the gator union found you");
+            set_ticker(g, "GATOR");
         }
     }
 }
@@ -731,11 +727,11 @@ static void mission_setup(G6Game *g, int id)
     g->cp_n = 0;
     g->cp_at = 0;
     if (id == 1) {
-        set_ticker(g, "JOB: grab the cooler on the docks");
+        set_ticker(g, "PICK UP AT THE DOCKS");
         g6_note(g, "mission: cooler run");
     } else if (id == 2) {
         int i;
-        set_ticker(g, "JOB: nick the pink coupe, lose Key PD");
+        set_ticker(g, "STEAL A CAR");
         for (i = 2; i < G6_MAX_ENT; i++)
             if ((g->ent[i].flags & F_ALIVE) && g->ent[i].kind == K_CAR) {
                 g->ent[i].pal = 2;
@@ -751,7 +747,7 @@ static void mission_setup(G6Game *g, int id)
         g->cp_x[2] = tile_center(24); g->cp_y[2] = tile_center(52);
         g->cp_x[3] = tile_center(16); g->cp_y[3] = tile_center(29);
         g->cp_x[4] = tile_center(40); g->cp_y[4] = tile_center(21);
-        set_ticker(g, "JOB: five gates. do not miss the bridge");
+        set_ticker(g, "HIT ALL 5 GATES");
         g6_note(g, "mission: causeway heat");
     }
 }
@@ -774,7 +770,7 @@ static void mission_tick(G6Game *g)
             int32_t dx = (px - sx) >> 8, dy = (py - sy) >> 8;
             if (dx * dx + dy * dy < 16 * 16) {
                 g->mstage = 2;
-                set_ticker(g, "JOB: cooler is dripping. beach shack.");
+                set_ticker(g, "DELIVER TO NEON WHARF");
             }
         } else if (g->mstage == 2) {
             int32_t sx = tile_center(18), sy = tile_center(10);
@@ -784,7 +780,7 @@ static void mission_tick(G6Game *g)
                 g->mdone |= 1;
                 g->mission = 0;
                 g->mstage = 0;
-                set_ticker(g, "YAP: cooler delivered. it was bait.");
+                set_ticker(g, "JOB COMPLETE");
                 g6_note(g, "mission: cooler done");
             }
         }
@@ -793,7 +789,7 @@ static void mission_tick(G6Game *g)
             g->money += 800;
             g->mdone |= 2;
             g->mission = 0;
-            set_ticker(g, "YAP: Key PD is yelling at a radio");
+            set_ticker(g, "JOB COMPLETE");
             g6_note(g, "mission: getaway done");
         }
     } else if (g->mission == 3 && g->cp_at < g->cp_n) {
@@ -805,7 +801,7 @@ static void mission_tick(G6Game *g)
                 g->money += 1200;
                 g->mdone |= 4;
                 g->mission = 0;
-                set_ticker(g, "YAP: you did the whole sequel. on 240 pixels.");
+                set_ticker(g, "JOB COMPLETE");
                 g6_note(g, "mission: race done");
             } else {
                 char line[44], *o = put_s(line, "GATE ");
@@ -816,7 +812,7 @@ static void mission_tick(G6Game *g)
         }
     }
     if (g->mission == 0 && g->mdone == 7)
-        set_ticker(g, "MANGROVE KEY: go home before the gators unionise");
+        set_ticker(g, "ALL JOBS COMPLETE");
 }
 
 static void wanted_tick(G6Game *g)
@@ -858,7 +854,7 @@ static void wanted_tick(G6Game *g)
         g->bust_cd = 0;
         if (p->flags & F_INCAR) leave_car(g, p);
         g6_note(g, "busted");
-        set_ticker(g, "KEY PD: we also took the skip button");
+        set_ticker(g, "BUSTED");
     }
 }
 
@@ -866,7 +862,10 @@ static void handle_edges(G6Game *g)
 {
     G6Ent *p = who(g);
     if (g->mode == G6_TITLE_MODE) {
-        if (g->btn_a && !g->prev_a) start_play(g);
+        if (g->btn_a && !g->prev_a) {
+            if (g->frames < G6_INTRO) g->frames = G6_INTRO;
+            else start_play(g);
+        }
         return;
     }
     if (g->mode == G6_BUSTED || g->mode == G6_WASTED) {
@@ -903,7 +902,7 @@ static void handle_edges(G6Game *g)
     if (g->btn_s && !g->prev_s) {
         g->who ^= 1;
         g6_note(g, g->who ? "who: Wade Pike" : "who: Nia Voss");
-        set_ticker(g, g->who ? "WADE: I drive. you yapping." : "NIA: keep up, marsh boy");
+        set_ticker(g, g->who ? "WADE" : "NIA");
     }
     if (g->btn_a && !g->prev_a) {
         if (p->flags & F_INCAR) {
@@ -971,7 +970,7 @@ static void play_tick(G6Game *g)
     if (g->hp <= 0) {
         g->mode = G6_WASTED;
         g6_note(g, "wasted");
-        set_ticker(g, "MANGROVE KEY SENDS FLOWERS. CHEAP ONES.");
+        set_ticker(g, "WASTED");
     }
     g->tick_cd++;
     if (g->tick_cd > 160) {
@@ -1066,28 +1065,61 @@ static void draw_tile(const G6Game *g, uint32_t *fb, int w, int h, int tx, int t
     uint32_t c = tile_col(g, t, tx, ty);
     fillr(fb, w, h, ox, oy, G6_TILE, G6_TILE, c);
     if (t == T_ROAD || t == T_BRIDGE) {
-        if ((ty & 1) == 0) fillr(fb, w, h, ox + 7, oy + 2, 2, 12, 0xffd4c56a);
-        if ((tx & 1) == 0) fillr(fb, w, h, ox + 2, oy + 7, 12, 2, 0xffd4c56a);
+        int hr = tile(g, tx - 1, ty) == t || tile(g, tx + 1, ty) == t;
+        int vr = tile(g, tx, ty - 1) == t || tile(g, tx, ty + 1) == t;
+        fillr(fb, w, h, ox, oy, G6_TILE, 1, 0xff2a2a30);
+        fillr(fb, w, h, ox, oy + 15, G6_TILE, 1, 0xff2a2a30);
+        if (hr && (ty & 1) == 0) fillr(fb, w, h, ox + 3, oy + 7, 6, 2, 0xffd4c56a);
+        if (vr && (tx & 1) == 0) fillr(fb, w, h, ox + 7, oy + 3, 2, 6, 0xffd4c56a);
+        if (hr) {
+            fillr(fb, w, h, ox, oy + 1, G6_TILE, 1, 0xffc8c0b0);
+            fillr(fb, w, h, ox, oy + 14, G6_TILE, 1, 0xffc8c0b0);
+        }
+    }
+    if (t == T_WALK) {
+        int n;
+        fillr(fb, w, h, ox, oy, 1, G6_TILE, 0xff6a6054);
+        fillr(fb, w, h, ox + 15, oy, 1, G6_TILE, 0xffb0a898);
+        for (n = T_BUILD; n <= T_NEON; n++) {
+            if (tile(g, tx, ty - 1) == n) fillr(fb, w, h, ox, oy, G6_TILE, 4, 0xff1a1420);
+        }
+        if (tile(g, tx, ty - 1) == T_ROOF || tile(g, tx, ty - 1) == T_SHACK)
+            fillr(fb, w, h, ox, oy, G6_TILE, 4, 0xff1a1420);
+    }
+    if (t == T_SAND) {
+        pset(fb, w, h, ox + (tx & 7), oy + (ty & 7), 0xffd4a060);
+        pset(fb, w, h, ox + 9, oy + 4, 0xfff0d090);
+    }
+    if (t == T_GRASS || t == T_PARK) {
+        pset(fb, w, h, ox + 3, oy + 5, 0xff2a6a32);
+        pset(fb, w, h, ox + 11, oy + 10, 0xff5aaa50);
     }
     if (t == T_BUILD || t == T_ROOF || t == T_NEON) {
-        fillr(fb, w, h, ox, oy, G6_TILE, 2, 0x22000000u);
-        fillr(fb, w, h, ox + 10, oy + 10, 4, 4, 0xff2a2a30);
-        if (t == T_NEON) fillr(fb, w, h, ox + 3, oy + 3, 4, 3, 0xfffff1a8);
+        fillr(fb, w, h, ox, oy, G6_TILE, 2, 0xff5a3018);
+        fillr(fb, w, h, ox, oy + 14, G6_TILE, 2, 0xff3a2010);
+        fillr(fb, w, h, ox + 2, oy + 3, 12, 1, 0xfff0e0c0);
+        fillr(fb, w, h, ox + 9, oy + 9, 5, 4, 0xff2a2a30);
+        if (t == T_NEON) fillr(fb, w, h, ox + 3, oy + 3, 6, 3, 0xfffff1a8);
     }
     if (t == T_PALM) {
-        fillr(fb, w, h, ox + 7, oy + 6, 2, 8, 0xff6b3a1a);
-        fillr(fb, w, h, ox + 2, oy + 4, 12, 3, 0xff1f6a32);
-        fillr(fb, w, h, ox + 6, oy + 1, 4, 4, 0xff2f8a40);
+        fillr(fb, w, h, ox + 5, oy + 12, 6, 3, 0xff1a3018);
+        fillr(fb, w, h, ox + 7, oy + 5, 2, 10, 0xff8a5a28);
+        fillr(fb, w, h, ox + 6, oy + 5, 1, 10, 0xffc08040);
+        fillr(fb, w, h, ox + 1, oy + 3, 14, 3, 0xff1f6a32);
+        fillr(fb, w, h, ox + 4, oy + 1, 8, 4, 0xff2f8a40);
+        fillr(fb, w, h, ox + 8, oy + 4, 7, 2, 0xff1f6a32);
     }
     if (t == T_SWAMP && ((tx + ty + (int)g->tick_n) & 15) == 0)
         fillr(fb, w, h, ox + 5, oy + 6, 3, 2, 0xff7ee0a8);
     if (t == T_OCEAN) {
         int wv = (int)((g->tick_n / 2 + tx * 3 + ty) & 7);
         fillr(fb, w, h, ox + wv, oy + 8, 6, 1, 0xffa0e4f0);
+        fillr(fb, w, h, ox + ((wv + 4) & 7), oy + 4, 4, 1, 0xff7ec8d8);
     }
     if (t == T_SHACK) {
         fillr(fb, w, h, ox + 2, oy + 4, 12, 10, 0xff8a5a20);
         fillr(fb, w, h, ox + 1, oy + 2, 14, 3, 0xff5a3010);
+        fillr(fb, w, h, ox + 6, oy + 7, 3, 5, 0xff3a2010);
     }
 }
 
@@ -1103,25 +1135,69 @@ static void draw_person(uint32_t *fb, int w, int h, int x, int y, uint32_t body,
 
 static void draw_car(uint32_t *fb, int w, int h, int x, int y, uint8_t ang, uint32_t col, int cop, int mine)
 {
-    int dx = icos(ang) >> 6, dy = isin(ang) >> 6;
-    int px = -dy, py = dx;
-    if (mine) fillr(fb, w, h, x - 8, y - 6, 16, 12, 0xffffffff);
-    fillr(fb, w, h, x - 6 + dx, y - 4 + dy, 12, 8, col);
-    fillr(fb, w, h, x - 4 + dx * 2, y - 3 + dy * 2, 8, 5, 0xff203040);
-    if (cop) {
-        fillr(fb, w, h, x - 6, y - 1, 12, 3, 0xff3ec8ff);
-        fillr(fb, w, h, x - 2, y - 7, 5, 3, (ang & 8) ? 0xffff2d6a : 0xff3ec8ff);
+    int dir = ((ang + 16) >> 5) & 7;
+    int hi = lerp(col, 0xffffffffu, 1, 3);
+    int lo = lerp(col, 0xff101018, 1, 3);
+    uint32_t win = 0xff203848;
+    uint32_t light = (ang & 8) ? 0xffff2d6a : 0xff3ec8ff;
+    if (mine) fillr(fb, w, h, x - 9, y - 8, 18, 16, 0xffffffff);
+    if (cop) col = 0xfff4f1de;
+    if (dir == 0 || dir == 4) {
+        fillr(fb, w, h, x - 9, y - 5, 18, 10, lo);
+        fillr(fb, w, h, x - 8, y - 4, 16, 8, col);
+        fillr(fb, w, h, x - 7, y - 3, 6, 6, win);
+        fillr(fb, w, h, x + 1, y - 3, 5, 6, win);
+        fillr(fb, w, h, x - 8, y - 4, 16, 2, hi);
+        fillr(fb, w, h, x - 9, y - 5, 3, 3, 0xff1a1a1a);
+        fillr(fb, w, h, x - 9, y + 2, 3, 3, 0xff1a1a1a);
+        fillr(fb, w, h, x + 6, y - 5, 3, 3, 0xff1a1a1a);
+        fillr(fb, w, h, x + 6, y + 2, 3, 3, 0xff1a1a1a);
+        if (dir == 0) {
+            pset(fb, w, h, x + 8, y - 3, 0xfffff1a8);
+            pset(fb, w, h, x + 8, y + 2, 0xfffff1a8);
+        } else {
+            pset(fb, w, h, x - 8, y - 3, 0xfffff1a8);
+            pset(fb, w, h, x - 8, y + 2, 0xfffff1a8);
+        }
+        if (cop) fillr(fb, w, h, x - 3, y - 6, 6, 2, light);
+    } else if (dir == 2 || dir == 6) {
+        fillr(fb, w, h, x - 5, y - 9, 10, 18, lo);
+        fillr(fb, w, h, x - 4, y - 8, 8, 16, col);
+        fillr(fb, w, h, x - 3, y - 7, 6, 5, win);
+        fillr(fb, w, h, x - 3, y + 1, 6, 5, win);
+        fillr(fb, w, h, x - 4, y - 8, 2, 16, hi);
+        fillr(fb, w, h, x - 5, y - 9, 3, 3, 0xff1a1a1a);
+        fillr(fb, w, h, x + 2, y - 9, 3, 3, 0xff1a1a1a);
+        fillr(fb, w, h, x - 5, y + 6, 3, 3, 0xff1a1a1a);
+        fillr(fb, w, h, x + 2, y + 6, 3, 3, 0xff1a1a1a);
+        if (dir == 6) {
+            pset(fb, w, h, x - 3, y - 8, 0xfffff1a8);
+            pset(fb, w, h, x + 2, y - 8, 0xfffff1a8);
+        } else {
+            pset(fb, w, h, x - 3, y + 8, 0xfffff1a8);
+            pset(fb, w, h, x + 2, y + 8, 0xfffff1a8);
+        }
+        if (cop) fillr(fb, w, h, x - 3, y - 2, 6, 3, light);
+    } else {
+        fillr(fb, w, h, x - 7, y - 7, 14, 14, lo);
+        fillr(fb, w, h, x - 6, y - 6, 12, 12, col);
+        fillr(fb, w, h, x - 4, y - 4, 5, 5, win);
+        fillr(fb, w, h, x, y, 4, 4, win);
+        fillr(fb, w, h, x - 6, y - 6, 12, 2, hi);
+        fillr(fb, w, h, x - 7, y - 7, 3, 3, 0xff1a1a1a);
+        fillr(fb, w, h, x + 4, y + 4, 3, 3, 0xff1a1a1a);
+        if (cop) fillr(fb, w, h, x - 2, y - 7, 5, 2, light);
     }
-    fillr(fb, w, h, x - 5 + px, y - 3 + py, 3, 2, 0xff1a1a1a);
-    fillr(fb, w, h, x + 2 - px, y - 3 - py, 3, 2, 0xff1a1a1a);
 }
 
 static void draw_gator(uint32_t *fb, int w, int h, int x, int y)
 {
-    fillr(fb, w, h, x - 7, y - 3, 14, 6, 0xff3a6a32);
-    fillr(fb, w, h, x + 4, y - 2, 6, 4, 0xff2a4a28);
-    pset(fb, w, h, x + 7, y - 1, 0xffe8e050);
-    pset(fb, w, h, x + 7, y + 1, 0xffe8e050);
+    fillr(fb, w, h, x - 4, y + 1, 10, 3, 0xff1a3018);
+    fillr(fb, w, h, x - 8, y - 3, 16, 6, 0xff3a6a32);
+    fillr(fb, w, h, x - 7, y - 4, 12, 2, 0xff4a7a40);
+    fillr(fb, w, h, x + 5, y - 2, 7, 4, 0xff2a4a28);
+    pset(fb, w, h, x + 10, y - 1, 0xffe8e050);
+    pset(fb, w, h, x + 9, y - 3, 0xff1a1a1a);
 }
 
 static void world_to_screen(const G6Game *g, int32_t x, int32_t y, int *sx, int *sy)
@@ -1224,85 +1300,200 @@ static void draw_hud(G6Game *g, uint32_t *fb, int w, int h)
     g6_text5(fb, w, h, PAUSE_X, 8, "II", 1, 0xffffffff);
     fillr(fb, w, h, 0, 292, w, 16, 0xaa101018);
     g6_text5(fb, w, h, 4, 296, g->ticker, 1, 0xff3ec8ff);
-    /* touch chrome */
-    fillr(fb, w, h, JOY_CX - JOY_R, JOY_CY - JOY_R, JOY_R * 2, JOY_R * 2, 0x55202030);
-    fillr(fb, w, h, JOY_CX - 8 + g->joyx / 32, JOY_CY - 8 + g->joyy / 32, 16, 16, 0xccffffff);
-    fillr(fb, w, h, BTN_AX - 18, BTN_AY - 18, 36, 36, 0x88ff2d6a);
-    g6_text5(fb, w, h, BTN_AX - 10, BTN_AY - 4, "IN", 1, 0xffffffff);
-    fillr(fb, w, h, BTN_BX - 18, BTN_BY - 18, 36, 36, 0x883ec8ff);
-    g6_text5(fb, w, h, BTN_BX - 12, BTN_BY - 4, "BRK", 1, 0xffffffff);
-    fillr(fb, w, h, BTN_SX - 14, BTN_SY - 14, 28, 28, 0x887ee0a8);
-    g6_text5(fb, w, h, BTN_SX - 10, BTN_SY - 4, "SW", 1, 0xff101018);
+    /* touch chrome: smaller than hitboxes so more map shows */
+    fillr(fb, w, h, JOY_CX - 22, JOY_CY - 22, 44, 44, 0xff2a2438);
+    fillr(fb, w, h, JOY_CX - 20, JOY_CY - 20, 40, 40, 0xff3a3450);
+    fillr(fb, w, h, JOY_CX - 6 + g->joyx / 32, JOY_CY - 6 + g->joyy / 32, 12, 12, 0xfff4f1de);
+    fillr(fb, w, h, BTN_AX - 14, BTN_AY - 14, 28, 28, 0xffc41a4a);
+    fillr(fb, w, h, BTN_AX - 8, BTN_AY - 6, 16, 12, 0xfff4f1de);
+    fillr(fb, w, h, BTN_BX - 14, BTN_BY - 14, 28, 28, 0xff2a6a88);
+    fillr(fb, w, h, BTN_BX - 8, BTN_BY - 4, 16, 8, 0xffff2d6a);
+    fillr(fb, w, h, BTN_SX - 12, BTN_SY - 12, 24, 24, 0xff2a8a68);
+    fillr(fb, w, h, BTN_SX - 8, BTN_SY - 7, 6, 8, 0xfff4f1de);
+    fillr(fb, w, h, BTN_SX + 2, BTN_SY - 7, 6, 8, 0xfff4f1de);
     draw_minimap(g, fb, w, h);
 }
 
-static void tube(uint32_t *fb, int w, int h, int x, int y, int rw, int rh, uint32_t c)
+static int in_ell(int x, int y, int cx, int cy, int rx, int ry)
 {
-    fillr(fb, w, h, x + 1, y + 1, rw, rh, 0xff1a1020);
-    fillr(fb, w, h, x, y, rw, rh, c);
+    long dx = x - cx, dy = y - cy;
+    if (rx < 1) rx = 1;
+    if (ry < 1) ry = 1;
+    return dx * dx * ry * ry + dy * dy * rx * rx <= (long)rx * rx * ry * ry;
 }
 
-static void draw_wordmark(uint32_t *fb, int w, int h, int x, int y, int s)
+static int six_hit(int x, int y, int cx, int cy, int k)
 {
-    uint32_t pink = 0xffff2d6a, cream = 0xfffff1e0, cyan = 0xff3ec8ff;
-    /* G: square C plus inward spur. Not a film-title G. */
-    tube(fb, w, h, x, y, 7 * s, 2 * s, pink);
-    tube(fb, w, h, x, y, 2 * s, 10 * s, pink);
-    tube(fb, w, h, x, y + 8 * s, 7 * s, 2 * s, pink);
-    tube(fb, w, h, x + 5 * s, y + 5 * s, 2 * s, 5 * s, pink);
-    tube(fb, w, h, x + 3 * s, y + 5 * s, 4 * s, 2 * s, cream);
-    x += 9 * s;
-    /* T */
-    tube(fb, w, h, x, y, 8 * s, 2 * s, cyan);
-    tube(fb, w, h, x + 3 * s, y, 2 * s, 10 * s, cyan);
-    x += 10 * s;
-    /* A: two legs, high bar, no serif kick */
-    tube(fb, w, h, x, y + 2 * s, 2 * s, 8 * s, cream);
-    tube(fb, w, h, x + 6 * s, y + 2 * s, 2 * s, 8 * s, cream);
-    tube(fb, w, h, x + 1 * s, y, 6 * s, 2 * s, cream);
-    tube(fb, w, h, x + 2 * s, y + 5 * s, 4 * s, 2 * s, pink);
-    x += 12 * s;
-    /* 6: open top-right, closed bowl. A block S would have a broken left stem. */
-    tube(fb, w, h, x, y, 2 * s, 10 * s, pink);
-    tube(fb, w, h, x, y, 5 * s, 2 * s, pink);
-    tube(fb, w, h, x, y + 4 * s, 7 * s, 2 * s, cyan);
-    tube(fb, w, h, x, y + 8 * s, 7 * s, 2 * s, pink);
-    tube(fb, w, h, x + 5 * s, y + 4 * s, 2 * s, 6 * s, pink);
-    fillr(fb, w, h, x + 2 * s, y + 6 * s, 3 * s, 2 * s, 0xff2a1048);
+    int t = k / 3;
+    int lo, li, uo, ui, stem;
+    if (t < 8) t = 8;
+    lo = in_ell(x, y, cx, cy + k / 5, k, (k * 9) / 10);
+    li = in_ell(x, y, cx, cy + k / 5, k - t, (k * 9) / 10 - t);
+    uo = in_ell(x, y, cx - k / 12, cy - (k * 5) / 8, (k * 7) / 8, (k * 5) / 8);
+    ui = in_ell(x, y, cx - k / 12, cy - (k * 5) / 8, (k * 7) / 8 - t, (k * 5) / 8 - t);
+    stem = (x >= cx - k && x <= cx - k + t && y >= cy - (k * 5) / 8 && y <= cy + k / 5);
+    return (lo && !li) || ((uo && !ui) && y < cy - k / 10 && x < cx + k / 4) || stem;
 }
 
-static void draw_palm_sil(uint32_t *fb, int w, int h, int x, int y)
+static int palm_in6(int x, int y, int cx, int cy, int k)
 {
-    fillr(fb, w, h, x, y, 3, 40, 0xff1a1020);
-    fillr(fb, w, h, x - 10, y - 4, 24, 4, 0xff1a1020);
-    fillr(fb, w, h, x - 4, y - 12, 12, 8, 0xff1a1020);
-    fillr(fb, w, h, x + 6, y - 8, 14, 3, 0xff1a1020);
+    int lx = x - (cx - k);
+    int ly = y - (cy - k);
+    if (lx > k - 16 && lx < k - 11 && ly > k && ly < k + k) return 1;
+    if (lx > 20 && lx < 25 && ly > k / 2 && ly < k + k / 2) return 1;
+    if (lx > k + 8 && lx < k + 13 && ly > k / 3 && ly < k) return 1;
+    if (ly > k - 8 && ly < k && lx > k - 34 && lx < k + 2) return 1;
+    if (ly > k / 2 - 6 && ly < k / 2 + 2 && lx > 6 && lx < 38) return 1;
+    if (ly > k / 3 - 4 && ly < k / 3 + 2 && lx > k && lx < k + 28) return 1;
+    return 0;
+}
+
+static uint32_t sun_grad(int y, int y0, int y1)
+{
+    int n = y1 - y0, t;
+    if (n < 1) n = 1;
+    t = y - y0;
+    if (t < 0) t = 0;
+    if (t > n) t = n;
+    if (t < n / 2) return lerp(0xff2a2878, 0xffff2d8a, t, n / 2);
+    return lerp(0xffff2d8a, 0xffffc080, t - n / 2, n - n / 2);
+}
+
+static int gta_mask(int x, int y, int cx, int cy, int s)
+{
+    int gx = cx, gy = cy - 22 * s;
+    int tx = cx, ty = cy - 2 * s;
+    int ax = cx, ay = cy + 20 * s;
+    /* g: bowl + right descender */
+    if (in_ell(x, y, gx, gy, 11 * s, 9 * s) && !in_ell(x, y, gx - s / 2, gy, 5 * s, 4 * s))
+        return 1;
+    if (x >= gx + 5 * s && x <= gx + 11 * s && y >= gy && y <= gy + 16 * s) return 1;
+    /* t: stem + bar */
+    if (x >= tx - 3 * s && x <= tx + 4 * s && y >= ty - 14 * s && y <= ty + 12 * s) return 1;
+    if (x >= tx - 12 * s && x <= tx + 12 * s && y >= ty - 14 * s && y <= ty - 7 * s) return 1;
+    /* a: bowl + right stem */
+    if (in_ell(x, y, ax, ay, 11 * s, 9 * s) && !in_ell(x, y, ax - s / 2, ay, 5 * s, 4 * s))
+        return 1;
+    if (x >= ax + 5 * s && x <= ax + 11 * s && y >= ay - 8 * s && y <= ay + 10 * s) return 1;
+    return 0;
+}
+
+static void draw_gta_stack(uint32_t *fb, int w, int h, int cx, int cy, int s, int fade)
+{
+    int x, y, ox, oy;
+    uint32_t sh = lerp(0, 0xff4a2068, fade, 256);
+    uint32_t ol = lerp(0, 0xff08060c, fade, 256);
+    uint32_t fg = lerp(0, 0xfff8f4ee, fade, 256);
+    int pad = 4 * s + 6;
+    for (y = cy - 40 * s; y <= cy + 34 * s; y++) {
+        for (x = cx - 16 * s; x <= cx + 16 * s; x++) {
+            int hit = 0, ring = 0;
+            if (gta_mask(x - 3, y - 4, cx, cy, s)) pset(fb, w, h, x, y, sh);
+            for (oy = -2; oy <= 2 && !ring; oy++)
+                for (ox = -2; ox <= 2; ox++)
+                    if (gta_mask(x + ox, y + oy, cx, cy, s)) ring = 1;
+            hit = gta_mask(x, y, cx, cy, s);
+            if (hit) pset(fb, w, h, x, y, fg);
+            else if (ring) pset(fb, w, h, x, y, ol);
+        }
+    }
+    (void)pad;
+}
+
+static void draw_logo6(uint32_t *fb, int w, int h, int cx, int cy, int k, int fade)
+{
+    int x, y, dx, dy;
+    int x0 = cx - k - 8, y0 = cy - k - 6;
+    int x1 = cx + k + 8, y1 = cy + k + k / 3 + 8;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > w) x1 = w;
+    if (y1 > h) y1 = h;
+    for (y = y0; y < y1; y++) {
+        uint32_t gcol = lerp(0, sun_grad(y, y0, y1), fade, 256);
+        uint32_t orange = lerp(0, 0xffff8a3a, fade, 256);
+        uint32_t outline = lerp(0, 0xff2a1048, fade, 256);
+        for (x = x0; x < x1; x++) {
+            if (six_hit(x, y, cx, cy, k)) {
+                int edge = !six_hit(x - 2, y, cx, cy, k) || !six_hit(x + 2, y, cx, cy, k)
+                        || !six_hit(x, y - 2, cx, cy, k) || !six_hit(x, y + 2, cx, cy, k);
+                uint32_t c = edge ? orange : gcol;
+                if (!edge && palm_in6(x, y, cx, cy, k))
+                    c = lerp(c, 0xff3a1848, 1, 2);
+                pset(fb, w, h, x, y, c);
+            } else {
+                int ring = 0;
+                for (dy = -5; dy <= 5 && !ring; dy++)
+                    for (dx = -5; dx <= 5; dx++)
+                        if (dx * dx + dy * dy <= 25 && six_hit(x + dx, y + dy, cx, cy, k))
+                            ring = 1;
+                if (ring) pset(fb, w, h, x, y, outline);
+            }
+        }
+    }
+    draw_gta_stack(fb, w, h, cx, cy - k / 8, k / 22 < 2 ? 2 : k / 22, fade);
+}
+
+static void disc(uint32_t *fb, int w, int h, int cx, int cy, int r, uint32_t c)
+{
+    int y, x;
+    for (y = -r; y <= r; y++)
+        for (x = -r; x <= r; x++)
+            if (x * x + y * y <= r * r) pset(fb, w, h, cx + x, cy + y, c);
+}
+
+static void draw_palm_sil(uint32_t *fb, int w, int h, int x, int y, uint32_t c)
+{
+    fillr(fb, w, h, x, y, 3, 48, c);
+    fillr(fb, w, h, x - 14, y - 6, 32, 4, c);
+    fillr(fb, w, h, x - 6, y - 16, 16, 10, c);
+    fillr(fb, w, h, x + 6, y - 10, 18, 3, c);
+    fillr(fb, w, h, x - 18, y - 2, 14, 3, c);
 }
 
 static void draw_title(G6Game *g, uint32_t *fb, int w, int h)
 {
-    int y;
-    for (y = 0; y < h; y++) {
-        uint32_t c;
-        if (y < 160) c = lerp(0xff2a1048, 0xffff6b3d, y, 160);
-        else c = lerp(0xffff6b3d, 0xff1a3a4a, y - 160, h - 160);
-        fillr(fb, w, h, 0, y, w, 1, c);
+    int t = (int)g->frames;
+    int y, fade, suny, pan, fadeblk;
+    if (t > G6_INTRO) t = G6_INTRO;
+    pan = t * 2;
+    fadeblk = 256;
+    if (t >= 48 && t < 72) fadeblk = 256 - (t - 48) * 256 / 24;
+    if (t >= 72) fadeblk = 0;
+
+    if (fadeblk > 0) {
+        for (y = 0; y < h; y++) {
+            uint32_t c;
+            if (y < 190) c = lerp(0xff1a1860, 0xffff6b4a, y, 190);
+            else if (y < 270) c = lerp(0xffff6b4a, 0xffffa060, y - 190, 80);
+            else c = lerp(0xff123050, 0xff0a1828, y - 270, h - 270);
+            fillr(fb, w, h, 0, y, w, 1, lerp(0, c, fadeblk, 256));
+        }
+        suny = 140 + t;
+        disc(fb, w, h, 168, suny, 30, lerp(0, 0xffffe0a0, fadeblk, 256));
+        disc(fb, w, h, 168, suny, 18, lerp(0, 0xfffff4c8, fadeblk, 256));
+        fillr(fb, w, h, 0, 268, w, 2, lerp(0, 0xffffc090, fadeblk, 256));
+        draw_palm_sil(fb, w, h, 18 - pan / 3, 250, lerp(0, 0xff120818, fadeblk, 256));
+        draw_palm_sil(fb, w, h, 70 - pan / 2, 262, lerp(0, 0xff1a1020, fadeblk, 256));
+        draw_palm_sil(fb, w, h, 190 + pan / 4, 244, lerp(0, 0xff120818, fadeblk, 256));
+        fillr(fb, w, h, 40, 286, 18, 36, lerp(0, (t & 8) ? 0xffff2d6a : 0xff3ec8ff, fadeblk, 256));
+        fillr(fb, w, h, 70, 276, 22, 46, lerp(0, 0xff1a1028, fadeblk, 256));
+        fillr(fb, w, h, 100, 282, 16, 40, lerp(0, (t & 16) ? 0xffff8a3a : 0xff2a1048, fadeblk, 256));
+    } else {
+        fillr(fb, w, h, 0, 0, w, h, 0xff000000);
     }
-    fillr(fb, w, h, 0, 300, w, h - 300, 0xff12303a);
-    draw_palm_sil(fb, w, h, 28, 268);
-    draw_palm_sil(fb, w, h, 200, 250);
-    g6_text5(fb, w, h, 28, 18, "MANGROVE KEY", 1, 0xfffff1e0);
-    draw_wordmark(fb, w, h, 18, 70, 5);
-    g6_text5(fb, w, h, 16, 186, G6_TITLE, 2, 0xfffff1e0);
-    g6_text5(fb, w, h, 8, 214, G6_TAG, 1, 0xff3ec8ff);
-    g6_text5(fb, w, h, 10, 236, "NIA VOSS  +  WADE PIKE", 1, 0xffff2d6a);
-    g6_text5(fb, w, h, 28, 258, "A TWO-PERSON MESS", 1, 0xfffff1e0);
-    g6_text5(fb, w, h, 40, 320, "TAP TO PLAY", 2, 0xffffffff);
-    g6_text5(fb, w, h, 16, 370, "HOMEBREW. WE WAITED TOO.", 1, 0xff8a93a8);
-    g6_text5(fb, w, h, 28, 390, "JOYSTICK + IN / BRK / SW", 1, 0xff8a93a8);
-    draw_person(fb, w, h, 90, 300, 0xffff2d6a, 0xff2a1a14, 0);
-    draw_person(fb, w, h, 150, 300, 0xff2a9d8f, 0xff1a1a1a, 1);
-    (void)g;
+
+    if (t >= 52) {
+        fade = t >= 100 ? 256 : (t - 52) * 256 / 48;
+        if (fade > 256) fade = 256;
+        if (fade < 0) fade = 0;
+        draw_logo6(fb, w, h, 120, 188, 76, fade);
+    }
+    if (t >= 110) {
+        uint32_t pulse = ((g->frames / 10) & 1) ? 0xffffffffu : 0xffc9ada7;
+        g6_text5(fb, w, h, 40, 352, "TAP TO PLAY", 2, pulse);
+        g6_text5(fb, w, h, 8, 390, G6_TAG, 1, 0xff8a93a8);
+    }
 }
 
 static void draw_map_view(G6Game *g, uint32_t *fb, int w, int h)
@@ -1340,7 +1531,7 @@ void g6_draw(G6Game *g, uint32_t *fb, int w, int h)
         static const char *lines[] = {
             "NOT ENOUGH MEMORY",
             "PAUSE MUSIC",
-            "TURN BLUETOOTH OFF",
+            "OR BLUETOOTH",
             "THEN REOPEN"
         };
         g6_notice_draw(fb, w, h, lines, 4);
@@ -1357,15 +1548,15 @@ void g6_draw(G6Game *g, uint32_t *fb, int w, int h)
     draw_world(g, fb, w, h);
     draw_hud(g, fb, w, h);
     if (g->mode == G6_BUSTED)
-        draw_overlay_msg(fb, w, h, "BUSTED", "KEY PD TOOK THE NANO TOO", "TAP TO WALK AGAIN");
+        draw_overlay_msg(fb, w, h, "BUSTED", "TAP TO CONTINUE", "");
     else if (g->mode == G6_WASTED)
-        draw_overlay_msg(fb, w, h, "WASTED", "MANGROVE KEY SENDS FLOWERS", "TAP TO WALK AGAIN");
+        draw_overlay_msg(fb, w, h, "WASTED", "TAP TO CONTINUE", "");
     else if (g->mode == G6_PAUSE) {
         fillr(fb, w, h, 16, 120, w - 32, 180, 0xee101018);
         g6_text5(fb, w, h, 40, 136, "PAUSED", 2, 0xffffffff);
-        g6_text5(fb, w, h, 28, 170, "TAP HERE: RESUME", 1, 0xff7ee0a8);
-        g6_text5(fb, w, h, 28, 188, "TAP JOB LINE", 1, 0xffffe066);
-        g6_text5(fb, w, h, 28, 206, "TAP BELOW: HOME", 1, 0xffff2d6a);
+        g6_text5(fb, w, h, 28, 170, "RESUME", 1, 0xff7ee0a8);
+        g6_text5(fb, w, h, 28, 188, "JOB", 1, 0xffffe066);
+        g6_text5(fb, w, h, 28, 206, "HOME", 1, 0xffff2d6a);
         g6_text5(fb, w, h, 28, 230, G6_CITY, 1, 0xff3ec8ff);
         g6_text5(fb, w, h, 28, 248, G6_TAG, 1, 0xff8a93a8);
     }
@@ -1453,7 +1644,7 @@ int g6_load(G6Game *g, const void *buf, size_t n)
     }
     if (memcmp(b, "G6SV", 4) != 0 || b[4] != (uint8_t)G6_SAVE_VER) {
         g->save_bad = 1;
-        set_ticker(g, "SAVE FILE WENT FERAL. TYPICAL.");
+        set_ticker(g, "SAVE DATA CORRUPT - NEW GAME");
         g6_note(g, "save: corrupt magic");
         return -2;
     }
@@ -1462,7 +1653,7 @@ int g6_load(G6Game *g, const void *buf, size_t n)
     got = crc32_buf((uint8_t *)payload, sizeof payload);
     if (got != crc) {
         g->save_bad = 1;
-        set_ticker(g, "SAVE FILE WENT FERAL. TYPICAL.");
+        set_ticker(g, "SAVE DATA CORRUPT - NEW GAME");
         g6_note(g, "save: corrupt crc");
         return -2;
     }

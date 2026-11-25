@@ -6,6 +6,6 @@
 	<key>CFBundleExecutable</key>	<string>gta6</string>
 	<key>HBAppKind</key>			<integer>1</integer>
 	<key>HBIconGlyph</key>		<string>car</string>
-	<key>HBIconColor</key>		<string>#ff2d6a</string>
+	<key>HBIconColor</key>		<string>#1a1028</string>
 </dict>
 </plist>

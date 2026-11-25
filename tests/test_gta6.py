@@ -197,7 +197,7 @@ class HostPlayTests(unittest.TestCase):
             self.assertIn("LOAD rc=0", out)
             out = run_host("--load", str(save), "--corrupt")
             self.assertIn("LOAD rc=-2", out)
-            self.assertIn("FERAL", out)
+            self.assertIn("CORRUPT", out)
             out = run_host("--nosave")
             self.assertIn("LOAD rc=-1", out)
 
