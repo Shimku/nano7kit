@@ -84,42 +84,71 @@ static void idle(G6Game *g, int frames)
     for (i = 0; i < frames; i++) g6_tick(g);
 }
 
-static int run_demo(G6Game *g, uint32_t *fb, const char *dir)
+static void dump_frame(G6Game *g, uint32_t *fb, const char *dir, const char *name)
 {
     char path[512];
-    idle(g, 125);
-    snprintf(path, sizeof path, "%s/title.ppm", dir);
+    snprintf(path, sizeof path, "%s/%s", dir, name);
     g6_draw(g, fb, G6_SCR_W, G6_SCR_H);
     write_ppm(path, fb, G6_SCR_W, G6_SCR_H);
+}
 
-    tap(g, 120, 330, 2);
-    idle(g, 4);
+static unsigned scene_mid(int scene)
+{
+    return (unsigned)(G6_FADE_TICKS + scene * G6_SCENE_TICKS + G6_SCENE_TICKS / 2);
+}
+
+static int run_demo(G6Game *g, uint32_t *fb, const char *dir)
+{
+    g6_debug_title_frame(g, scene_mid(0));
+    dump_frame(g, fb, dir, "intro-sunset.ppm");
+    g6_debug_title_frame(g, scene_mid(1));
+    dump_frame(g, fb, dir, "intro-neon.ppm");
+    g6_debug_title_frame(g, scene_mid(2));
+    dump_frame(g, fb, dir, "intro-causeway.ppm");
+    g6_debug_title_frame(g, scene_mid(3));
+    dump_frame(g, fb, dir, "intro-duo.ppm");
+    g6_debug_title_frame(g, (unsigned)(G6_FADE_TICKS + G6_N_SCENES * G6_SCENE_TICKS + G6_LOGO_TICKS / 2));
+    dump_frame(g, fb, dir, "logo.ppm");
+    dump_frame(g, fb, dir, "title.ppm");
+    g6_debug_title_frame(g, (unsigned)G6_TRAILER_END + 4);
+    dump_frame(g, fb, dir, "menu.ppm");
+
     g6_debug_drive(g, 1);
+    g->wanted = 0;
+    g->mission = 0;
+    g->ticker[0] = 0;
     two_finger(g, 48, 350, 198, 350, 40);
-    g6_draw(g, fb, G6_SCR_W, G6_SCR_H);
-    snprintf(path, sizeof path, "%s/play.ppm", dir);
-    write_ppm(path, fb, G6_SCR_W, G6_SCR_H);
+    dump_frame(g, fb, dir, "play.ppm");
+    dump_frame(g, fb, dir, "day.ppm");
 
     g6_debug_pose(g, 32 * 16 + 8, 21 * 16 + 8, 1);
     g6_debug_wanted(g, 4);
     idle(g, 8);
     two_finger(g, 70, 360, 198, 350, 12);
-    g6_draw(g, fb, G6_SCR_W, G6_SCR_H);
-    snprintf(path, sizeof path, "%s/chase.ppm", dir);
-    write_ppm(path, fb, G6_SCR_W, G6_SCR_H);
+    dump_frame(g, fb, dir, "chase.ppm");
 
     g6_debug_view_map(g, 1);
-    g6_draw(g, fb, G6_SCR_W, G6_SCR_H);
-    snprintf(path, sizeof path, "%s/map.ppm", dir);
-    write_ppm(path, fb, G6_SCR_W, G6_SCR_H);
+    dump_frame(g, fb, dir, "map.ppm");
     g6_debug_view_map(g, 0);
 
     g6_debug_mission(g, 1, 1);
     g6_debug_pose(g, 30 * 16 + 8, 50 * 16 + 8, 0);
     idle(g, 8);
-    g6_draw(g, fb, G6_SCR_W, G6_SCR_H);
-    snprintf(path, sizeof path, "%s/mission.ppm", dir);
-    write_ppm(path, fb, G6_SCR_W, G6_SCR_H);
+    dump_frame(g, fb, dir, "mission.ppm");
+
+    g6_debug_pose(g, 16 * 16 + 8, 10 * 16 + 8, 0);
+    g->wanted = 0;
+    g->mission = 0;
+    g->ticker[0] = 0;
+    idle(g, 4);
+    dump_frame(g, fb, dir, "beach.ppm");
+
+    g6_debug_pose(g, 16 * 16 + 8, 29 * 16 + 8, 0);
+    g->wanted = 0;
+    g->mission = 0;
+    g->ticker[0] = 0;
+    idle(g, 4);
+    dump_frame(g, fb, dir, "night.ppm");
     return 0;
 }
 
@@ -195,6 +224,7 @@ int main(int argc, char **argv)
     int do_home = 0;
     int stick_ms = 0;
     int stick_fps = 30;
+    int do_intro_skip = 0;
     int fail = 0;
     int i;
 
@@ -209,6 +239,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--long")) do_long = 1;
         else if (!strcmp(argv[i], "--demo")) do_demo = 1;
         else if (!strcmp(argv[i], "--home")) do_home = 1;
+        else if (!strcmp(argv[i], "--intro-skip")) do_intro_skip = 1;
         else if (!strcmp(argv[i], "--stick-ms") && i + 1 < argc) stick_ms = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--fps") && i + 1 < argc) stick_fps = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--tight")) {
@@ -269,6 +300,17 @@ int main(int argc, char **argv)
 
     if (do_demo && dump) run_demo(g, fb, dump);
     if (do_long) fail |= long_play(g);
+    if (do_intro_skip) {
+        printf("PHASE0=%d mode=%d\n", g6_title_phase(g), g6_mode(g));
+        idle(g, 8);
+        printf("PHASE1=%d\n", g6_title_phase(g));
+        tap(g, 120, 200, 1);
+        printf("PHASE2=%d mode=%d\n", g6_title_phase(g), g6_mode(g));
+        if (g6_title_phase(g) != 6) fail = 1;
+        tap(g, 120, 200, 1);
+        printf("PHASE3=%d mode=%d\n", g6_title_phase(g), g6_mode(g));
+        if (g6_mode(g) != G6_PLAY) fail = 1;
+    }
     if (do_home) {
         tap(g, 120, 330, 1);
         tap(g, 120, 330, 1);

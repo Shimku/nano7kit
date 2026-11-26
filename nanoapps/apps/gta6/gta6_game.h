@@ -35,6 +35,28 @@
 #define G6_TAG        "Finally out. On iPod nano."
 #define G6_DATA_DIR   "/Apps/Data/GTA6"
 
+#define G6_COL_BLUE     0xff395FCEu
+#define G6_COL_INDIGO   0xff5F40C0u
+#define G6_COL_PURPLE   0xff973BC0u
+#define G6_COL_MAGENTA  0xffD232C0u
+#define G6_COL_PINK     0xffFF8395u
+#define G6_COL_CORAL    0xffFF8C70u
+#define G6_COL_ORANGE   0xffFF914Du
+#define G6_COL_OUTLINE  0xff1E002Eu
+#define G6_COL_WHITE    0xffF8F4EEu
+#define G6_COL_TEAL     0xff1AA6A6u
+#define G6_COL_FOAM     0xffE8F6F8u
+#define G6_COL_MONEY    0xff4AE54Au
+#define G6_COL_STAR     0xffFFE066u
+#define G6_COL_ASPHALT  0xff4A4540u
+#define G6_COL_SAND     0xffF0C98Au
+
+#define G6_FADE_TICKS   12
+#define G6_SCENE_TICKS  50
+#define G6_N_SCENES     4
+#define G6_LOGO_TICKS   72
+#define G6_TRAILER_END  (G6_FADE_TICKS + G6_N_SCENES * G6_SCENE_TICKS + G6_LOGO_TICKS)
+
 enum {
     G6_TITLE_MODE = 0,
     G6_PLAY,
@@ -112,6 +134,8 @@ void g6_debug_wanted(G6Game *g, int stars);
 void g6_debug_mission(G6Game *g, int id, int stage);
 void g6_debug_view_map(G6Game *g, int on);
 void g6_debug_drive(G6Game *g, int on);
+void g6_debug_title_frame(G6Game *g, unsigned frames);
+int g6_title_phase(const G6Game *g);
 uint32_t g6_arena_peak(const G6Game *g);
 uint32_t g6_ticks(const G6Game *g);
 int g6_money(const G6Game *g);

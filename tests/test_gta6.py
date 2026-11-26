@@ -56,17 +56,21 @@ def read_ppm(path: Path):
     return w, h, body
 
 
-def contact_sheet(ppms, dest: Path) -> None:
+def contact_sheet(ppms, dest: Path, cols: int = 0) -> None:
     frames = [read_ppm(p) for p in ppms]
     w, h = frames[0][0], frames[0][1]
     n = len(frames)
-    out = bytearray(w * n * h * 3)
+    if cols < 1:
+        cols = n
+    rows = (n + cols - 1) // cols
+    out = bytearray(w * cols * h * rows * 3)
     for i, (_, _, rgb) in enumerate(frames):
+        col, row = i % cols, i // cols
         for y in range(h):
             src = y * w * 3
-            dst = (y * (w * n) + i * w) * 3
+            dst = ((row * h + y) * (w * cols) + col * w) * 3
             out[dst : dst + w * 3] = rgb[src : src + w * 3]
-    write_png(dest, w * n, h, bytes(out))
+    write_png(dest, w * cols, h * rows, bytes(out))
 
 
 def build_host() -> Path:
@@ -161,6 +165,20 @@ class HygieneTests(unittest.TestCase):
         self.assertIn("#define G6_STEER_DEG_S 180", src)
         self.assertIn("#define G6_DT_MAX_MS  50", src)
         self.assertIn("#define G6_JOY_DEAD_PCT 15", src)
+        self.assertIn("#define G6_COL_MAGENTA  0xffD232C0u", src)
+        self.assertIn("#define G6_COL_ORANGE   0xffFF914Du", src)
+        self.assertIn("#define G6_COL_MONEY    0xff4AE54Au", src)
+        self.assertIn("#define G6_FADE_TICKS   12", src)
+        self.assertIn("#define G6_SCENE_TICKS  50", src)
+        self.assertIn("#define G6_LOGO_TICKS   72", src)
+        self.assertIn("G6_TRAILER_END", src)
+        gfx = (APP / "gta6_gfx.c").read_text()
+        self.assertIn("VI_STOPS", gfx)
+        self.assertIn("CAR_COL", gfx)
+        self.assertIn("GRAND", gfx)
+        self.assertIn("TAP TO START", gfx)
+        self.assertIn("draw_logo_vi", gfx)
+        self.assertIn("draw_minimap", gfx)
         self.assertEqual(g6.BLOCK_MAX, 0x40000)
         self.assertEqual(g6.FAT_DATA, "/Apps/Data/GTA6")
         nano = (APP / "gta6.c").read_text()
@@ -225,19 +243,48 @@ class HostPlayTests(unittest.TestCase):
             d = Path(d)
             run_host("--demo", "--dump", str(d))
             names = ["title.ppm", "play.ppm", "chase.ppm", "map.ppm", "mission.ppm"]
-            for n in names:
+            art = [
+                "intro-sunset.ppm", "intro-neon.ppm", "intro-causeway.ppm",
+                "intro-duo.ppm", "logo.ppm", "menu.ppm",
+                "day.ppm", "beach.ppm", "night.ppm",
+            ]
+            for n in names + art:
                 self.assertTrue((d / n).is_file(), n)
-            contact_sheet([d / n for n in names], CONTACT)
+            img = ROOT / "docs" / "images"
+            mapping = {
+                "intro-sunset.ppm": "gta6-intro-sunset.png",
+                "intro-neon.ppm": "gta6-intro-neon.png",
+                "intro-causeway.ppm": "gta6-intro-causeway.png",
+                "intro-duo.ppm": "gta6-intro-duo.png",
+                "logo.ppm": "gta6-logo.png",
+                "menu.ppm": "gta6-menu.png",
+                "day.ppm": "gta6-play-day.png",
+                "beach.ppm": "gta6-play-beach.png",
+                "night.ppm": "gta6-play-night.png",
+                "title.ppm": "gta6-title.png",
+            }
+            for src, dest in mapping.items():
+                w, h, rgb = read_ppm(d / src)
+                self.assertEqual((w, h), (240, 432), src)
+                write_png(img / dest, w, h, rgb)
+            contact_sheet([d / n for n in art], CONTACT, cols=3)
             self.assertTrue(CONTACT.is_file())
             self.assertGreater(CONTACT.stat().st_size, 1000)
-            w, h, rgb = read_ppm(d / "title.ppm")
-            self.assertEqual((w, h), (240, 432))
-            title = ROOT / "docs" / "images" / "gta6-title.png"
-            write_png(title, w, h, rgb)
-            self.assertTrue(title.is_file())
-            # title screen should not be the red low-mem fill
-            px = rgb[100 * 3 * w + 120 * 3]
+            w, h, rgb = read_ppm(d / "logo.ppm")
+            # sunset orange lives in the VI fill, not the low-mem red panel
             self.assertNotEqual(rgb[0], 0x4c)
+            found_orange = any(
+                rgb[i] > 0xC0 and rgb[i + 1] > 0x40 and rgb[i + 1] < 0xA0 and rgb[i + 2] < 0x80
+                for i in range(0, len(rgb) - 2, 3)
+            )
+            self.assertTrue(found_orange)
+
+    def test_intro_skip_to_menu_then_play(self):
+        out = run_host("--intro-skip")
+        self.assertIn("PHASE0=0", out)
+        self.assertIn("PHASE2=6", out)
+        self.assertIn("PHASE3=-1", out)
+        self.assertIn("mode=1", out)
 
     def test_low_mem_screen(self):
         with tempfile.TemporaryDirectory() as d:

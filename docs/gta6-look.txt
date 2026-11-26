@@ -1,0 +1,68 @@
+GTA 6 NanoApp look notes
+========================
+
+Fan-made parody for a 240x432 iPod nano. Recreate the public GTA VI look in
+original code-drawn pixels. Do not ship logos, fonts, trailer frames, key art,
+screenshots or music from the publisher.
+
+Palette (sunset VI / Florida-night)
+-----------------------------------
+Sky top blue     #395FCE
+Indigo           #5F40C0
+Purple           #973BC0
+Hot magenta      #D232C0
+Sunset pink      #FF8395
+Coral            #FF8C70
+Sunset orange    #FF914D
+Outline night    #1E002E
+Wordmark white   #F8F4EE
+Teal water       #148C9A / #1EC8C0
+Foam             #E8F6F8
+Warm asphalt     #4A4540 with sun strip #6A6458
+Sand             #F0C98A / #E8B56A
+Art-deco peach   #E8A888
+Mint facade      #7EC8B0
+Terracotta roof  #C45A3A
+Neon magenta     #FF2D8A
+Neon cyan        #3EC8FF
+Money green      #4AE54A
+Wanted gold      #FFE066
+Palm dark        #142018
+Skin             #E8C4A8
+
+Logo
+----
+Small "GRAND THEFT AUTO" stacked above a large Roman VI.
+VI is two tall numerals (V then I), filled with a vertical sunset gradient
+(blue-violet, magenta, pink, orange). Thin dark-purple outline and a lighter
+inner edge. Palm silhouettes live inside the fill, as if the letters were a
+window onto a beach sunset. No third-party typeface. Bitmap 5x7 for the
+wordmark only.
+
+Trailer intro
+-------------
+Fade up from black. Short scenes, each with a slow pan or fake zoom:
+1. Sunset over water, palms in silhouette, pastel towers on the far shore.
+2. Night street, wet asphalt, magenta/cyan signs, window grids.
+3. A car on a causeway over teal water at dusk.
+4. Two people silhouetted (Nia Voss, Wade Pike) against the sun.
+Then the VI logo reveal. Tap at any point jumps to the menu.
+
+Loading menu
+------------
+Diagonal panel collage in the numbered-entry cover style: character portraits,
+a beach, neon, a car, a gator, city towers. Original Mangrove Key cast, not
+copied poses. "TAP TO START" on a dark bar.
+
+In-game (GBA Advance grain, VI colour)
+--------------------------------------
+Warm sunlit roads, pastel art-deco blocks, palms with a south-east shadow,
+beach foam on the waterline, neon blocks at night. Cars have a highlight
+stroke, glass, lamps. HUD: circular radar lower-left (above the stick),
+green money and gold stars upper-right. Location tint: beach/dusk warmth,
+neon/night cool, inland noon.
+
+Composition
+-----------
+Portrait 240x432. Big shapes, high contrast, few colours per tile. Keep
+touch hitboxes. Home name stays "GTA 6".
