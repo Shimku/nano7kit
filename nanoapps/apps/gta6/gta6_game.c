@@ -266,7 +266,8 @@ static void gen_map(G6Game *g)
     for (by = 14; by < 40; by += 8) {
         for (bx = 9; bx < 48; bx += 8) {
             int hue = (bx + by) & 1 ? T_ROOF : T_BUILD;
-            if ((bx + by) % 16 == 7) hue = T_NEON;
+            if (by >= 30) hue = T_NEON;
+            else if ((bx + by) % 16 == 7) hue = T_NEON;
             for (y = by + 1; y < by + 7; y++)
                 for (x = bx + 1; x < bx + 7; x++) {
                     if (tile(g, x, y) == T_GRASS || tile(g, x, y) == T_SAND)
@@ -278,7 +279,7 @@ static void gen_map(G6Game *g)
         for (bx = 9; bx < 40; bx += 8) {
             for (y = by + 1; y < by + 7 && y < 64; y++)
                 for (x = bx + 1; x < bx + 7; x++)
-                    if (tile(g, x, y) == T_GRASS) set_tile(g, x, y, T_ROOF);
+                    if (tile(g, x, y) == T_GRASS) set_tile(g, x, y, T_NEON);
         }
     }
     set_tile(g, 18, 10, T_SHACK);

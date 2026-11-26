@@ -119,6 +119,10 @@ static int run_demo(G6Game *g, uint32_t *fb, const char *dir)
     g->ticker[0] = 0;
     two_finger(g, 48, 350, 198, 350, 40);
     dump_frame(g, fb, dir, "play.ppm");
+    g6_debug_pose(g, 32 * 16 + 8, 25 * 16 + 8, 1);
+    g->wanted = 0;
+    g->mission = 0;
+    g->ticker[0] = 0;
     dump_frame(g, fb, dir, "day.ppm");
 
     g6_debug_pose(g, 32 * 16 + 8, 21 * 16 + 8, 1);
@@ -143,7 +147,7 @@ static int run_demo(G6Game *g, uint32_t *fb, const char *dir)
     idle(g, 4);
     dump_frame(g, fb, dir, "beach.ppm");
 
-    g6_debug_pose(g, 16 * 16 + 8, 29 * 16 + 8, 0);
+    g6_debug_pose(g, 24 * 16 + 8, 33 * 16 + 8, 0);
     g->wanted = 0;
     g->mission = 0;
     g->ticker[0] = 0;

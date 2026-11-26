@@ -57,12 +57,13 @@ static const uint8_t *glyph(char c)
     return notice_font[p ? (int)(p - notice_chars) : 0];
 }
 
-void g6_text5(uint32_t *fb, int w, int h, int x, int y, const char *s, int scale, uint32_t fg)
+void g6_text5n(uint32_t *fb, int w, int h, int x, int y, const char *s, int scale, uint32_t fg, int advance)
 {
     int r, c, sx, sy, px, py;
     if (!fb || !s || scale < 1) return;
+    if (advance < 1) advance = 6 * scale;
     fg |= 0xff000000u;
-    for (; *s; s++, x += 6 * scale) {
+    for (; *s; s++, x += advance) {
         const uint8_t *g = glyph(*s);
         for (r = 0; r < 7; r++)
             for (c = 0; c < 5; c++) {
@@ -76,6 +77,11 @@ void g6_text5(uint32_t *fb, int w, int h, int x, int y, const char *s, int scale
                     }
             }
     }
+}
+
+void g6_text5(uint32_t *fb, int w, int h, int x, int y, const char *s, int scale, uint32_t fg)
+{
+    g6_text5n(fb, w, h, x, y, s, scale, fg, 6 * scale);
 }
 
 void g6_notice_draw(uint32_t *fb, int w, int h, const char *const *lines, int n)

@@ -35,10 +35,37 @@ static const uint32_t VI_STOPS[7] = {
     G6_COL_PINK, G6_COL_CORAL, G6_COL_ORANGE
 };
 
+static const uint32_t ROOF_PAL[8] = {
+    0xffD4A090, 0xffC8B8A4, 0xffB09080, 0xffE0C8B0,
+    0xffC4A070, 0xffA88890, 0xffB8A878, 0xffD8B8A0
+};
+
 static void pset(uint32_t *fb, int w, int h, int x, int y, uint32_t c)
 {
     if ((unsigned)x < (unsigned)w && (unsigned)y < (unsigned)h)
         fb[(long)y * w + x] = c | 0xff000000u;
+}
+
+static uint32_t lerp(uint32_t a, uint32_t b, int t, int n)
+{
+    int ar, ag, ab, br, bg, bb, r, g, bl;
+    if (n < 1) n = 1;
+    if (t < 0) t = 0;
+    if (t > n) t = n;
+    ar = (int)((a >> 16) & 255); ag = (int)((a >> 8) & 255); ab = (int)(a & 255);
+    br = (int)((b >> 16) & 255); bg = (int)((b >> 8) & 255); bb = (int)(b & 255);
+    r = ar + (br - ar) * t / n;
+    g = ag + (bg - ag) * t / n;
+    bl = ab + (bb - ab) * t / n;
+    return 0xff000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)bl;
+}
+
+static void pset_a(uint32_t *fb, int w, int h, int x, int y, uint32_t c, int a)
+{
+    uint32_t d;
+    if ((unsigned)x >= (unsigned)w || (unsigned)y >= (unsigned)h) return;
+    d = fb[(long)y * w + x];
+    fb[(long)y * w + x] = lerp(d, c, a, 256);
 }
 
 static void fillr(uint32_t *fb, int w, int h, int x, int y, int rw, int rh, uint32_t c)
@@ -58,25 +85,21 @@ static void fillr(uint32_t *fb, int w, int h, int x, int y, int rw, int rh, uint
     }
 }
 
-static uint32_t lerp(uint32_t a, uint32_t b, int t, int n)
-{
-    int ar, ag, ab, br, bg, bb, r, g, bl;
-    if (n < 1) n = 1;
-    if (t < 0) t = 0;
-    if (t > n) t = n;
-    ar = (int)((a >> 16) & 255); ag = (int)((a >> 8) & 255); ab = (int)(a & 255);
-    br = (int)((b >> 16) & 255); bg = (int)((b >> 8) & 255); bb = (int)(b & 255);
-    r = ar + (br - ar) * t / n;
-    g = ag + (bg - ag) * t / n;
-    bl = ab + (bb - ab) * t / n;
-    return 0xff000000u | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)bl;
-}
-
 static uint32_t fade_c(uint32_t c, int f)
 {
     if (f >= 256) return c | 0xff000000u;
     if (f <= 0) return 0xff000000u;
     return lerp(0, c, f, 256);
+}
+
+static uint32_t lite(uint32_t c)
+{
+    return lerp(c, 0xffffffffu, 1, 3);
+}
+
+static uint32_t dim(uint32_t c)
+{
+    return lerp(c, 0xff000010, 1, 3);
 }
 
 static void disc(uint32_t *fb, int w, int h, int cx, int cy, int r, uint32_t c)
@@ -89,6 +112,18 @@ static void disc(uint32_t *fb, int w, int h, int cx, int cy, int r, uint32_t c)
         int yy = y * y;
         for (x = -r; x <= r; x++)
             if (x * x + yy <= r2) pset(fb, w, h, cx + x, cy + y, c);
+    }
+}
+
+static void disc_a(uint32_t *fb, int w, int h, int cx, int cy, int r, uint32_t c, int a)
+{
+    int y, x, r2;
+    if (r < 1) return;
+    r2 = r * r;
+    for (y = -r; y <= r; y++) {
+        int yy = y * y;
+        for (x = -r; x <= r; x++)
+            if (x * x + yy <= r2) pset_a(fb, w, h, cx + x, cy + y, c, a);
     }
 }
 
@@ -111,65 +146,51 @@ static uint32_t sky_at(int y, int h)
     return vi_grad(y, 0, h * 3 / 5);
 }
 
-static int near_seg(int px, int py, int x0, int y0, int x1, int y1, int t)
-{
-    int dx = x1 - x0, dy = y1 - y0;
-    int vx = px - x0, vy = py - y0;
-    int len2 = dx * dx + dy * dy;
-    int tnum, cx, cy, ddx, ddy;
-    if (t < 1) t = 1;
-    if (len2 < 1) {
-        ddx = px - x0;
-        ddy = py - y0;
-        return ddx * ddx + ddy * ddy <= t * t;
-    }
-    tnum = vx * dx + vy * dy;
-    if (tnum <= 0) {
-        ddx = px - x0;
-        ddy = py - y0;
-        return ddx * ddx + ddy * ddy <= t * t;
-    }
-    if (tnum >= len2) {
-        ddx = px - x1;
-        ddy = py - y1;
-        return ddx * ddx + ddy * ddy <= t * t;
-    }
-    cx = x0 + (int)(((long)tnum * dx) / len2);
-    cy = y0 + (int)(((long)tnum * dy) / len2);
-    ddx = px - cx;
-    ddy = py - cy;
-    return ddx * ddx + ddy * ddy <= t * t;
-}
+#define VI_Y0    90
+#define VI_Y1    358
+#define VI_AX    74
+#define VI_VL0   10
+#define VI_VL1   46
+#define VI_VR0   102
+#define VI_VR1   138
+#define VI_IX    180
+#define VI_STEM  30
+#define VI_SERW  58
+#define VI_SERH  20
 
-#define VI_Y0  78
-#define VI_Y1  348
-#define VI_AX  78
-#define VI_VLX 20
-#define VI_VRX 136
-#define VI_IX  178
-#define VI_TV  18
-#define VI_TI  15
+static int in_span(int x, int y, int y0, int y1, int a0, int a1, int b0, int b1)
+{
+    int n, t, lo, hi, tmp;
+    if (y < y0 || y >= y1) return 0;
+    n = y1 - y0;
+    if (n < 1) return 0;
+    t = y - y0;
+    lo = a0 + (b0 - a0) * t / n;
+    hi = a1 + (b1 - a1) * t / n;
+    if (lo > hi) { tmp = lo; lo = hi; hi = tmp; }
+    return x >= lo && x < hi;
+}
 
 static int vi_core(int x, int y, int grow)
 {
-    int tv = VI_TV + grow, ti = VI_TI + grow;
-    int ser = 12 + grow;
-    return near_seg(x, y, VI_VLX, VI_Y0, VI_AX, VI_Y1, tv)
-        || near_seg(x, y, VI_VRX, VI_Y0, VI_AX, VI_Y1, tv)
-        || near_seg(x, y, VI_IX, VI_Y0, VI_IX, VI_Y1, ti)
-        || near_seg(x, y, VI_IX - 14, VI_Y0 + 4, VI_IX + 14, VI_Y0 + 4, ser / 2)
-        || near_seg(x, y, VI_IX - 14, VI_Y1 - 4, VI_IX + 14, VI_Y1 - 4, ser / 2);
-}
-
-static int palm_in_vi(int x, int y)
-{
-    int lx = x - 24, ly = y - 90;
-    if (lx > 40 && lx < 48 && ly > 40 && ly < 180) return 1;
-    if (ly > 28 && ly < 38 && lx > 18 && lx < 70) return 1;
-    if (ly > 18 && ly < 28 && lx > 28 && lx < 62) return 1;
-    if (ly > 48 && ly < 56 && lx > 8 && lx < 40) return 1;
-    if (x > VI_IX - 5 && x < VI_IX + 5 && y > 110 && y < 250) return 1;
-    if (y > 118 && y < 126 && x > VI_IX - 22 && x < VI_IX + 22) return 1;
+    int y0 = VI_Y0 - grow, y1 = VI_Y1 + grow;
+    int stem0 = VI_IX - VI_STEM / 2 - grow;
+    int stem1 = VI_IX + VI_STEM / 2 + grow;
+    int s0 = VI_IX - VI_SERW / 2 - grow;
+    int s1 = VI_IX + VI_SERW / 2 + grow;
+    int sh = VI_SERH + grow;
+    if (sh < 10) sh = 10;
+    if (in_span(x, y, y0, y1,
+                VI_VL0 - grow, VI_VL1 + grow,
+                VI_AX - 6 - grow, VI_AX + 3 + grow))
+        return 1;
+    if (in_span(x, y, y0, y1,
+                VI_VR0 - grow, VI_VR1 + grow,
+                VI_AX - 3 - grow, VI_AX + 6 + grow))
+        return 1;
+    if (x >= stem0 && x < stem1 && y >= y0 && y < y1) return 1;
+    if (x >= s0 && x < s1 && y >= y0 && y < y0 + sh) return 1;
+    if (x >= s0 && x < s1 && y >= y1 - sh && y < y1) return 1;
     return 0;
 }
 
@@ -183,18 +204,33 @@ static void text_ol(uint32_t *fb, int w, int h, int x, int y, const char *s, int
     g6_text5(fb, w, h, x, y, s, scale, fg);
 }
 
+static void wordmark(uint32_t *fb, int w, int h, int x, int y, const char *s, uint32_t fg, uint32_t ol)
+{
+    int ox, oy, adv = 14;
+    for (oy = -2; oy <= 2; oy++)
+        for (ox = -2; ox <= 2; ox++)
+            if (ox || oy)
+                g6_text5n(fb, w, h, x + ox, y + oy, s, 3, ol, adv);
+    g6_text5n(fb, w, h, x, y, s, 3, fg, adv);
+    g6_text5n(fb, w, h, x + 1, y, s, 3, fg, adv);
+}
+
 static void draw_palm_sil(uint32_t *fb, int w, int h, int x, int y, uint32_t c)
 {
-    fillr(fb, w, h, x, y, 3, 62, c);
-    fillr(fb, w, h, x - 1, y + 8, 5, 8, c);
-    disc(fb, w, h, x + 1, y - 6, 7, c);
-    fillr(fb, w, h, x - 22, y - 4, 20, 4, c);
-    fillr(fb, w, h, x + 4, y - 6, 22, 4, c);
-    fillr(fb, w, h, x - 16, y - 16, 14, 5, c);
-    fillr(fb, w, h, x + 4, y - 18, 16, 5, c);
-    fillr(fb, w, h, x - 6, y - 24, 16, 6, c);
-    fillr(fb, w, h, x - 18, y + 2, 14, 3, c);
-    fillr(fb, w, h, x + 6, y + 2, 14, 3, c);
+    int i, k;
+    fillr(fb, w, h, x, y, 3, 68, c);
+    fillr(fb, w, h, x - 1, y + 12, 5, 14, c);
+    disc(fb, w, h, x + 1, y - 2, 5, c);
+    for (k = 0; k < 7; k++) {
+        int dx = (k - 3) * 5;
+        int dy = (k == 3) ? -20 : ((k == 0 || k == 6) ? -2 : -12);
+        int len = 15;
+        for (i = 0; i < len; i++) {
+            int px = x + 1 + dx * i / 11;
+            int py = y - 4 + dy * i / 11 + (i * i) / 26;
+            fillr(fb, w, h, px - 1, py, 3, 2, c);
+        }
+    }
 }
 
 static void draw_sky(uint32_t *fb, int w, int h, int horizon, int fade)
@@ -209,8 +245,8 @@ static void draw_water(uint32_t *fb, int w, int h, int y0, int pan, int fade)
     int y, x, band;
     for (y = y0; y < h; y++) {
         uint32_t deep = lerp(0xff0A4060, G6_COL_TEAL, y - y0, h - y0 + 1);
-        uint32_t c = fade_c(deep, fade);
-        fillr(fb, w, h, 0, y, w, 1, c);
+        uint32_t col = fade_c(deep, fade);
+        fillr(fb, w, h, 0, y, w, 1, col);
         if (((y + pan) & 7) == 0)
             fillr(fb, w, h, (pan * 3 + y) & 31, y, 28, 1, fade_c(G6_COL_FOAM, fade * 2 / 3));
     }
@@ -238,8 +274,8 @@ static void draw_skyline(uint32_t *fb, int w, int h, int base, int pan, int fade
     int x = -20 - (pan % 40);
     for (i = 0; i < 12; i++) {
         int k = i & 7;
-        uint32_t c = fade_c(tc[k], fade);
-        fillr(fb, w, h, x, base - th[k], tw[k], th[k], c);
+        uint32_t col = fade_c(tc[k], fade);
+        fillr(fb, w, h, x, base - th[k], tw[k], th[k], col);
         fillr(fb, w, h, x, base - th[k], tw[k], 3, fade_c(0xffF8E0D0, fade));
         fillr(fb, w, h, x + 3, base - th[k] + 8, 4, 6, fade_c(0xff3A2048, fade));
         fillr(fb, w, h, x + tw[k] - 8, base - th[k] + 8, 4, 6, fade_c(0xff3A2048, fade));
@@ -278,35 +314,83 @@ static void scene_sunset(uint32_t *fb, int w, int h, int t, int fade)
     draw_palm_sil(fb, w, h, 200 + pan / 4, hor - 4, fade_c(G6_COL_OUTLINE, fade));
 }
 
+static void neon_sign(uint32_t *fb, int w, int h, int x, int y, const char *s, uint32_t glow, int fade)
+{
+    int n = 0;
+    while (s[n]) n++;
+    fillr(fb, w, h, x - 4, y - 4, n * 12 + 8, 22, fade_c(lerp(glow, 0, 1, 2), fade));
+    fillr(fb, w, h, x - 2, y - 2, n * 12 + 4, 18, fade_c(glow, fade));
+    g6_text5(fb, w, h, x, y, s, 2, fade_c(G6_COL_WHITE, fade));
+}
+
+static void motel_sign(uint32_t *fb, int w, int h, int x, int y, int fade)
+{
+    static const char *rows = "MOTEL";
+    int i;
+    fillr(fb, w, h, x + 6, y + 90, 4, 40, fade_c(0xff2A2030, fade));
+    fillr(fb, w, h, x, y, 22, 92, fade_c(0xff4A1028, fade));
+    fillr(fb, w, h, x + 2, y + 2, 18, 88, fade_c(G6_COL_MAGENTA, fade));
+    for (i = 0; i < 5; i++) {
+        char ch[2];
+        ch[0] = rows[i];
+        ch[1] = 0;
+        g6_text5(fb, w, h, x + 6, y + 6 + i * 16, ch, 2, fade_c(G6_COL_WHITE, fade));
+    }
+}
+
 static void scene_neon(uint32_t *fb, int w, int h, int t, int fade)
 {
     int pan = t;
     int x, y, i;
+    int curb = 236;
     fillr(fb, w, h, 0, 0, w, h, fade_c(0xff0A0618, fade));
-    for (y = 0; y < 160; y++)
-        fillr(fb, w, h, 0, y, w, 1, fade_c(lerp(0xff120028, G6_COL_INDIGO, y, 160), fade));
+    for (y = 0; y < curb; y++)
+        fillr(fb, w, h, 0, y, w, 1, fade_c(lerp(0xff120028, G6_COL_INDIGO, y, curb), fade));
     for (i = 0; i < 6; i++) {
-        int bx = (i * 48 - pan) % 288 - 24;
-        int bh = 140 + ((i * 37) & 63);
+        int bx = (i * 52 - pan) % 312 - 28;
+        int bh = 150 + ((i * 37) & 63);
         uint32_t wall = fade_c((i & 1) ? 0xff2A1840 : 0xff1A1028, fade);
-        fillr(fb, w, h, bx, 220 - bh, 40, bh, wall);
-        for (y = 220 - bh + 8; y < 210; y += 12)
-            for (x = bx + 4; x < bx + 36; x += 10)
-                fillr(fb, w, h, x, y, 6, 7, fade_c(((x + y + t) & 8) ? 0xffFFE8A0 : 0xff3A2050, fade));
-        if (i == 1) fillr(fb, w, h, bx + 4, 220 - bh + 4, 28, 10, fade_c(G6_COL_MAGENTA, fade));
-        if (i == 3) fillr(fb, w, h, bx + 2, 220 - bh + 6, 32, 8, fade_c(G6_COL_TEAL, fade));
-        if (i == 4) fillr(fb, w, h, bx + 6, 220 - bh + 2, 22, 12, fade_c(G6_COL_PINK, fade));
+        fillr(fb, w, h, bx, curb - bh, 46, bh, wall);
+        fillr(fb, w, h, bx, curb - bh, 46, 4, fade_c((i & 1) ? G6_COL_MAGENTA : G6_COL_TEAL, fade));
+        for (y = curb - bh + 12; y < curb - 8; y += 14)
+            for (x = bx + 6; x < bx + 40; x += 12)
+                fillr(fb, w, h, x, y, 7, 8,
+                      fade_c(((x + y + t) & 8) ? 0xffFFE8A0 : 0xff3A2050, fade));
+        if (i == 1) motel_sign(fb, w, h, bx + 12, curb - bh - 8, fade);
+        if (i == 2) neon_sign(fb, w, h, bx + 6, curb - bh + 8, "BAR", G6_COL_TEAL, fade);
+        if (i == 4) neon_sign(fb, w, h, bx + 6, curb - bh + 10, "KEY", G6_COL_PINK, fade);
     }
-    fillr(fb, w, h, 0, 220, w, h - 220, fade_c(0xff12101C, fade));
-    for (y = 222; y < h; y += 3) {
-        uint32_t rc = fade_c(lerp(0xff2A1840, G6_COL_MAGENTA, (y - 222) & 31, 31), fade / 4);
-        fillr(fb, w, h, 0, y, w, 1, rc);
+    for (y = curb; y < h; y++) {
+        int u = y - curb;
+        uint32_t wet = lerp(0xff12101C, 0xff1A1028, u, h - curb);
+        fillr(fb, w, h, 0, y, w, 1, fade_c(wet, fade));
+        if ((y & 3) == 0)
+            fillr(fb, w, h, 0, y, w, 1, fade_c(lerp(G6_COL_MAGENTA, 0, 1, 6), fade / 5));
     }
-    fillr(fb, w, h, 0, 228, w, 2, fade_c(G6_COL_MAGENTA, fade / 2));
-    for (x = 0; x < w; x += 14)
-        fillr(fb, w, h, x + (t & 7), 248, 6, 1, fade_c(0xffFFF1A8, fade / 2));
-    g6_text5(fb, w, h, 20, 80, "YAP", 3, fade_c(G6_COL_MAGENTA, fade));
-    g6_text5(fb, w, h, 140, 100, "KEY", 2, fade_c(G6_COL_TEAL, fade));
+    fillr(fb, w, h, 0, curb, w, 3, fade_c(0xff3A3048, fade));
+    fillr(fb, w, h, 0, curb + 4, w, 2, fade_c(G6_COL_MAGENTA, fade / 2));
+    for (x = -20; x < w; x += 22)
+        fillr(fb, w, h, x + (pan % 22), curb + 48, 12, 2, fade_c(0xffC8B060, fade / 2));
+    for (i = 0; i < 5; i++) {
+        int rx = 20 + i * 48 - (pan & 15);
+        uint32_t rc = fade_c((i & 1) ? G6_COL_MAGENTA : G6_COL_TEAL, fade / 3);
+        fillr(fb, w, h, rx, curb + 8, 18, 110, rc);
+        fillr(fb, w, h, rx + 4, curb + 12, 10, 90, fade_c(0xff12101C, fade));
+    }
+    disc(fb, w, h, 40, curb - 20, 6, fade_c(0xffFFF1A8, fade));
+    fillr(fb, w, h, 38, curb - 14, 3, 18, fade_c(0xff2A2030, fade));
+    draw_car_side(fb, w, h, 70 + (t & 7), curb + 22, G6_COL_MAGENTA, fade);
+    fillr(fb, w, h, 78, curb + 42, 28, 22, fade_c(G6_COL_MAGENTA, fade / 4));
+    draw_car_side(fb, w, h, 150, curb + 30, G6_COL_TEAL, fade);
+    fillr(fb, w, h, 158, curb + 50, 28, 20, fade_c(G6_COL_TEAL, fade / 4));
+    draw_car_side(fb, w, h, 24, curb + 70, 0xffF4E04A, fade);
+    fillr(fb, w, h, 32, curb + 90, 28, 16, fade_c(0xffF4E04A, fade / 5));
+    fillr(fb, w, h, 0, h - 52, w, 52, fade_c(0xff14101C, fade));
+    fillr(fb, w, h, 0, h - 54, w, 3, fade_c(0xff3A3048, fade));
+    for (x = 8; x < w; x += 28)
+        fillr(fb, w, h, x, h - 40, 18, 2, fade_c(0xff2A2438, fade));
+    draw_palm_sil(fb, w, h, 210, h - 70, fade_c(G6_COL_OUTLINE, fade));
+    draw_palm_sil(fb, w, h, 18, h - 64, fade_c(0xff100818, fade));
 }
 
 static void scene_causeway(uint32_t *fb, int w, int h, int t, int fade)
@@ -359,7 +443,7 @@ static void scene_duo(uint32_t *fb, int w, int h, int t, int fade)
 static void draw_logo_vi(uint32_t *fb, int w, int h, int fade)
 {
     int x, y;
-    int y0 = VI_Y0 - 12, y1 = VI_Y1 + 12;
+    int y0 = VI_Y0 - 14, y1 = VI_Y1 + 14;
     uint32_t outline = fade_c(G6_COL_OUTLINE, fade);
     uint32_t rim = fade_c(G6_COL_WHITE, fade);
     uint32_t black = fade_c(0xff08060C, fade);
@@ -377,39 +461,65 @@ static void draw_logo_vi(uint32_t *fb, int w, int h, int fade)
             int inner = vi_core(x, y, -4);
             int white_r = vi_core(x, y, 3);
             int ring = vi_core(x, y, 7);
-            if (core) {
-                uint32_t c = inner ? gcol : rim;
-                if (inner && palm_in_vi(x, y))
-                    c = lerp(c, G6_COL_OUTLINE, 1, 2);
-                pset(fb, w, h, x, y, c);
-            } else if (white_r) {
+            if (core)
+                pset(fb, w, h, x, y, inner ? gcol : rim);
+            else if (white_r)
                 pset(fb, w, h, x, y, rim);
-            } else if (ring) {
+            else if (ring)
                 pset(fb, w, h, x, y, outline);
-            }
         }
     }
-    text_ol(fb, w, h, 90, 10, "GRAND", 2, white, black);
-    text_ol(fb, w, h, 90, 28, "THEFT", 2, white, black);
-    text_ol(fb, w, h, 96, 46, "AUTO", 2, white, black);
+    wordmark(fb, w, h, 85, 8, "GRAND", white, black);
+    wordmark(fb, w, h, 85, 32, "THEFT", white, black);
+    wordmark(fb, w, h, 92, 56, "AUTO", white, black);
 }
 
-static void portrait(uint32_t *fb, int w, int h, int x, int y, int who_id, int fade)
+static void portrait(uint32_t *fb, int w, int h, int cx, int cy, int who_id, int fade)
 {
-    uint32_t skin = fade_c(0xffE8C4A8, fade);
-    uint32_t hair = fade_c(who_id ? 0xff1A1A1A : 0xff2A1A14, fade);
-    uint32_t shirt = fade_c(who_id ? 0xffF8F4EE : G6_COL_MAGENTA, fade);
-    fillr(fb, w, h, x - 22, y - 4, 44, 70, shirt);
-    fillr(fb, w, h, x - 18, y - 8, 36, 10, fade_c(who_id ? 0xffE8E0D0 : 0xffB02060, fade));
-    fillr(fb, w, h, x - 16, y - 40, 32, 36, skin);
-    fillr(fb, w, h, x - 18, y - 50, 36, 16, hair);
+    uint32_t skin = fade_c(who_id ? 0xffE0B898 : 0xffE8C4A8, fade);
+    uint32_t ski = fade_c(who_id ? 0xffF0D4B8 : 0xffF4DCC8, fade);
+    uint32_t sks = fade_c(who_id ? 0xffB88870 : 0xffC09078, fade);
+    uint32_t hair = fade_c(who_id ? 0xff141414 : 0xff2A1810, fade);
+    uint32_t hai = fade_c(who_id ? 0xff3A3A3A : 0xff4A3020, fade);
+    uint32_t shirt = fade_c(who_id ? 0xffF0E8DC : G6_COL_MAGENTA, fade);
+    uint32_t shi = fade_c(who_id ? 0xffffffff : 0xffF060C0, fade);
+    uint32_t shs = fade_c(who_id ? 0xffC0B8AC : 0xff8A1860, fade);
+    uint32_t lip = fade_c(who_id ? 0xffA06060 : 0xffC05060, fade);
+    fillr(fb, w, h, cx - 40, cy + 22, 80, 18, shs);
+    fillr(fb, w, h, cx - 34, cy + 18, 68, 16, shirt);
+    fillr(fb, w, h, cx - 10, cy + 18, 18, 10, shi);
+    fillr(fb, w, h, cx - 30, cy + 32, 60, 88, shirt);
+    fillr(fb, w, h, cx - 30, cy + 32, 10, 88, shs);
+    fillr(fb, w, h, cx + 20, cy + 40, 10, 80, dim(shirt));
+    fillr(fb, w, h, cx - 8, cy + 36, 12, 50, shi);
+    fillr(fb, w, h, cx - 9, cy + 10, 18, 18, sks);
+    fillr(fb, w, h, cx - 7, cy + 10, 14, 16, skin);
+    fillr(fb, w, h, cx - 22, cy - 32, 44, 44, skin);
+    disc(fb, w, h, cx, cy - 10, 22, skin);
+    fillr(fb, w, h, cx + 6, cy - 28, 18, 40, ski);
+    fillr(fb, w, h, cx - 22, cy - 22, 10, 36, sks);
     if (who_id == 0) {
-        fillr(fb, w, h, x - 22, y - 40, 10, 28, hair);
-        fillr(fb, w, h, x + 12, y - 40, 10, 28, hair);
+        fillr(fb, w, h, cx - 26, cy - 46, 52, 24, hair);
+        fillr(fb, w, h, cx - 28, cy - 30, 14, 50, hair);
+        fillr(fb, w, h, cx + 16, cy - 30, 14, 50, hair);
+        fillr(fb, w, h, cx - 20, cy - 48, 40, 12, hai);
+        fillr(fb, w, h, cx - 16, cy - 28, 32, 10, hair);
+        disc(fb, w, h, cx - 24, cy - 2, 3, fade_c(G6_COL_STAR, fade));
+    } else {
+        fillr(fb, w, h, cx - 22, cy - 44, 44, 18, hair);
+        fillr(fb, w, h, cx - 18, cy - 48, 36, 10, hai);
+        fillr(fb, w, h, cx - 22, cy - 30, 8, 12, hair);
+        fillr(fb, w, h, cx + 14, cy - 30, 8, 12, hair);
+        fillr(fb, w, h, cx - 16, cy + 6, 32, 10, fade_c(0xffC4A888, fade));
     }
-    fillr(fb, w, h, x - 8, y - 28, 5, 3, fade_c(0xff1A1A1A, fade));
-    fillr(fb, w, h, x + 4, y - 28, 5, 3, fade_c(0xff1A1A1A, fade));
-    fillr(fb, w, h, x - 6, y - 16, 12, 3, fade_c(0xffC07070, fade));
+    fillr(fb, w, h, cx - 14, cy - 14, 10, 5, fade_c(0xffF8F4EE, fade));
+    fillr(fb, w, h, cx + 4, cy - 14, 10, 5, fade_c(0xffF8F4EE, fade));
+    fillr(fb, w, h, cx - 11, cy - 13, 5, 4, fade_c(0xff1A1A1A, fade));
+    fillr(fb, w, h, cx + 7, cy - 13, 5, 4, fade_c(0xff1A1A1A, fade));
+    fillr(fb, w, h, cx - 14, cy - 18, 10, 3, hair);
+    fillr(fb, w, h, cx + 4, cy - 18, 10, 3, hair);
+    fillr(fb, w, h, cx - 1, cy - 8, 4, 6, sks);
+    fillr(fb, w, h, cx - 7, cy + 2, 14, 4, lip);
 }
 
 static void draw_gator_art(uint32_t *fb, int w, int h, int x, int y, int fade)
@@ -435,7 +545,6 @@ static void draw_menu(G6Game *g, uint32_t *fb, int w, int h)
             pset(fb, w, h, x, y, c);
         }
     }
-    /* diagonal panel edges */
     for (y = 0; y < h; y++) {
         int e0 = 150 - y, e1 = 280 - y, e2 = 400 - y, e3 = 520 - y;
         fillr(fb, w, h, e0, y, 3, 1, G6_COL_OUTLINE);
@@ -443,18 +552,34 @@ static void draw_menu(G6Game *g, uint32_t *fb, int w, int h)
         fillr(fb, w, h, e2, y, 3, 1, G6_COL_TEAL);
         fillr(fb, w, h, e3, y, 3, 1, G6_COL_ORANGE);
     }
-    portrait(fb, w, h, 58, 150, 0, 256);
-    portrait(fb, w, h, 176, 240, 1, 256);
-    draw_palm_sil(fb, w, h, 18, 70, G6_COL_OUTLINE);
-    draw_palm_sil(fb, w, h, 48, 90, 0xff120818);
-    draw_skyline(fb, w, h, 70, 8, 256);
-    draw_car_side(fb, w, h, 8, 310, G6_COL_TEAL, 256);
-    draw_gator_art(fb, w, h, 148, 350, 256);
-    fillr(fb, w, h, 148, 28, 86, 44, G6_COL_MAGENTA);
-    g6_text5(fb, w, h, 158, 40, "NEON", 2, G6_COL_WHITE);
-    disc(fb, w, h, 200, 120, 16, G6_COL_ORANGE);
+    draw_skyline(fb, w, h, 78, 8, 256);
+    draw_palm_sil(fb, w, h, 22, 86, G6_COL_OUTLINE);
+    draw_palm_sil(fb, w, h, 52, 104, 0xff120818);
+    portrait(fb, w, h, 64, 168, 0, 256);
+    portrait(fb, w, h, 176, 248, 1, 256);
+    draw_palm_sil(fb, w, h, 18, 320, 0xff100818);
+    draw_palm_sil(fb, w, h, 48, 338, G6_COL_OUTLINE);
+    fillr(fb, w, h, 4, 352, 70, 18, 0xff101018);
+    fillr(fb, w, h, 8, 340, 62, 22, G6_COL_TEAL);
+    fillr(fb, w, h, 8, 340, 62, 5, lite(G6_COL_TEAL));
+    fillr(fb, w, h, 18, 344, 16, 10, 0xff203848);
+    fillr(fb, w, h, 40, 344, 14, 10, 0xff203848);
+    fillr(fb, w, h, 12, 356, 10, 8, 0xff1A1A1A);
+    fillr(fb, w, h, 50, 356, 10, 8, 0xff1A1A1A);
+    fillr(fb, w, h, 66, 346, 3, 3, 0xffFFF1A8);
+    fillr(fb, w, h, 72, 364, 56, 16, 0xff101018);
+    fillr(fb, w, h, 76, 354, 50, 18, G6_COL_MAGENTA);
+    fillr(fb, w, h, 76, 354, 50, 4, lite(G6_COL_MAGENTA));
+    fillr(fb, w, h, 84, 358, 12, 8, 0xff203848);
+    fillr(fb, w, h, 102, 358, 12, 8, 0xff203848);
+    fillr(fb, w, h, 80, 368, 8, 6, 0xff1A1A1A);
+    fillr(fb, w, h, 110, 368, 8, 6, 0xff1A1A1A);
+    draw_gator_art(fb, w, h, 140, 370, 256);
+    fillr(fb, w, h, 148, 18, 86, 40, G6_COL_MAGENTA);
+    g6_text5(fb, w, h, 158, 28, "NEON", 2, G6_COL_WHITE);
+    disc(fb, w, h, 210, 108, 16, G6_COL_ORANGE);
     fillr(fb, w, h, 0, 392, w, 40, 0xEE0A0618);
-    text_ol(fb, w, h, 36, 400, pulse ? "TAP TO START" : "TAP TO START", 2,
+    text_ol(fb, w, h, 36, 400, "TAP TO START", 2,
             pulse ? G6_COL_WHITE : G6_COL_PINK, G6_COL_OUTLINE);
     g6_text5(fb, w, h, 8, 418, G6_TAG, 1, 0xffC9ADA7);
 }
@@ -497,6 +622,11 @@ static int map_tile(const G6Game *g, int tx, int ty)
     return g->map[ty][tx];
 }
 
+static int is_bldg(int t)
+{
+    return t == T_BUILD || t == T_ROOF || t == T_NEON || t == T_SHACK;
+}
+
 static int near_neon(const G6Game *g, int tx, int ty)
 {
     int dx, dy;
@@ -506,9 +636,23 @@ static int near_neon(const G6Game *g, int tx, int ty)
     return 0;
 }
 
+static int view_night(const G6Game *g)
+{
+    int ty;
+    if (!g) return 0;
+    ty = (int)(g->ent[g->who & 1].y >> 8) / G6_TILE;
+    return ty >= 26;
+}
+
+static uint32_t roof_of(int tx, int ty)
+{
+    return ROOF_PAL[((tx / 8) * 3 + (ty / 8) * 5) & 7];
+}
+
 static uint32_t tile_col(const G6Game *g, int t, int x, int y)
 {
     int hsh = (x * 13 + y * 7) & 7;
+    int night = (t == T_NEON) || (y >= 30) || near_neon(g, x, y);
     uint32_t c;
     switch (t) {
     case T_OCEAN: c = ((g->tick_n + x + y) & 8) ? 0xff148C9A : 0xff1EC8C0; break;
@@ -518,48 +662,113 @@ static uint32_t tile_col(const G6Game *g, int t, int x, int y)
     case T_SWAMP: c = hsh & 1 ? 0xff234A2C : 0xff1B3A24; break;
     case T_ROAD: c = G6_COL_ASPHALT; break;
     case T_WALK: c = 0xffD4C4B0; break;
-    case T_BUILD: c = hsh & 2 ? 0xffE8A888 : 0xffD89AA0; break;
-    case T_ROOF: c = hsh & 1 ? 0xff7EC8B0 : 0xffC45A3A; break;
+    case T_BUILD:
+    case T_ROOF: c = roof_of(x, y); break;
     case T_BRIDGE: c = 0xff6A6458; break;
     case T_DOCK: c = 0xff8A6A44; break;
     case T_PALM: c = 0xff3D8C4A; break;
-    case T_NEON: c = 0xff2A1840; break;
+    case T_NEON: c = 0xff241028; break;
     case T_SHACK: c = 0xffC9A227; break;
     default: c = 0xff203018; break;
     }
     if (t == T_SAND || t == T_OCEAN || t == T_DOCK)
         c = lerp(c, G6_COL_ORANGE, 1, 8);
-    if (t == T_NEON || (t == T_ROAD && near_neon(g, x, y)))
-        c = lerp(c, G6_COL_INDIGO, 1, 6);
+    if (night) {
+        uint32_t nv = 0xff121028;
+        if (t == T_OCEAN) nv = 0xff0A2038;
+        if (t == T_ROAD || t == T_BRIDGE) nv = 0xff1A1828;
+        if (t == T_WALK) nv = 0xff2A2438;
+        if (t == T_NEON) nv = 0xff1A1028;
+        c = lerp(c, nv, 3, 5);
+    }
     return c | 0xff000000u;
 }
 
-static void draw_tile(const G6Game *g, uint32_t *fb, int w, int h, int tx, int ty, int ox, int oy)
+static void draw_palm_top(uint32_t *fb, int w, int h, int ox, int oy)
+{
+    fillr(fb, w, h, ox + 10, oy + 12, 7, 4, 0x88141410);
+    fillr(fb, w, h, ox + 7, oy + 4, 3, 12, 0xff8A5A28);
+    fillr(fb, w, h, ox + 6, oy + 4, 1, 12, 0xffC08040);
+    fillr(fb, w, h, ox + 1, oy + 1, 14, 4, 0xff1F6A32);
+    fillr(fb, w, h, ox + 3, oy - 1, 10, 4, 0xff2F8A40);
+    fillr(fb, w, h, ox + 8, oy + 3, 8, 3, 0xff1F6A32);
+    fillr(fb, w, h, ox - 1, oy + 3, 6, 3, 0xff246A38);
+}
+
+static void draw_parked(uint32_t *fb, int w, int h, int ox, int oy, uint32_t col, int horiz)
+{
+    fillr(fb, w, h, ox + 2, oy + 10, 12, 4, 0x66101018);
+    if (horiz) {
+        fillr(fb, w, h, ox + 1, oy + 4, 14, 8, dim(col));
+        fillr(fb, w, h, ox + 2, oy + 4, 12, 6, col);
+        fillr(fb, w, h, ox + 2, oy + 4, 12, 2, lite(col));
+        fillr(fb, w, h, ox + 4, oy + 6, 4, 3, 0xff203848);
+        fillr(fb, w, h, ox + 9, oy + 6, 4, 3, 0xff203848);
+    } else {
+        fillr(fb, w, h, ox + 4, oy + 1, 8, 14, dim(col));
+        fillr(fb, w, h, ox + 5, oy + 2, 6, 12, col);
+        fillr(fb, w, h, ox + 5, oy + 2, 2, 12, lite(col));
+        fillr(fb, w, h, ox + 6, oy + 4, 4, 3, 0xff203848);
+        fillr(fb, w, h, ox + 6, oy + 9, 4, 3, 0xff203848);
+    }
+}
+
+static void draw_tile(const G6Game *g, uint32_t *fb, int w, int h, int tx, int ty, int ox, int oy, int night)
 {
     int t = map_tile(g, tx, ty);
     uint32_t c = tile_col(g, t, tx, ty);
-    int n;
+    int n, south, east, west, north, facade;
+    if (night && t != T_NEON) {
+        if (t == T_ROAD || t == T_BRIDGE) c = 0xff1C1828;
+        else if (t == T_WALK) c = 0xff2C2438;
+        else if (t == T_OCEAN) c = 0xff0A2840;
+        else if (t == T_SAND) c = 0xff4A3A40;
+        else if (t == T_GRASS || t == T_PARK || t == T_PALM) c = 0xff1A3020;
+        else if (is_bldg(t)) c = dim(roof_of(tx, ty));
+        else c = lerp(c, 0xff121028, 3, 5);
+    }
     fillr(fb, w, h, ox, oy, G6_TILE, G6_TILE, c);
     if (t == T_ROAD || t == T_BRIDGE) {
         int hr = map_tile(g, tx - 1, ty) == t || map_tile(g, tx + 1, ty) == t;
         int vr = map_tile(g, tx, ty - 1) == t || map_tile(g, tx, ty + 1) == t;
+        uint32_t edge = night ? 0xff3A3048 : 0xffC8C0B0;
+        uint32_t dash = night ? 0xff8A7840 : 0xffE8D060;
         fillr(fb, w, h, ox, oy, G6_TILE, 1, 0xff2A2824);
         fillr(fb, w, h, ox, oy + 15, G6_TILE, 1, 0xff2A2824);
-        fillr(fb, w, h, ox, oy + 1, G6_TILE, 2, 0xff6A6458);
-        if (hr && (ty & 1) == 0) fillr(fb, w, h, ox + 3, oy + 7, 6, 2, 0xffE8D060);
-        if (vr && (tx & 1) == 0) fillr(fb, w, h, ox + 7, oy + 3, 2, 6, 0xffE8D060);
         if (hr) {
-            fillr(fb, w, h, ox, oy + 1, G6_TILE, 1, 0xffC8C0B0);
-            fillr(fb, w, h, ox, oy + 14, G6_TILE, 1, 0xffC8C0B0);
+            fillr(fb, w, h, ox, oy + 1, G6_TILE, 1, edge);
+            fillr(fb, w, h, ox, oy + 14, G6_TILE, 1, edge);
+            if ((ty & 1) == 0) fillr(fb, w, h, ox + 3, oy + 7, 7, 2, dash);
+        }
+        if (vr) {
+            fillr(fb, w, h, ox + 1, oy, 1, G6_TILE, edge);
+            fillr(fb, w, h, ox + 14, oy, 1, G6_TILE, edge);
+            if ((tx & 1) == 0) fillr(fb, w, h, ox + 7, oy + 3, 2, 7, dash);
+        }
+        if (hr && vr) {
+            fillr(fb, w, h, ox + 2, oy + 2, 12, 2, edge);
+            fillr(fb, w, h, ox + 2, oy + 12, 12, 2, edge);
         }
     }
     if (t == T_WALK) {
-        fillr(fb, w, h, ox, oy, 1, G6_TILE, 0xffB0A090);
-        fillr(fb, w, h, ox + 15, oy, 1, G6_TILE, 0xffF0E8D8);
+        uint32_t kerb_l = night ? 0xff3A3448 : 0xffF0E8D8;
+        uint32_t kerb_d = night ? 0xff1A1420 : 0xffB0A090;
+        fillr(fb, w, h, ox, oy, 2, G6_TILE, kerb_d);
+        fillr(fb, w, h, ox + 14, oy, 2, G6_TILE, kerb_l);
+        fillr(fb, w, h, ox, oy, G6_TILE, 1, kerb_l);
+        fillr(fb, w, h, ox, oy + 15, G6_TILE, 1, kerb_d);
         for (n = 4; n < 12; n += 4)
-            fillr(fb, w, h, ox + 2, oy + n, 12, 1, 0xffC8B8A0);
-        for (n = T_BUILD; n <= T_NEON; n++)
-            if (map_tile(g, tx, ty - 1) == n) fillr(fb, w, h, ox, oy, G6_TILE, 4, 0x88141420);
+            fillr(fb, w, h, ox + 3, oy + n, 10, 1, night ? 0xff241C30 : 0xffC8B8A0);
+        if (is_bldg(map_tile(g, tx, ty - 1)))
+            fillr(fb, w, h, ox, oy, G6_TILE, 3, 0x66141420);
+        if (((tx * 5 + ty * 3) % 11) == 2 &&
+            (map_tile(g, tx, ty + 1) == T_ROAD || map_tile(g, tx, ty - 1) == T_ROAD))
+            draw_parked(fb, w, h, ox, oy, CAR_COL[(tx + ty) % 6], 1);
+        else if (((tx * 5 + ty * 3) % 11) == 7 &&
+                 (map_tile(g, tx + 1, ty) == T_ROAD || map_tile(g, tx - 1, ty) == T_ROAD))
+            draw_parked(fb, w, h, ox, oy, CAR_COL[(tx + ty) % 6], 0);
+        else if (((tx + ty * 2) % 6) == 0)
+            draw_palm_top(fb, w, h, ox, oy);
     }
     if (t == T_SAND) {
         pset(fb, w, h, ox + (tx & 7), oy + (ty & 7), 0xffD4A060);
@@ -575,43 +784,57 @@ static void draw_tile(const G6Game *g, uint32_t *fb, int w, int h, int tx, int t
         pset(fb, w, h, ox + 7, oy + 2, 0xffE8D060);
     }
     if (t == T_BUILD || t == T_ROOF || t == T_NEON) {
-        int south = map_tile(g, tx, ty + 1);
-        int facade = !(south == T_BUILD || south == T_ROOF || south == T_NEON || south == T_SHACK);
-        uint32_t roof = (t == T_NEON) ? 0xff241028 : (t == T_ROOF ? c : lerp(c, 0xffF0D8C0, 1, 4));
+        uint32_t pal = roof_of(tx, ty);
+        uint32_t roof;
+        south = map_tile(g, tx, ty + 1);
+        north = map_tile(g, tx, ty - 1);
+        east = map_tile(g, tx + 1, ty);
+        west = map_tile(g, tx - 1, ty);
+        facade = !is_bldg(south);
+        if (night)
+            pal = (t == T_NEON) ? 0xff1A1028 : 0xff241830;
+        else if (t == T_NEON)
+            pal = 0xff8A6880;
+        roof = pal;
         fillr(fb, w, h, ox, oy, G6_TILE, G6_TILE, roof);
-        fillr(fb, w, h, ox, oy, G6_TILE, 1, lerp(roof, 0xffFFFFFF, 1, 5));
+        if (!is_bldg(north)) fillr(fb, w, h, ox, oy, G6_TILE, 2, lite(roof));
+        if (!is_bldg(west)) fillr(fb, w, h, ox, oy, 2, G6_TILE, lite(roof));
+        if (!is_bldg(east)) fillr(fb, w, h, ox + 14, oy, 2, G6_TILE, dim(roof));
+        if (!is_bldg(south)) fillr(fb, w, h, ox, oy + 14, G6_TILE, 2, dim(roof));
         if (!facade) {
-            if (((tx + ty) & 7) == 0) fillr(fb, w, h, ox + 5, oy + 5, 6, 5, 0xff3A3040);
-            if (((tx * 3 + ty) & 11) == 0) fillr(fb, w, h, ox + 3, oy + 3, 5, 5, 0xff4A88A8);
-            if (t == T_NEON && ((tx + ty) & 3) == 0)
-                fillr(fb, w, h, ox + 2, oy + 2, 12, 2, ((g->tick_n / 6) & 1) ? G6_COL_MAGENTA : G6_COL_TEAL);
-        } else {
-            fillr(fb, w, h, ox, oy + 6, G6_TILE, 10, (t == T_NEON) ? 0xff1A1028 : 0xffC89080);
-            fillr(fb, w, h, ox, oy, G6_TILE, 3, 0xffF0E0D0);
-            fillr(fb, w, h, ox + 2, oy + 8, 4, 5, 0xff3A2848);
-            fillr(fb, w, h, ox + 10, oy + 8, 4, 5, 0xff3A2848);
-            if (t == T_NEON) {
+            if (((tx * 7 + ty * 3) & 7) == 0) {
+                fillr(fb, w, h, ox + 4, oy + 4, 7, 5, night ? 0xff3A3848 : 0xff6A6870);
+                fillr(fb, w, h, ox + 5, oy + 3, 5, 2, night ? 0xff5A5868 : 0xff8A8890);
+            }
+            if (((tx + ty * 5) & 7) == 3)
+                fillr(fb, w, h, ox + 3, oy + 8, 4, 4, night ? 0xff2A2838 : 0xff4A4850);
+            if (((tx * 3 + ty) & 11) == 2)
+                fillr(fb, w, h, ox + 6, oy + 6, 4, 4, night ? 0xffFFE8A0 : 0xff88A8C8);
+            if (t == T_NEON || night) {
                 uint32_t neon = ((g->tick_n / 6 + tx) & 1) ? G6_COL_MAGENTA : G6_COL_TEAL;
-                fillr(fb, w, h, ox + 1, oy + 3, 14, 4, neon);
-                fillr(fb, w, h, ox + 3, oy + 9, 4, 4, 0xffFFE8A0);
+                if (((tx + ty) & 3) == 0)
+                    fillr(fb, w, h, ox + 1, oy + 1, 14, 2, neon);
+            }
+        } else {
+            uint32_t wall = (t == T_NEON || night) ? 0xff1A1028 : lerp(pal, 0xffC89080, 1, 2);
+            fillr(fb, w, h, ox, oy + 5, G6_TILE, 11, wall);
+            fillr(fb, w, h, ox, oy, G6_TILE, 5, (t == T_NEON || night) ? 0xff2A1840 : 0xffF0E0D0);
+            fillr(fb, w, h, ox + 2, oy + 8, 4, 5, night || t == T_NEON ? 0xffFFE8A0 : 0xff3A2848);
+            fillr(fb, w, h, ox + 10, oy + 8, 4, 5, night || t == T_NEON ? 0xffFFE8A0 : 0xff3A2848);
+            if (t == T_NEON || night) {
+                uint32_t neon = ((g->tick_n / 6 + tx) & 1) ? G6_COL_MAGENTA : G6_COL_TEAL;
+                fillr(fb, w, h, ox + 1, oy + 3, 14, 3, neon);
             }
         }
     }
-    if (t == T_PALM) {
-        fillr(fb, w, h, ox + 9, oy + 13, 6, 3, 0xff1A3018);
-        fillr(fb, w, h, ox + 7, oy + 4, 3, 12, 0xff8A5A28);
-        fillr(fb, w, h, ox + 6, oy + 4, 1, 12, 0xffC08040);
-        fillr(fb, w, h, ox + 1, oy + 2, 14, 3, 0xff1F6A32);
-        fillr(fb, w, h, ox + 3, oy + 0, 10, 4, 0xff2F8A40);
-        fillr(fb, w, h, ox + 8, oy + 3, 7, 2, 0xff1F6A32);
-        fillr(fb, w, h, ox + 10, oy + 14, 5, 2, 0x66141410);
-    }
+    if (t == T_PALM)
+        draw_palm_top(fb, w, h, ox, oy);
     if (t == T_SWAMP && ((tx + ty + (int)g->tick_n) & 15) == 0)
         fillr(fb, w, h, ox + 5, oy + 6, 3, 2, 0xff7EE0A8);
     if (t == T_OCEAN) {
         int wv = (int)((g->tick_n / 2 + tx * 3 + ty) & 7);
-        fillr(fb, w, h, ox + wv, oy + 8, 6, 1, 0xffA0E4F0);
-        fillr(fb, w, h, ox + ((wv + 4) & 7), oy + 4, 4, 1, G6_COL_FOAM);
+        fillr(fb, w, h, ox + wv, oy + 8, 6, 1, night ? 0xff3A6880 : 0xffA0E4F0);
+        fillr(fb, w, h, ox + ((wv + 4) & 7), oy + 4, 4, 1, night ? 0xff2A5068 : G6_COL_FOAM);
         if (map_tile(g, tx, ty + 1) == T_SAND)
             fillr(fb, w, h, ox, oy + 12, G6_TILE, 4, G6_COL_FOAM);
     }
@@ -633,7 +856,7 @@ static void draw_person(uint32_t *fb, int w, int h, int x, int y, uint32_t body,
     fillr(fb, w, h, x - 3, y + 4, 3, 4, 0xff2A2030);
     fillr(fb, w, h, x, y + 4, 3, 4, 0xff2A2030);
     fillr(fb, w, h, x - 3, y - 2, 7, 8, body);
-    fillr(fb, w, h, x - 2, y - 1, 5, 2, lerp(body, 0xffffffff, 1, 4));
+    fillr(fb, w, h, x - 2, y - 1, 5, 2, lite(body));
     fillr(fb, w, h, x - 3, y - 6, 7, 5, 0xffE8C4A8);
     fillr(fb, w, h, x - 3, y - 8, 7, 3, hair);
     if (who_id == 0) fillr(fb, w, h, x - 4, y - 7, 9, 3, hair);
@@ -644,8 +867,8 @@ static void draw_person(uint32_t *fb, int w, int h, int x, int y, uint32_t body,
 static void draw_car(uint32_t *fb, int w, int h, int x, int y, uint8_t ang, uint32_t col, int cop, int mine)
 {
     int dir = ((ang + 16) >> 5) & 7;
-    uint32_t hi = lerp(col, 0xffffffffu, 1, 3);
-    uint32_t lo = lerp(col, 0xff101018, 1, 3);
+    uint32_t hi = lite(col);
+    uint32_t lo = dim(col);
     uint32_t win = 0xff203848;
     uint32_t light = ((ang + x) & 8) ? G6_COL_MAGENTA : G6_COL_TEAL;
     fillr(fb, w, h, x - 8, y + 4, 16, 4, 0x66101018);
@@ -731,14 +954,15 @@ static void draw_world(G6Game *g, uint32_t *fb, int w, int h)
     int tx1 = (camx + w) / G6_TILE + 1;
     int ty1 = (camy + h) / G6_TILE + 1;
     int tx, ty, i;
+    int night = view_night(g);
     if (tx0 < 0) tx0 = 0;
     if (ty0 < 0) ty0 = 0;
     if (tx1 >= G6_MAP_W) tx1 = G6_MAP_W - 1;
     if (ty1 >= G6_MAP_H) ty1 = G6_MAP_H - 1;
-    fillr(fb, w, h, 0, 0, w, h, 0xff148C9A);
+    fillr(fb, w, h, 0, 0, w, h, night ? 0xff0A2840 : 0xff148C9A);
     for (ty = ty0; ty <= ty1; ty++)
         for (tx = tx0; tx <= tx1; tx++)
-            draw_tile(g, fb, w, h, tx, ty, tx * G6_TILE - camx, ty * G6_TILE - camy);
+            draw_tile(g, fb, w, h, tx, ty, tx * G6_TILE - camx, ty * G6_TILE - camy, night);
     if (g->mission == 1) {
         int sx, sy;
         int32_t mx = (g->mstage == 1) ? tcen(30) : tcen(18);
@@ -838,6 +1062,7 @@ static void draw_hud(G6Game *g, uint32_t *fb, int w, int h)
     char line[48];
     char *o;
     int i, stars = g->wanted, len;
+    int dx, dy, r, r2, r0;
     o = put_s(line, "$");
     o = put_u(o, (unsigned)g->money);
     len = 0;
@@ -852,21 +1077,21 @@ static void draw_hud(G6Game *g, uint32_t *fb, int w, int h)
     g6_text5(fb, w, h, 216, 5, "II", 1, G6_COL_WHITE);
     if (g->ticker[0])
         g6_text5(fb, w, h, 4, 322, g->ticker, 1, G6_COL_TEAL);
-    {
-        int dx, dy, r = 34, r2 = r * r, r0 = (r - 3) * (r - 3);
-        for (dy = -r; dy <= r; dy++)
-            for (dx = -r; dx <= r; dx++) {
-                int d2 = dx * dx + dy * dy;
-                if (d2 <= r2 && d2 >= r0)
-                    pset(fb, w, h, JOY_CX + dx, JOY_CY + dy, 0xffD8C8E0);
-            }
-    }
-    disc(fb, w, h, JOY_CX + g->joyx / 16, JOY_CY + g->joyy / 16, 7, G6_COL_WHITE);
-    disc(fb, w, h, BTN_AX, BTN_AY, 16, G6_COL_MAGENTA);
+    r = 34;
+    r2 = r * r;
+    r0 = (r - 3) * (r - 3);
+    for (dy = -r; dy <= r; dy++)
+        for (dx = -r; dx <= r; dx++) {
+            int d2 = dx * dx + dy * dy;
+            if (d2 <= r2 && d2 >= r0)
+                pset_a(fb, w, h, JOY_CX + dx, JOY_CY + dy, 0xffD8C8E0, 96);
+        }
+    disc_a(fb, w, h, JOY_CX + g->joyx / 16, JOY_CY + g->joyy / 16, 7, G6_COL_WHITE, 180);
+    disc_a(fb, w, h, BTN_AX, BTN_AY, 16, G6_COL_MAGENTA, 120);
     g6_text5(fb, w, h, BTN_AX - 6, BTN_AY - 3, "IN", 1, G6_COL_WHITE);
-    disc(fb, w, h, BTN_BX, BTN_BY, 16, 0xff2A6A88);
+    disc_a(fb, w, h, BTN_BX, BTN_BY, 16, 0xff2A6A88, 120);
     g6_text5(fb, w, h, BTN_BX - 9, BTN_BY - 3, "BRK", 1, G6_COL_PINK);
-    disc(fb, w, h, BTN_SX, BTN_SY, 14, 0xff2A8A68);
+    disc_a(fb, w, h, BTN_SX, BTN_SY, 14, 0xff2A8A68, 120);
     g6_text5(fb, w, h, BTN_SX - 6, BTN_SY - 3, "SW", 1, G6_COL_WHITE);
     draw_minimap(g, fb, w, h);
 }
