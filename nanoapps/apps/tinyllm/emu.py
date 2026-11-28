@@ -17,8 +17,11 @@ microsecond, which is what the on-screen tok/s figure is based on.
 Usage:
   emu.py APP.hbapp OUTDIR [script] [--model FILE] [--os-blocks 2.0,1.0,0.9]
          [--largest BYTES] [--mips 175]
-Script lines: a frame count; `shot NAME`; `tap X Y`; `click up|down|select`;
-`until-done MAX` (frames until the story ends); `relaunch`.
+Script lines: a frame count; `shot NAME`; `tap X Y` (panel); `ltap X Y`
+(in the sideways view, iPod on its side with Home on the right: panel
+(239 - Y, X)); `click up|down|select`; `until-done MAX` (frames until the
+story ends); `relaunch`. A shot taken while the app is sideways is saved
+turned, 432x240, as it reads in the hand.
 """
 from __future__ import annotations
 
@@ -142,11 +145,13 @@ class TinyEmu(Emu):
         return bytes(self.uc.mem_read(BASE + addr, max(0, min(n, size)))).decode("latin-1")
 
 
-def classify(raw: bytes) -> str:
+def classify(raw: bytes, land: bool = False) -> str:
     def has(rgb):
         return bytes((rgb & 255, (rgb >> 8) & 255, rgb >> 16, 0xFF)) in raw
 
     def px(x, y):
+        if land:  # view (x, y) is panel (W - 1 - y, x)
+            x, y = W - 1 - y, x
         o = (y * W + x) * 4
         b, g, r = raw[o], raw[o + 1], raw[o + 2]
         return (r << 16) | (g << 8) | b
@@ -157,13 +162,22 @@ def classify(raw: bytes) -> str:
         return "missing"
     if has(0x55AAFF):
         return "damaged"
-    if px(2, 390) == 0x1A2230:
+    if px(2, 220 if land else 390) == 0x1A2230:
         return "story"
-    if px(3, 203) in (0x232C3B, 0x3F6F4F):
+    if land and px(3, 75) in (0x232C3B, 0x3F6F4F):
         return "keyboard"
     if has(0x2B5D3A):
         return "menu"
     return "other"
+
+
+def png(raw: bytes, path: Path, land: bool) -> None:
+    """The panel as a PNG; sideways views turned 90 degrees anticlockwise."""
+    import subprocess
+    turn = ["-vf", "transpose=2"] if land else []
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "bgra",
+                    "-s", f"{W}x{H}", "-i", "-"] + turn + ["-frames:v", "1", str(path)],
+                   input=raw, check=True)
 
 
 def main(argv=None) -> int:
@@ -210,10 +224,21 @@ def main(argv=None) -> int:
         if not w:
             continue
         if w[0] == "shot":
-            emu.png(out / f"{w[1]}.png")
-            kind = classify(bytes(emu.uc.mem_read(FB, W * H * 4)))
+            land = bool(emu.var("s_land"))
+            raw = bytes(emu.uc.mem_read(FB, W * H * 4))
+            png(raw, out / f"{w[1]}.png", land)
+            kind = classify(raw, land)
             (out / f"{w[1]}.kind").write_text(kind + "\n")
-            print(f"{w[1]}: frame {frames} ({kind})")
+            (out / f"{w[1]}.orient").write_text(("sideways" if land else "upright") + "\n")
+            print(f"{w[1]}: frame {frames} ({kind}, {'sideways' if land else 'upright'})")
+        elif w[0] == "ltap":
+            vx, vy = int(w[1]), int(w[2])
+            x, y = W - 1 - vy, vx
+            for _ in range(3):
+                emu.touch(x, y, True)
+                frame()
+            emu.touch(x, y, False)
+            frame()
         elif w[0] == "tap":
             x, y = int(w[1]), int(w[2])
             for _ in range(3):

@@ -1,6 +1,6 @@
 # Tiny LLM
 
-![Tiny LLM on the nano: the prompt menu, the keyboard, a story being written and a finished story](images/tinyllm.png)
+![Tiny LLM on the nano, held sideways: the keyboard and a finished story](images/tinyllm.png)
 
 A NanoApps app that runs a small language model on the nano and writes short
 children's stories, one token at a time. I got the idea from a video of a
@@ -32,8 +32,11 @@ Both files are cached in `build/tinyllm/`.
 
 ## Using it
 
+![The keyboard, sideways](../nanoapps/apps/tinyllm/screenshots/keyboard-432x240.png)
+
+![A story, sideways](../nanoapps/apps/tinyllm/screenshots/story-end-432x240.png)
+
 ![The menu](../nanoapps/apps/tinyllm/screenshots/menu-240x432.png)
-![The keyboard](../nanoapps/apps/tinyllm/screenshots/keyboard-240x432.png)
 ![Paused](../nanoapps/apps/tinyllm/screenshots/paused-240x432.png)
 
 - Tap a story start, "Surprise me" (an empty prompt) or "Type your own..."
@@ -43,6 +46,27 @@ Both files are cached in `build/tinyllm/`.
   MENU goes back, PAUSE pauses, STOP ends the story. When it is done, AGAIN
   writes another one from the same start and NEW goes back to the menu.
 - Play/Pause pauses and resumes, Vol +/- scrolls a long story.
+
+### Sideways
+
+The keyboard is always sideways: hold the iPod on its side with Home on the
+right, the same way round as PvZ Portable and the PocketJS landscape apps. The
+keys use the whole 432 px width, 43x42 px each (upright they would be 24 px
+wide), with letters at double size, and caps, space, DEL and GO along the
+bottom row. MENU is at the top right.
+
+Opening the keyboard turns the whole app sideways, so the story you start from
+it is sideways too, at 53 characters by 17 lines. TURN at the top right of the
+menu and story screens switches between upright and sideways at any time. Each
+launch starts upright. The error screens are always upright.
+
+Held that way the volume buttons are on the bottom edge, Vol + on the left:
+
+| Sideways | Vol + | Vol - | Play/Pause |
+|---|---|---|---|
+| Keyboard | space | delete | GO |
+| Menu | highlight up | highlight down | start |
+| Story | scroll back | scroll forward | pause, or again when done |
 
 The text is shown at up to 60 characters a second so it reads like typing. The
 model runs ahead of that and stops when it is 48 characters ahead, so the screen
@@ -85,7 +109,7 @@ slightly, as expected from int8 rounding.
 
 | | Size |
 |---|---|
-| `Tiny LLM.hbapp` | 85 KB file, 95 KB once loaded |
+| `Tiny LLM.hbapp` | 88 KB file, 99 KB once loaded |
 | Model file | 289 KB |
 | One working block (model, KV cache, buffers) | 464 KB |
 | Stack | under 1 KB |
@@ -131,6 +155,10 @@ device is timed with the real clock, so it will show the true number.
 - It checks the menu, the keyboard, a story with a typed prompt, pause, relaunch
   without leaking memory, the stack depth, low memory, a missing model, a truncated
   model and a model with one changed byte.
+- Sideways: the keyboard is driven with taps in the turned view, mapped to the
+  panel the same way the touch screen reports them, and each shot records which way
+  up it was. It checks TURN on the menu and story, the keyboard's MENU key, and the
+  volume buttons on the keyboard (Vol - deletes, Vol + adds a space).
 - The tokens written in the emulator match the engine built for the host with the
   same seed, and `TINYLLM_FULL=1` runs a full 256-token story.
 - `./start nabase add 'Tiny LLM'` is checked against a test disk.

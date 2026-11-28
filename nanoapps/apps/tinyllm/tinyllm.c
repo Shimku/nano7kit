@@ -8,6 +8,12 @@
  *
  * Screens: prompt menu, on-screen keyboard, story. Vol +/- move, Play/Pause
  * picks; every screen also works by touch. Home is left to the iPod.
+ *
+ * Sideways: the keyboard is always drawn for the iPod held on its side with
+ * Home on the right, as PvZ Portable and PocketJS landscape apps do, so it
+ * gets the full 432 px width. Opening it turns the menu and story sideways
+ * too; TURN on those screens switches back. Drawing works in a logical
+ * view of s_lw x s_lh; sideways, view (x, y) is panel (239 - y, x).
  */
 #include "hb_raw_surface.h"
 #include "hb_sdk.h"
@@ -69,7 +75,9 @@ static const char *const k_prompts[] = {
 #define N_ITEMS       (N_PROMPTS + 2)
 
 static uint32_t *s_fb;
-static int s_w, s_h;
+static int s_w, s_h;          /* the panel, always 240 x 432 */
+static int s_land;            /* 1: held on its side, Home on the right */
+static int s_lw, s_lh;        /* the view being drawn (set_land) */
 static int s_state;
 static int s_dirty;
 static uint32_t s_free, s_largest, s_need;
@@ -106,27 +114,44 @@ static int s_touch_x, s_touch_y, s_touch_down;
 
 /* ---------------- drawing ---------------- */
 
+static void set_land(int land)
+{
+    s_land = land;
+    s_lw = land ? SCREEN_H : SCREEN_W;
+    s_lh = land ? SCREEN_W : SCREEN_H;
+}
+
+/* the background, with a faint scanline on every other row of the view */
 static void clear_bg(void)
 {
     int x, y;
+    uint32_t a = 0xff000000u | C_BG, b = 0xff000000u | C_BG2;
     for (y = 0; y < s_h; y++) {
-        uint32_t c = 0xff000000u | ((y & 1) ? C_BG2 : C_BG);
         uint32_t *row = s_fb + y * s_w;
-        for (x = 0; x < s_w; x++) row[x] = c;
+        if (!s_land) {
+            uint32_t c = (y & 1) ? b : a;
+            for (x = 0; x < s_w; x++) row[x] = c;
+        } else {
+            /* view row = s_w - 1 - panel x */
+            for (x = 0; x < s_w; x++) row[x] = ((s_w - 1 - x) & 1) ? b : a;
+        }
     }
 }
 
 static void rect(int x, int y, int w, int h, uint32_t c)
 {
-    int ix, iy;
+    int ix, iy, px, py, pw, ph;
     c |= 0xff000000u;
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
-    if (x + w > s_w) w = s_w - x;
-    if (y + h > s_h) h = s_h - y;
-    for (iy = 0; iy < h; iy++) {
-        uint32_t *row = s_fb + (y + iy) * s_w + x;
-        for (ix = 0; ix < w; ix++) row[ix] = c;
+    if (x + w > s_lw) w = s_lw - x;
+    if (y + h > s_lh) h = s_lh - y;
+    if (w <= 0 || h <= 0) return;
+    if (s_land) { px = s_w - y - h; py = x; pw = h; ph = w; }
+    else { px = x; py = y; pw = w; ph = h; }
+    for (iy = 0; iy < ph; iy++) {
+        uint32_t *row = s_fb + (py + iy) * s_w + px;
+        for (ix = 0; ix < pw; ix++) row[ix] = c;
     }
 }
 
@@ -142,10 +167,12 @@ static void glyph(int x, int y, char ch, int scale, uint32_t fg)
             if (!(bits & (0x80 >> c))) continue;
             for (sy = 0; sy < scale; sy++) {
                 int py = y + r * scale + sy;
-                if (py < 0 || py >= s_h) continue;
+                if (py < 0 || py >= s_lh) continue;
                 for (sx = 0; sx < scale; sx++) {
                     int px = x + c * scale + sx;
-                    if (px >= 0 && px < s_w) s_fb[py * s_w + px] = fg;
+                    if (px < 0 || px >= s_lw) continue;
+                    if (s_land) s_fb[px * s_w + (s_w - 1 - py)] = fg;
+                    else s_fb[py * s_w + px] = fg;
                 }
             }
         }
@@ -182,11 +209,13 @@ static char *put_u(char *o, uint32_t u)
     return o;
 }
 
+#define HEAD_H (s_land ? 26 : 28)
+
 static void header(const char *right)
 {
-    rect(0, 0, s_w, 28, C_BAR);
-    text(8, 6, "TINY LLM", 2, C_TITLE);
-    if (right) text(s_w - 8 - text_w(right, 1), 10, right, 1, C_DIM);
+    rect(0, 0, s_lw, HEAD_H, C_BAR);
+    text(8, s_land ? 5 : 6, "TINY LLM", 2, C_TITLE);
+    if (right) text(s_lw - 8 - text_w(right, 1), s_land ? 9 : 10, right, 1, C_DIM);
 }
 
 static void button(int x, int y, int w, int h, const char *label, int lit)
@@ -194,6 +223,36 @@ static void button(int x, int y, int w, int h, const char *label, int lit)
     rect(x, y, w, h, lit ? C_KEYDN : C_KEY);
     rect(x, y + h - 2, w, 2, 0x10151d);
     text(x + (w - text_w(label, 1)) / 2, y + (h - 8) / 2, label, 1, C_TEXT);
+}
+
+/* TURN, at the right of the header on the menu and story screens */
+#define TURN_W 52
+static void turn_box(int *x, int *y, int *w, int *h)
+{
+    *x = s_lw - TURN_W - 3;
+    *y = 3;
+    *w = TURN_W;
+    *h = HEAD_H - 6;
+}
+
+static void draw_turn(void)
+{
+    int x, y, w, h;
+    turn_box(&x, &y, &w, &h);
+    button(x, y, w, h, "TURN", 0);
+}
+
+static int in_box(int px, int py, int x, int y, int w, int h)
+{
+    return px >= x && px < x + w && py >= y && py < y + h;
+}
+
+static int tapped_turn(void)
+{
+    int x, y, w, h;
+    turn_box(&x, &y, &w, &h);
+    /* a little extra reach below the header bar */
+    return s_tapped && in_box(s_tap_x, s_tap_y, x - 6, 0, w + 9, h + 12);
 }
 
 /* ---------------- message screens ---------------- */
@@ -251,8 +310,8 @@ static void draw_damaged(void)
 
 /* ---------------- menu ---------------- */
 
-#define MENU_Y0 112
-#define MENU_ROW 34
+#define MENU_Y0  (s_land ? 32 : 112)
+#define MENU_ROW (s_land ? 30 : 34)
 
 static const char *item_label(int i)
 {
@@ -265,21 +324,38 @@ static void draw_menu(void)
 {
     int i;
     clear_bg();
-    header("260K");
-    text(12, 40, "A 260K-parameter model that", 1, C_DIM);
-    text(12, 52, "writes tiny stories, one", 1, C_DIM);
-    text(12, 64, "token at a time.", 1, C_DIM);
-    text(12, 90, "START A STORY", 1, C_TITLE);
+    header(0);
+    draw_turn();
+    if (s_land) {
+        /* sideways: the list on the left, the notes on the right */
+        text(286, 40, "START A STORY", 1, C_TITLE);
+        text(286, 60, "A 260K-parameter", 1, C_DIM);
+        text(286, 72, "model that writes", 1, C_DIM);
+        text(286, 84, "tiny stories, one", 1, C_DIM);
+        text(286, 96, "token at a time.", 1, C_DIM);
+        text(286, 136, "VOL +/-  CHOOSE", 1, C_DIM);
+        text(286, 150, "PLAY     START", 1, C_DIM);
+        text(286, 164, "OR TAP A LINE", 1, C_DIM);
+        text(286, 220, "stories260K", 1, 0x4a5366);
+    } else {
+        text(12, 40, "A 260K-parameter model that", 1, C_DIM);
+        text(12, 52, "writes tiny stories, one", 1, C_DIM);
+        text(12, 64, "token at a time.", 1, C_DIM);
+        text(12, 90, "START A STORY", 1, C_TITLE);
+    }
     for (i = 0; i < N_ITEMS; i++) {
         int y = MENU_Y0 + i * MENU_ROW;
+        int w = s_land ? 270 : s_w - 12;
         if (i == s_sel) {
-            rect(6, y, s_w - 12, MENU_ROW - 4, C_SEL);
+            rect(6, y, w, MENU_ROW - 4, C_SEL);
             rect(6, y, 4, MENU_ROW - 4, C_STORY);
         } else {
-            rect(6, y, s_w - 12, MENU_ROW - 4, 0x141b25);
+            rect(6, y, w, MENU_ROW - 4, 0x141b25);
         }
-        text(18, y + 11, item_label(i), 1, i == s_sel ? C_TEXT : (i < N_PROMPTS ? C_PROMPT : C_STORY));
+        text(18, y + (MENU_ROW - 12) / 2, item_label(i), 1,
+             i == s_sel ? C_TEXT : (i < N_PROMPTS ? C_PROMPT : C_STORY));
     }
+    if (s_land) return;
     text(12, 370, "VOL +/-  CHOOSE", 1, C_DIM);
     text(12, 384, "PLAY     START", 1, C_DIM);
     text(12, 398, "OR TAP A LINE", 1, C_DIM);
@@ -289,9 +365,10 @@ static void draw_menu(void)
 /* ---------------- keyboard ---------------- */
 
 static const char *const k_rows[3] = { "qwertyuiop", "asdfghjkl'", "zxcvbnm,.!" };
-#define KEY_Y0 200
-#define KEY_H  38
-#define KEY_W  24
+/* Drawn sideways only: 432 x 240, ten columns of 43 px, four rows of 42 px. */
+#define KEY_Y0 72
+#define KEY_H  42
+#define KX(c)  ((c) * SCREEN_H / 10)
 /* key codes: 0..29 letters by row, then specials */
 #define K_CAPS  30
 #define K_SPACE 31
@@ -301,22 +378,26 @@ static const char *const k_rows[3] = { "qwertyuiop", "asdfghjkl'", "zxcvbnm,.!" 
 
 static void key_box(int k, int *x, int *y, int *w, int *h)
 {
+    static const uint8_t col0[4] = { 0, 2, 6, 8 }, col1[4] = { 2, 6, 8, 10 };
     if (k < 30) {
-        *x = (k % 10) * KEY_W;
+        *x = KX(k % 10);
+        *w = KX(k % 10 + 1) - *x;
         *y = KEY_Y0 + (k / 10) * KEY_H;
-        *w = KEY_W;
         *h = KEY_H;
         return;
     }
-    *y = KEY_Y0 + 3 * KEY_H;
-    *h = KEY_H;
-    switch (k) {
-    case K_CAPS:  *x = 0;   *w = 48; break;
-    case K_SPACE: *x = 48;  *w = 96; break;
-    case K_DEL:   *x = 144; *w = 48; break;
-    default:      *x = 192; *w = 48; break; /* GO */
+    if (k == K_BACK) {  /* MENU, in the header */
+        *x = SCREEN_H - 72;
+        *y = 0;
+        *w = 72;
+        *h = 30;
+        return;
     }
-    if (k == K_BACK) { *x = 0; *y = KEY_Y0 + 4 * KEY_H + 12; *w = 240; *h = 34; }
+    /* caps, space, DEL, GO */
+    *x = KX(col0[k - K_CAPS]);
+    *w = KX(col1[k - K_CAPS]) - *x;
+    *y = KEY_Y0 + 3 * KEY_H;
+    *h = SCREEN_W - *y;
 }
 
 static int key_at(int px, int py)
@@ -342,52 +423,63 @@ static void draw_keys(void)
     int k, i, col, line;
     char one[2] = { 0, 0 };
     clear_bg();
-    header("YOUR PROMPT");
-    rect(6, 40, s_w - 12, 120, 0x141b25);
-    text(12, 48, "Type the start of a story:", 1, C_DIM);
-    /* typed text, wrapped at 26 columns, with a block cursor */
-    col = 0;
-    line = 0;
-    for (i = 0; i <= s_ntyped; i++) {
-        int x = 14 + col * 8, y = 70 + line * 12;
-        if (i == s_ntyped) {
-            rect(x, y, 7, 9, C_STORY);
-            break;
-        }
-        one[0] = s_typed[i];
-        glyph(x, y, one[0], 1, C_PROMPT);
-        if (++col == 26) { col = 0; line++; }
-    }
+    header(0);
     {
         char n[16], *o = put_u(n, (uint32_t)s_ntyped);
         o = put_s(o, "/");
         put_u(o, TYPE_MAX);
-        text(s_w - 12 - text_w(n, 1), 146, n, 1, 0x4a5366);
+        text(SCREEN_H - 84 - text_w(n, 1), 9, n, 1, C_DIM);
+    }
+    /* the typed text, two lines of 26 at double size, with a block cursor */
+    rect(4, 30, SCREEN_H - 8, 40, 0x141b25);
+    col = 0;
+    line = 0;
+    for (i = 0; i <= s_ntyped; i++) {
+        int x = 8 + col * 16, y = 33 + line * 18;
+        if (i == s_ntyped) {
+            rect(x, y, 14, 16, C_STORY);
+            if (i == 0) text(x + 22, y + 4, "type the start of a story", 1, C_DIM);
+            break;
+        }
+        one[0] = s_typed[i];
+        glyph(x, y, one[0], 2, C_PROMPT);
+        if (++col == 26) { col = 0; line++; }
     }
     for (k = 0; k < 30; k++) {
         int x, y, w, h;
         key_box(k, &x, &y, &w, &h);
         rect(x + 1, y + 1, w - 2, h - 2, k == s_key_down ? C_KEYDN : C_KEY);
+        rect(x + 1, y + h - 3, w - 2, 2, 0x10151d);
         one[0] = key_char(k);
-        glyph(x + (w - 8) / 2, y + (h - 8) / 2, one[0], 1, C_TEXT);
+        glyph(x + (w - 16) / 2, y + (h - 16) / 2, one[0], 2, C_TEXT);
     }
     for (k = K_CAPS; k <= K_BACK; k++) {
-        int x, y, w, h;
+        int x, y, w, h, lit = k == s_key_down || (k == K_CAPS && s_caps);
         const char *lab = k == K_CAPS ? (s_caps ? "ABC" : "abc") : k == K_SPACE ? "space" :
-                          k == K_DEL ? "DEL" : k == K_GO ? "GO" : "BACK TO MENU";
+                          k == K_DEL ? "DEL" : k == K_GO ? "GO" : "MENU";
         key_box(k, &x, &y, &w, &h);
-        button(x + 1, y + 1, w - 2, h - 2, lab, k == s_key_down || (k == K_CAPS && s_caps));
+        if (k == K_BACK) { button(x + 3, y + 3, w - 6, HEAD_H - 6, lab, lit); continue; }
+        rect(x + 1, y + 1, w - 2, h - 2, lit ? C_KEYDN : (k == K_GO ? C_SEL : C_KEY));
+        rect(x + 1, y + h - 3, w - 2, 2, 0x10151d);
+        text(x + (w - text_w(lab, 2)) / 2, y + (h - 16) / 2, lab, 2, C_TEXT);
     }
-    text(12, 418, "PLAY  GO", 1, C_DIM);
 }
 
 /* ---------------- story ---------------- */
 
-#define COLS 29
-#define LINE_H 10
-#define TEXT_Y 34
-#define TEXT_LINES 35
-#define MAX_LINES 160
+#define COLS       (s_land ? 53 : 29)
+#define LINE_H     10
+#define TEXT_Y     (s_land ? 30 : 34)
+#define TEXT_LINES (s_land ? 17 : 35)
+#define BAR_Y      (s_land ? 202 : 388)
+#define MAX_LINES  160
+
+/* MENU, PAUSE, STOP under the story; TURN is in the header */
+static void story_btn(int i, int *x, int *y, int *w, int *h)
+{
+    if (s_land) { *x = 180 + i * 84; *y = 206; *w = 80; *h = 30; }
+    else { *x = 4 + i * 78; *y = 404; *w = i == 2 ? 76 : 74; *h = 24; }
+}
 
 static int s_line_start[MAX_LINES];
 static int s_nlines;
@@ -428,7 +520,8 @@ static void draw_story(void)
     int first, ln, n = s_shown;
     uint32_t tps10 = 0;
     clear_bg();
-    header(s_finished ? "THE END" : (s_paused ? "PAUSED" : "WRITING"));
+    header(0);
+    draw_turn();
     wrap(n);
     first = s_nlines - TEXT_LINES - s_scroll;
     if (first < 0) first = 0;
@@ -448,9 +541,9 @@ static void draw_story(void)
         if (ln == s_nlines - 1 && !s_finished && s_blink)
             rect(4 + col * 8, y, 7, 9, C_STORY);
     }
-    if (s_scroll) text(s_w - 60, TEXT_Y + TEXT_LINES * LINE_H - 2, "MORE v", 1, C_DIM);
+    if (s_scroll) text(s_lw - 60, TEXT_Y + TEXT_LINES * LINE_H - 2, "MORE v", 1, C_DIM);
 
-    rect(0, 388, s_w, 44, C_BAR);
+    rect(0, BAR_Y, s_lw, s_lh - BAR_Y, C_BAR);
     if (s_compute_us) tps10 = (uint32_t)((uint64_t)s_tokens * 10000000ull / s_compute_us);
     o = put_u(line, tps10 / 10u);
     o = put_s(o, ".");
@@ -459,10 +552,24 @@ static void draw_story(void)
     o = put_u(o, (uint32_t)s_t.pos);
     o = put_s(o, "/");
     put_u(o, STORY_TOKENS);
-    text(8, 392, line, 1, C_TEXT);
-    button(4, 404, 74, 24, "MENU", 0);
-    button(82, 404, 74, 24, s_finished ? "AGAIN" : (s_paused ? "GO ON" : "PAUSE"), 0);
-    button(160, 404, 76, 24, s_finished ? "NEW" : "STOP", 0);
+    text(8, s_land ? 217 : 392, line, 1, C_TEXT);
+    {
+        /* sideways in the header, upright at the right of the tok/s line */
+        const char *st = s_finished ? "THE END" : (s_paused ? "PAUSED" : "WRITING");
+        if (s_land) text(s_lw - TURN_W - 14 - text_w(st, 1), 9, st, 1, C_DIM);
+        else text(s_lw - 8 - text_w(st, 1), 392, st, 1, C_DIM);
+    }
+    {
+        const char *lab[3];
+        int i, x, y, w, h;
+        lab[0] = "MENU";
+        lab[1] = s_finished ? "AGAIN" : (s_paused ? "GO ON" : "PAUSE");
+        lab[2] = s_finished ? "NEW" : "STOP";
+        for (i = 0; i < 3; i++) {
+            story_btn(i, &x, &y, &w, &h);
+            button(x, y, w, h, lab[i], 0);
+        }
+    }
 }
 
 static void append(const char *s)
@@ -555,7 +662,10 @@ static void read_touch(const hb_spoint_t *t)
 {
     int down = t && t->down;
     s_tapped = 0;
-    if (t) { s_touch_x = t->x; s_touch_y = t->y; }
+    if (t) {
+        if (s_land) { s_touch_x = t->y; s_touch_y = s_w - 1 - t->x; }
+        else { s_touch_x = t->x; s_touch_y = t->y; }
+    }
     s_touch_down = down;
     if (s_prev_down && !down) {
         s_tapped = 1;
@@ -572,15 +682,31 @@ static void pick_menu(int i)
     } else if (i == ITEM_SURPRISE) {
         start_story("");
     } else {
+        set_land(1);
+        s_key_down = -1;
         s_state = ST_KEYS;
         s_dirty = 1;
     }
+}
+
+static void turn(void)
+{
+    set_land(!s_land);
+    s_prev_down = 0;      /* a finger still down belongs to the old layout */
+    s_touch_down = 0;
+    s_scroll = 0;
+    s_dirty = 1;
 }
 
 static void menu_input(int up, int dn, int play)
 {
     if (up) { s_sel = (s_sel + N_ITEMS - 1) % N_ITEMS; s_dirty = 1; }
     if (dn) { s_sel = (s_sel + 1) % N_ITEMS; s_dirty = 1; }
+    if (tapped_turn()) { turn(); return; }
+    if (s_land && (s_touch_x >= 282 || (s_tapped && s_tap_x >= 282))) {
+        if (play) pick_menu(s_sel);
+        return;
+    }
     if (s_touch_down && s_touch_y >= MENU_Y0 && s_touch_y < MENU_Y0 + N_ITEMS * MENU_ROW) {
         int i = (s_touch_y - MENU_Y0) / MENU_ROW;
         if (i != s_sel) { s_sel = i; s_dirty = 1; }
@@ -593,7 +719,9 @@ static void menu_input(int up, int dn, int play)
     if (play) pick_menu(s_sel);
 }
 
-static void keys_input(int play)
+/* Sideways the volume buttons are on the bottom edge, Vol + on the left:
+ * Vol + types a space, Vol - deletes, Play/Pause is GO. */
+static void keys_input(int up, int dn, int play)
 {
     int k = s_touch_down ? key_at(s_touch_x, s_touch_y) : -1;
     if (k != s_key_down) { s_key_down = k; s_dirty = 1; }
@@ -622,6 +750,12 @@ static void keys_input(int play)
             return;
         }
     }
+    if (up && s_ntyped > 0 && s_ntyped < TYPE_MAX && s_typed[s_ntyped - 1] != ' ') {
+        s_typed[s_ntyped++] = ' ';
+        s_typed[s_ntyped] = 0;
+        s_dirty = 1;
+    }
+    if (dn && s_ntyped > 0) { s_typed[--s_ntyped] = 0; s_dirty = 1; }
     if (play) {
         int n = s_ntyped;
         while (n > 0 && s_typed[n - 1] == ' ') s_typed[--n] = 0;
@@ -634,15 +768,21 @@ static void story_input(int up, int dn, int play)
 {
     if (up && s_scroll + TEXT_LINES < s_nlines) { s_scroll += 4; s_dirty = 1; }
     if (dn && s_scroll > 0) { s_scroll -= 4; if (s_scroll < 0) s_scroll = 0; s_dirty = 1; }
-    if (s_tapped && s_tap_y >= 404) {
-        if (s_tap_x < 80) {
+    if (tapped_turn()) { turn(); return; }
+    if (s_tapped) {
+        int i, hit = -1, x, y, w, h;
+        for (i = 0; i < 3; i++) {
+            story_btn(i, &x, &y, &w, &h);
+            if (in_box(s_tap_x, s_tap_y, x - 2, y - 4, w + 4, h + 8)) hit = i;
+        }
+        if (hit == 0) {
             s_running = 0;
             s_state = ST_MENU;
             s_dirty = 1;
             return;
         }
-        if (s_tap_x < 158) play = 1;
-        else {
+        if (hit == 1) play = 1;
+        else if (hit == 2) {
             if (s_finished) { s_state = ST_MENU; s_dirty = 1; return; }
             s_running = 0;
             s_dirty = 1;
@@ -715,6 +855,7 @@ void hb_raw_init(int w, int h)
     s_fb = hb_raw_fb();
     s_w = w;
     s_h = h;
+    set_land(0);
     /* A relaunch can find the previous launch's block still held. */
     if (HB_APP_AUX_BLOCK) {
         hb_os_free((void *)HB_APP_AUX_BLOCK);
@@ -748,7 +889,7 @@ void hb_raw_frame(const hb_spoint_t *t)
     dn = btn_edge(1, HB_BTN_VOL_DOWN);
     play = btn_edge(2, HB_BTN_PLAY_PAUSE);
     if (s_state == ST_MENU) menu_input(up, dn, play);
-    else if (s_state == ST_KEYS) keys_input(play);
+    else if (s_state == ST_KEYS) keys_input(up, dn, play);
     else story_input(up, dn, play);
 
     if (s_state == ST_STORY) {

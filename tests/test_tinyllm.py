@@ -217,8 +217,17 @@ def _run(td, name, script, model=None, os_blocks=None, largest=None):
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
 
-# keyboard: rows of 24x38 keys from y=200; specials row at y=314
-TYPE_A_DOG = "".join(f"tap {x} {y}\n" for x, y in ((12, 257), (96, 333), (60, 257), (204, 219), (108, 257)))
+# The keyboard is sideways (iPod on its side, Home on the right; `ltap` takes
+# view coordinates): ten 43 px columns, rows of 42 px from y=72, then
+# caps/space/DEL/GO at y=198. MENU and TURN sit at the right of the header.
+def _key(col, row):
+    return col * 432 // 10 + 21, 72 + row * 42 + 21
+
+
+TYPE_A_DOG = "".join(f"ltap {x} {y}\n" for x, y in (_key(0, 1), (172, 219), _key(2, 1), _key(8, 0), _key(4, 1)))
+GO = "ltap 388 219\n"
+TURN_SIDEWAYS = "ltap 403 13\n"     # TURN while sideways
+TURN_UPRIGHT = "tap 211 14\n"       # TURN while upright
 
 
 @unittest.skipUnless(HBAPP.is_file() and MODEL.is_file(), "needs ./start sdk build tinyllm")
@@ -241,8 +250,17 @@ class TestTinyLlmEmulated(unittest.TestCase):
             "tight": _run(td, "tight", "2\nshot menu\nclick select\n60\nshot story\n"
                           "relaunch\n2\nshot relaunch\n", MODEL, TIGHT),
             "roomy": _run(td, "roomy", "2\n" + "click down\n" * 6 + "shot menu-type\nclick select\n3\n" +
-                          TYPE_A_DOG + "2\nshot keys\ntap 216 333\n60\nshot story\n"
-                          "click select\n10\nshot paused\n", MODEL, ROOMY),
+                          TYPE_A_DOG + "2\nshot keys\n" + GO + "60\nshot story\n"
+                          "click select\n10\nshot paused\n" + TURN_SIDEWAYS + "3\nshot paused-upright\n",
+                          MODEL, ROOMY),
+            # turning: menu upright -> sideways, keyboard by touch, its MENU key,
+            # then the volume buttons on the keyboard (Vol - deletes, Vol + is a space)
+            "turn": _run(td, "turn", "2\nshot menu\n" + TURN_UPRIGHT + "3\nshot menu-side\n"
+                         "ltap 100 225\n3\nshot keys\nltap 396 13\n3\nshot back\n" + TURN_SIDEWAYS +
+                         "3\nshot back-upright\nclick select\n3\nshot keys2\n"
+                         "ltap %d %d\nltap %d %d\nclick down\nclick up\n2\nshot typed\nclick select\n4\n"
+                         "shot story\nltap 220 220\n3\nshot menu-after\n" % (_key(0, 0) + _key(0, 0)),
+                         MODEL, TIGHT),
             "missing": _run(td, "missing", "2\nshot first\n", None, TIGHT),
             "corrupt": _run(td, "corrupt", "2\nshot first\n", corrupt, TIGHT),
             "short": _run(td, "short", "2\nshot first\n", short, TIGHT),
@@ -269,8 +287,18 @@ class TestTinyLlmEmulated(unittest.TestCase):
         self.assertTrue(path.is_file(), msg=self.out.get(run))
         from PIL import Image
         with Image.open(self.td / run / f"{shot}.png") as im:
-            self.assertEqual(im.size, (240, 432))
+            self.assertEqual(im.size, (432, 240) if self.orient(run, shot) == "sideways" else (240, 432))
         return path.read_text().strip()
+
+    def assertLargest(self, out, mib):
+        # the scenario's largest block, less the app image the loader placed in it
+        m = re.search(r"largest ([\d,]+) \(image span ([\d,]+)", out)
+        self.assertIsNotNone(m, out)
+        largest, span = (int(g.replace(",", "")) for g in m.groups())
+        self.assertAlmostEqual(largest + span, mib * 1024 * 1024, delta=64 * 1024)
+
+    def orient(self, run, shot):
+        return (self.td / run / f"{shot}.orient").read_text().strip()
 
     def story(self, run):
         m = re.search(r"^text: (.*)$", self.out[run], re.M)
@@ -291,7 +319,7 @@ class TestTinyLlmEmulated(unittest.TestCase):
     def test_tight_memory_menu_and_story(self):
         out = self.out["tight"]
         self.assertEqual(self.out["tight.rc"], 0, out)
-        self.assertIn("largest 2,0", out)
+        self.assertLargest(out, 2)
         self.assertEqual(self.kind("tight", "menu"), "menu", out)
         self.assertEqual(self.kind("tight", "story"), "story", out)
         self.assertTrue(self.story("tight").startswith("Once upon a time"), out)
@@ -300,12 +328,34 @@ class TestTinyLlmEmulated(unittest.TestCase):
     def test_roomy_memory_keyboard_prompt(self):
         out = self.out["roomy"]
         self.assertEqual(self.out["roomy.rc"], 0, out)
-        self.assertIn("largest 4,0", out)
+        self.assertLargest(out, 4)
         self.assertEqual(self.kind("roomy", "menu-type"), "menu", out)
         self.assertEqual(self.kind("roomy", "keys"), "keyboard", out)
         self.assertEqual(self.kind("roomy", "story"), "story", out)
         self.assertIn("prompt 'A dog'", out)
         self.assertTrue(self.story("roomy").startswith("A dog"), out)
+
+    def test_keyboard_is_sideways_and_turns_the_app(self):
+        out = self.out["roomy"]
+        self.assertEqual(self.orient("roomy", "menu-type"), "upright", out)
+        self.assertEqual(self.orient("roomy", "keys"), "sideways", out)
+        self.assertEqual(self.orient("roomy", "story"), "sideways", out)
+        self.assertEqual(self.kind("roomy", "paused-upright"), "story", out)
+        self.assertEqual(self.orient("roomy", "paused-upright"), "upright", out)
+
+    def test_turn_menu_keys_and_volume_buttons(self):
+        out = self.out["turn"]
+        self.assertEqual(self.out["turn.rc"], 0, out)
+        expect = [("menu", "menu", "upright"), ("menu-side", "menu", "sideways"),
+                  ("keys", "keyboard", "sideways"), ("back", "menu", "sideways"),
+                  ("back-upright", "menu", "upright"), ("keys2", "keyboard", "sideways"),
+                  ("typed", "keyboard", "sideways"), ("story", "story", "sideways"),
+                  ("menu-after", "menu", "sideways")]
+        for shot, kind, orient in expect:
+            self.assertEqual((shot, self.kind("turn", shot), self.orient("turn", shot)), (shot, kind, orient), out)
+        # Q, Q, Vol - deletes one, Vol + adds a space that GO trims
+        self.assertIn("prompt 'Q'", out)
+        self.assertIn("OS heap: blocks held 1 ", out)
 
     def test_device_matches_host_engine(self):
         # same prompt and seed: the emulated device writes exactly what the
