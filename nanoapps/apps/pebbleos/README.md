@@ -22,10 +22,11 @@ does not start the kernel.
 
 The real kernel is linked (setjmp fibers on one NanoApps thread, a
 framebuffer and button HAL, file-backed flash under `/Apps/Data/PebbleOS`).
-This is not ready for the iPod until a device-like host run of the
-`.hbapp` has passed: no host libc unwinder, `mkrelocapp` layout,
-Cortex-A5 VFPv4-D16, both memory levels, no save and a corrupt save,
-a clean NOT ENOUGH MEMORY screen, and a 240x432 watchface screenshot.
+A Unicorn run of the device `.hbapp` covers: no host libc unwinder,
+`mkrelocapp` layout, Cortex-A5 VFPv4-D16, both memory levels, no save
+and a corrupt save, a clean NOT ENOUGH MEMORY screen, and a 240x432
+TicToc watchface still (`screenshots/watchface-tictoc-240x432.png`).
+That is a host dry run, not a pass on an iPod.
 
 ## Build and install (friend-pod, Disk Mode)
 

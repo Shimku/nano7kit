@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""Checks for the hosted PebbleOS nano app (shim, memory screen, notices)."""
+"""Checks for the hosted PebbleOS nano app (kernel host, memory screen, notices)."""
 
 from pathlib import Path
 import unittest
@@ -145,3 +145,86 @@ class TestPebbleosImage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPebbleosBoot(unittest.TestCase):
+    """Unicorn boots of the device .hbapp under device-like host conditions."""
+
+    hbapp = APP / "build" / "pebbleos.hbapp"
+    emu = APP / "emu.py"
+    data = ROOT / "build" / "pebbleos-data"
+
+    def _boot(self, td, os_blocks, fs_dir, shot="face", frames=40):
+        import subprocess
+        from PIL import Image
+        script = Path(td) / "script"
+        script.write_text(f"{frames}\nshot {shot}\n")
+        cmd = [
+            "python3", str(self.emu), str(self.hbapp), td, str(script),
+            "--os-blocks", os_blocks,
+        ]
+        if fs_dir is not None:
+            cmd.extend(["--fs-dir", str(fs_dir)])
+        r = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        png = Path(td) / f"{shot}.png"
+        self.assertTrue(png.is_file(), msg=r.stdout + r.stderr)
+        with Image.open(png) as im:
+            self.assertEqual(im.size, (240, 432))
+        kind = (Path(td) / f"{shot}.kind").read_text().strip()
+        self.assertEqual(kind, "watchface", msg=r.stdout + r.stderr)
+        return r.stdout
+
+    def _resource_fs(self, td):
+        import shutil
+        dest = Path(td) / "fs"
+        dest.mkdir()
+        if self.data.is_dir():
+            shutil.copytree(self.data, dest, dirs_exist_ok=True)
+        return dest
+
+    @unittest.skipUnless(hbapp.is_file(), "needs ./start pebbleos build")
+    def test_boot_watchface_tight_memory(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            fs = self._resource_fs(td)
+            # 3.9 MB free, 2 MB largest block, before the image is placed.
+            self._boot(td, "2.0,1.0,0.9", fs, shot="tight")
+
+    @unittest.skipUnless(hbapp.is_file(), "needs ./start pebbleos build")
+    def test_boot_watchface_roomy_memory(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            fs = self._resource_fs(td)
+            # 6 MB free, 4 MB largest block, before the image is placed.
+            self._boot(td, "4.0,1.0,1.0", fs, shot="roomy")
+
+    @unittest.skipUnless(hbapp.is_file(), "needs ./start pebbleos build")
+    def test_boot_watchface_no_save(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            # Resource banks only; missing FS banks read as 0xFF (erased).
+            fs = self._resource_fs(td)
+            flash = fs / "flash"
+            if flash.is_dir():
+                for path in flash.iterdir():
+                    # Keep resource banks (below 2 MiB / bank 0x20).
+                    try:
+                        bank = int(path.stem, 16)
+                    except ValueError:
+                        continue
+                    if bank >= 0x20:
+                        path.unlink()
+            self._boot(td, "4.0,1.0,1.0", fs, shot="nosave")
+
+    @unittest.skipUnless(hbapp.is_file(), "needs ./start pebbleos build")
+    def test_boot_watchface_corrupt_save(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            fs = self._resource_fs(td)
+            flash = fs / "flash"
+            flash.mkdir(parents=True, exist_ok=True)
+            # File-system partition starts at 2 MiB (bank 0x20). Junk is
+            # not a valid Pebble FS; the kernel should still reach a face.
+            for bank in range(0x20, 0x24):
+                (flash / f"{bank:02x}.bin").write_bytes(bytes([0xA5]) * 65536)
+            self._boot(td, "4.0,1.0,1.0", fs, shot="corrupt")

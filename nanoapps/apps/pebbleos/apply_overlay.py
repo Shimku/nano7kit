@@ -516,6 +516,47 @@ config BOARD_PARTITIONS_NANO7
             faithful.write_text(ft)
 
     _replace(
+        tree / "pebble/shell/normal/system_app_state_machine.c",
+        """#include <process_management/app_manager.h>
+#include <shell/normal/watchface.h>
+#include <shell/system_app_state_machine.h>
+""",
+        """#include <process_management/app_install_manager.h>
+#include <process_management/app_manager.h>
+#include <shell/normal/watchface.h>
+#include <shell/system_app_state_machine.h>
+""",
+    )
+    # Official normal-shell first app is the launcher. On the nano 7G host
+    # start the default watchface when one is installed (TicToc on a
+    # clean filesystem) so the app boots as a watch. The launcher is
+    # still there; closing the face opens it.
+    _replace(
+        tree / "pebble/shell/normal/system_app_state_machine.c",
+        """  if (launcher_panic_get_current_error() != 0) {
+    return panic_app_get_app_info();
+  }
+
+  return launcher_menu_app_get_app_info();
+}
+""",
+        """  if (launcher_panic_get_current_error() != 0) {
+    return panic_app_get_app_info();
+  }
+
+  const AppInstallId watchface_id = watchface_get_default_install_id();
+  if (watchface_id != INSTALL_ID_INVALID) {
+    const PebbleProcessMd *watchface_md = app_install_get_md(watchface_id, false);
+    if (watchface_md != nullptr) {
+      return watchface_md;
+    }
+  }
+  return launcher_menu_app_get_app_info();
+}
+""",
+    )
+
+    _replace(
         tree / "pebble/syscall/syscall.c",
         """#ifdef __arm__
   __asm volatile("mrs %0, ipsr" : "=r"(ipsr));

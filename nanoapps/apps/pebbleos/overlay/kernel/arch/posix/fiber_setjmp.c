@@ -52,7 +52,7 @@ static struct posix_thread s_boot_pt;
 static uint8_t s_boot_stack[BOOT_STACK_SIZE] __attribute__((aligned(8)));
 
 /* r0=jmp_buf, returns 0. Saves r4-r11, sp, lr. */
-__attribute__((naked)) static int nano_setjmp(struct nano_jmp *env) {
+__attribute__((naked, returns_twice)) static int nano_setjmp(struct nano_jmp *env) {
   (void)env;
   __asm__ volatile(
       ".syntax unified\n"
@@ -124,10 +124,14 @@ static struct nano_jmp s_init_parent;
 static struct posix_thread *s_initing;
 
 static void prv_init_thunk(void) {
-  if (nano_setjmp(&s_initing->env) == 0) {
+  /* The pointer must live on this fiber's stack so it survives the
+   * longjmp. s_initing and pbl_cur are not stable: the boot fiber is
+   * not a pbl_thread, and later thread creates overwrite s_initing. */
+  volatile struct posix_thread *pt = s_initing;
+  if (nano_setjmp(&pt->env) == 0) {
     nano_longjmp(&s_init_parent, 1);
   }
-  s_initing->entry(s_initing->arg);
+  pt->entry((void *)pt->arg);
   pbl_thread_abort(nullptr);
   for (;;) {
   }
@@ -152,13 +156,12 @@ void arch_thread_init(struct pbl_thread *t, void (*entry)(void *), void *arg) {
   pt->live = true;
   t->backend.arch.pt = pt;
 
+  /* Keep the posix_thread at the low address, out of the way of the
+   * downward-growing stack. */
   uintptr_t usable = (base + sizeof(*pt) + 16U + 7U) & ~7U;
   uintptr_t top = ((uintptr_t)t->stack + t->stack_size) & ~7U;
-  if (top <= usable + 128U) {
-    /* Pathological: still try with the original top. */
-  }
-  prv_fiber_on_stack(pt, t->stack, t->stack_size);
-  (void)usable;
+  size_t usable_size = (top > usable) ? (size_t)(top - usable) : 0U;
+  prv_fiber_on_stack(pt, (void *)usable, usable_size);
 }
 
 void arch_thread_regions_set(struct pbl_thread *t, const struct pbl_mpu_region *const *regions) {

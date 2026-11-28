@@ -45,8 +45,8 @@ ARM unwinder tables are discarded.
 
 ## Device-like tests
 
-A desktop qemu pass that still uses the host libc is not enough. Before
-this app is called ready, a host run of the device `.hbapp` must pass:
+A desktop qemu pass that still uses the host libc is not enough. A host
+Unicorn run of the device `.hbapp` covers:
 
 - no host libc unwinder
 - `mkrelocapp` `.hbapp` layout
@@ -54,7 +54,15 @@ this app is called ready, a host run of the device `.hbapp` must pass:
 - both memory levels (3.9 MB / 2 MB and 6 MB / 4 MB)
 - no save, and a corrupt save, recover cleanly
 - a clean NOT ENOUGH MEMORY screen when the largest block is too small
-- a 240x432 screenshot of a booted watchface
+- a 240x432 screenshot of a booted watchface (the default TicToc face)
+
+The 200x228 panel is centred on the 240x432 screen. Stills are under
+`nanoapps/apps/pebbleos/screenshots/` (`watchface-tictoc-240x432.png`,
+`splash-240x432.png`, `low-memory-240x432.png`). That run is a host dry
+run, not a pass on an iPod. The official normal shell starts in the
+launcher; the nano 7G overlay starts the default watchface when one is
+installed (TicToc on a clean filesystem). Closing the face still opens
+the launcher.
 
 ## Commands
 

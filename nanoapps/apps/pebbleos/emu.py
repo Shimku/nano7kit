@@ -57,6 +57,31 @@ class PebbleEmu(Emu):
         if not str(path).startswith(DATA_PREFIX):
             raise RuntimeError(f"the app wrote outside {DATA_PREFIX}: {path}")
 
+    # Volume buttons are active-low on GPIO port 5. Home and Play/Pause
+    # use the OS key-state cache (same addresses as hb_button.c).
+    _SKEYS = 0x089A54A0
+    _KEYDATA = 24
+    _GPIO_PDAT5 = 0x3CF00000 + 5 * 0x20 + 4
+    _KEYS = {
+        "back": ("skey", 1),
+        "up": ("gpio", 0),
+        "select": ("skey", 6),
+        "down": ("gpio", 1),
+    }
+
+    def button(self, name: str, down: bool) -> None:
+        kind, code = self._KEYS[name]
+        if kind == "gpio":
+            import struct as _st
+            cur = _st.unpack("<I", bytes(self.uc.mem_read(self._GPIO_PDAT5, 4)))[0]
+            if down:
+                cur &= ~(1 << code)
+            else:
+                cur |= 1 << code
+            self.uc.mem_write(self._GPIO_PDAT5, _st.pack("<I", cur))
+        else:
+            self.uc.mem_write(self._SKEYS + code * self._KEYDATA, bytes((1 if down else 0,)))
+
 
 def load_fs_dir(host: Path) -> tuple[dict[str, bytearray], set[str]]:
     data: dict[str, bytearray] = {}
@@ -86,6 +111,9 @@ def classify_frame(raw: bytes) -> str:
     # Stub status fill is 0x0a0a0a; orange title 0xff4700.
     if bg == bytes((0x0A, 0x0A, 0x0A, 0xFF)) and bytes((0x00, 0x47, 0xFF, 0xFF)) in raw:
         return "stub"
+    # Launcher selection is RGB 0,168,248, stored BGRA.
+    if bytes((0xF8, 0xA8, 0x00, 0xFF)) in raw:
+        return "launcher"
     # The 200x228 panel is centred at (20, 102).
     x0, y0, pw, ph = 20, 102, 200, 228
     colours = set()
@@ -95,6 +123,10 @@ def classify_frame(raw: bytes) -> str:
             colours.add(row[i : i + 4])
             if len(colours) > 8:
                 return "watchface"
+    # The boot splash is a near-white panel with the pebbleOS mark and
+    # a thin progress bar (two or three panel colours, dark bezel).
+    if bg == bytes((0x0A, 0x0A, 0x0A, 0xFF)) and 2 <= len(colours) <= 3:
+        return "splash"
     if len(colours) >= 3:
         return "watchface"
     return f"panel-{len(colours)}"
@@ -150,6 +182,22 @@ def main(argv=None) -> int:
             kind = classify_frame(raw)
             print(f"{words[1]}: frame {frames} ({kind})")
             (out / f"{words[1]}.kind").write_text(kind + "\n")
+            continue
+        if words[0] == "press":
+            emu.button(words[1], True)
+            continue
+        if words[0] == "release":
+            emu.button(words[1], False)
+            continue
+        if words[0] == "click":
+            emu.button(words[1], True)
+            for _ in range(6):
+                emu.call(frame_fn, [])
+                frames += 1
+            emu.button(words[1], False)
+            for _ in range(8):
+                emu.call(frame_fn, [])
+                frames += 1
             continue
         n = int(words[0])
         for _ in range(n):
