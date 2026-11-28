@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config RESOURCES_BOARD
+    default "qemu_emery"
+
+config DISPLAY_NANO_WIDTH
+    default 200
+
+config DISPLAY_NANO_HEIGHT
+    default 228
+
+config FLASH_SIZE
+    default 0x400000
+
+config FW_FLASH_SIZE
+    default 0x400000

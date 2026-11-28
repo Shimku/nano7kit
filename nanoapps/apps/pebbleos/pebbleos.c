@@ -17,10 +17,9 @@
  * the working set, a clean NOT ENOUGH MEMORY screen is shown and nothing
  * heavy is allocated.
  *
- * The real PebbleOS kernel is fetched at build time and will be linked
- * through pebbleos_host_*. Until that library is present, the panel
- * shows a status screen so the host, buttons and memory check can be
- * tested on their own.
+ * The real PebbleOS kernel is fetched at build time and linked through
+ * pebbleos_host_*. If the library is missing, the panel shows a status
+ * screen so the host, buttons and memory check can still be tested.
  */
 #include "hb_raw_surface.h"
 #include "hb_sdk.h"
@@ -33,7 +32,8 @@
 /* Tight nano (music on, more apps): about 3.9 MB free, 2 MB largest.
  * Until the hosted kernel is linked, the shim itself is small; keep a
  * modest floor so a badly fragmented heap still gets a clean screen. */
-#define PBL_NEED_LARGEST (256u * 1024u)
+/* Kernel heap (384 KiB) plus a 64 KiB flash bank and a little slack. */
+#define PBL_NEED_LARGEST (512u * 1024u)
 
 static uint32_t *s_fb;
 static int s_w, s_h;
@@ -194,6 +194,11 @@ void hb_raw_init(int w, int h)
     }
     if (pebbleos_host_available())
         s_host_on = pebbleos_host_start();
+    if (!s_host_on && pebbleos_host_available()) {
+        s_low_mem = 1;
+        draw_low_memory();
+        return;
+    }
     draw_status();
 }
 

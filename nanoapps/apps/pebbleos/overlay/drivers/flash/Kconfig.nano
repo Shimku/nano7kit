@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Nikita Shimkus
+# SPDX-License-Identifier: Apache-2.0
+
+config FLASH_NANO
+    bool "NanoApps file-backed flash"
+    depends on NANO7
+    help
+      External flash, 4 MiB, stored under /Apps/Data/PebbleOS by the shim.

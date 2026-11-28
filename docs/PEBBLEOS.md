@@ -16,8 +16,7 @@ centre of the panel (2x would not fit). Around it is a dark bezel.
 | Up | Volume Up |
 | Down | Volume Down |
 
-Sleep/Wake is left to the iPod. Touch on the Pebble panel will be wired
-once the hosted kernel is linked.
+Sleep/Wake is left to the iPod.
 
 ## Memory
 
@@ -31,33 +30,43 @@ NOT ENOUGH MEMORY and does not start the kernel. Pause music or close
 other apps and open it again.
 
 The NanoApps loader puts the whole `.hbapp` into one allocation, so the
-image itself has to stay well under the 2 MB largest block, with heap,
-the 200x228 framebuffer and file-backed flash on top. Until the kernel
-is linked, the shim is small and those floors are modest. They will be
-measured again after the first hosted link.
+image itself has to stay well under the 2 MB largest block. The kernel
+heap (384 KiB), a 64 KiB flash bank and the 200x228 framebuffer come from
+the remaining free memory. File-backed flash lives under
+`/Apps/Data/PebbleOS` (64 KiB banks in `flash/`), not as a 4 MiB RAM
+buffer.
 
-## What is left before it is called ready
+## How it is hosted
 
-- A nano 7G hosted board in the fetched PebbleOS tree (fiber threads on
-  one NanoApps thread: the Emscripten posix fiber backend is not used
-  here). Framebuffer and button HAL, file-backed "flash" under
-  `/Apps/Data/PebbleOS`.
-- A device-like host test: compile and run with no host libc unwinder,
-  the device relocatable `.hbapp` layout (`mkrelocapp`), and
-  `-mcpu=cortex-a5 -mfpu=vfpv4-d16`. A pass in a desktop qemu that still
-  uses the host libc is not enough.
-- Measure the image and peak heap on both memory levels, and update the
-  NOT ENOUGH MEMORY floor from those numbers.
-- Samsa or a built-in watchface so the first screen is a real Pebble
-  watchface.
+Kernel threads run on one NanoApps thread (setjmp fibers, Pebble-sized
+stacks). The Emscripten posix fiber backend is not used. The image is
+built with `-mcpu=cortex-a5 -mfpu=vfpv4-d16` and packed with `mkrelocapp`.
+ARM unwinder tables are discarded.
+
+## Device-like tests
+
+A desktop qemu pass that still uses the host libc is not enough. Before
+this app is called ready, a host run of the device `.hbapp` must pass:
+
+- no host libc unwinder
+- `mkrelocapp` `.hbapp` layout
+- Cortex-A5 VFPv4-D16
+- both memory levels (3.9 MB / 2 MB and 6 MB / 4 MB)
+- no save, and a corrupt save, recover cleanly
+- a clean NOT ENOUGH MEMORY screen when the largest block is too small
+- a 240x432 screenshot of a booted watchface
 
 ## Commands
 
 ```
 ./start pebbleos status
 ./start pebbleos fetch
-./start sdk build pebbleos
+./start pebbleos build
 ./start nabase add "PebbleOS"
 ```
 
-Use `nabase add` on the NanoApps base. Do not use `./start apps add`.
+`./start pebbleos build` fetches the pinned tree, applies the nano 7G
+overlay, builds `libpebbleos.a`, and links the `.hbapp`. After
+`nabase add`, also copy `build/pebbleos-data/` to `/Apps/Data/PebbleOS/`
+(resource flash banks). Use `nabase add` on the NanoApps base. Do not
+use `./start apps add`.

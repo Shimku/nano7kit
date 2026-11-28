@@ -1,0 +1,20 @@
+# SPDX-FileCopyrightText: 2026 Nikita Shimkus
+# SPDX-License-Identifier: Apache-2.0
+
+config DISPLAY_NANO
+    bool "NanoApps framebuffer display"
+    depends on NANO7
+    help
+      200x228 ARGB2222 panel, converted to RGB565 for the NanoApps shim.
+
+if DISPLAY_NANO
+
+config DISPLAY_NANO_WIDTH
+    int "Width"
+    default 200
+
+config DISPLAY_NANO_HEIGHT
+    int "Height"
+    default 228
+
+endif

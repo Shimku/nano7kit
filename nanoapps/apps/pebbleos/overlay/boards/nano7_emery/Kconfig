@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_NANO7_EMERY
+    bool
+    default y
+    select BOARD_PARTITIONS_NANO7
+    select NANO7

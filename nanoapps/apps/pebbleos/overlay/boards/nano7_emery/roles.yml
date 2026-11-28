@@ -1,0 +1,30 @@
+# SPDX-FileCopyrightText: 2026 Core Devices LLC
+# SPDX-License-Identifier: Apache-2.0
+
+display:
+  symbol: NANO_DISPLAY
+  include: pbl/drivers/display/nano.h
+backlight:
+  symbol: POSIX_BACKLIGHT
+  include: pbl/drivers/backlight/posix.h
+flash:
+  symbol: NANO_FLASH
+  include: pbl/drivers/flash/nano.h
+accel:
+  symbol: SIM_ACCEL
+  include: pbl/drivers/imu/sim.h
+als:
+  symbol: SIM_ALS
+  include: pbl/drivers/als/sim.h
+vibe:
+  symbol: SIM_VIBE
+  include: pbl/drivers/vibe/sim.h
+die_temp:
+  symbol: SIM_TEMP
+  include: pbl/drivers/temp/sim.h
+rtc:
+  symbol: NANO_RTC
+  include: pbl/drivers/rtc/nano.h
+charger:
+  symbol: SIM_CHARGER
+  include: pbl/drivers/charger/sim.h

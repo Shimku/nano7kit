@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Nikita Shimkus
+# SPDX-License-Identifier: Apache-2.0
+
+config RTC_NANO
+    bool "NanoApps RTC"
+    depends on NANO7
+    help
+      RTC following the iPod clock, through the hosted HAL.

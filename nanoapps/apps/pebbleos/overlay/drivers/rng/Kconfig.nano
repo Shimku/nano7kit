@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: 2026 Nikita Shimkus
+# SPDX-License-Identifier: Apache-2.0
+
+config RNG_NANO
+    bool "NanoApps software RNG"
+    depends on NANO7
+    help
+      Software generator seeded from the host monotonic clock.
