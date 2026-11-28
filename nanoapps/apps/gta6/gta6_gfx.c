@@ -68,6 +68,15 @@ static void pset_a(uint32_t *fb, int w, int h, int x, int y, uint32_t c, int a)
     fb[(long)y * w + x] = lerp(d, c, a, 256);
 }
 
+static uint32_t thash(int x, int y)
+{
+    uint32_t v = (uint32_t)x * 0x9E3779B1u ^ (uint32_t)y * 0x85EBCA6Bu;
+    v ^= v >> 15;
+    v *= 0x2C1B3C6Du;
+    v ^= v >> 12;
+    return v;
+}
+
 static void fillr(uint32_t *fb, int w, int h, int x, int y, int rw, int rh, uint32_t c)
 {
     int i, j, x1, y1;
@@ -83,6 +92,13 @@ static void fillr(uint32_t *fb, int w, int h, int x, int y, int rw, int rh, uint
         uint32_t *row = fb + (long)j * w;
         for (i = x; i < x1; i++) row[i] = c;
     }
+}
+
+static void fill_a(uint32_t *fb, int w, int h, int x, int y, int rw, int rh, uint32_t c, int a)
+{
+    int i, j;
+    for (j = y; j < y + rh; j++)
+        for (i = x; i < x + rw; i++) pset_a(fb, w, h, i, j, c, a);
 }
 
 static uint32_t fade_c(uint32_t c, int f)
@@ -308,7 +324,13 @@ static void scene_sunset(uint32_t *fb, int w, int h, int t, int fade)
     draw_skyline(fb, w, h, hor, pan, fade);
     fillr(fb, w, h, 0, hor, w, 3, fade_c(G6_COL_PINK, fade));
     draw_water(fb, w, h, hor + 2, pan, fade);
-    disc(fb, w, h, 168 + pan / 8, hor + 40, 10, fade_c(G6_COL_ORANGE, fade / 3));
+    {
+        int k, rx = 172 + pan / 8;
+        for (k = 0; k < 5; k++) {
+            int rw = 44 - k * 8;
+            fill_a(fb, w, h, rx - rw / 2, hor + 10 + k * 8, rw, 2, G6_COL_ORANGE, 150 * fade / 256);
+        }
+    }
     draw_palm_sil(fb, w, h, 16 - pan / 3, hor - 8, fade_c(G6_COL_OUTLINE, fade));
     draw_palm_sil(fb, w, h, 70 - pan / 2, hor + 6, fade_c(0xff120818, fade));
     draw_palm_sil(fb, w, h, 200 + pan / 4, hor - 4, fade_c(G6_COL_OUTLINE, fade));
@@ -578,7 +600,7 @@ static void draw_menu(G6Game *g, uint32_t *fb, int w, int h)
     fillr(fb, w, h, 148, 18, 86, 40, G6_COL_MAGENTA);
     g6_text5(fb, w, h, 158, 28, "NEON", 2, G6_COL_WHITE);
     disc(fb, w, h, 210, 108, 16, G6_COL_ORANGE);
-    fillr(fb, w, h, 0, 392, w, 40, 0xEE0A0618);
+    fill_a(fb, w, h, 0, 392, w, 40, 0xff0A0618, 238);
     text_ol(fb, w, h, 36, 400, "TAP TO START", 2,
             pulse ? G6_COL_WHITE : G6_COL_PINK, G6_COL_OUTLINE);
     g6_text5(fb, w, h, 8, 418, G6_TAG, 1, 0xffC9ADA7);
@@ -627,13 +649,17 @@ static int is_bldg(int t)
     return t == T_BUILD || t == T_ROOF || t == T_NEON || t == T_SHACK;
 }
 
-static int near_neon(const G6Game *g, int tx, int ty)
+/* Neon glow strength out of 5 for a tile: soft falloff, not a hard patch. */
+static int neon_glow(const G6Game *g, int tx, int ty)
 {
-    int dx, dy;
+    int dx, dy, best = 3;
     for (dy = -2; dy <= 2; dy++)
         for (dx = -2; dx <= 2; dx++)
-            if (map_tile(g, tx + dx, ty + dy) == T_NEON) return 1;
-    return 0;
+            if (map_tile(g, tx + dx, ty + dy) == T_NEON) {
+                int d = (dx < 0 ? -dx : dx) > (dy < 0 ? -dy : dy) ? (dx < 0 ? -dx : dx) : (dy < 0 ? -dy : dy);
+                if (d < best) best = d;
+            }
+    return best == 3 ? 0 : (best <= 1 ? 2 : 1);
 }
 
 static int view_night(const G6Game *g)
@@ -649,26 +675,56 @@ static uint32_t roof_of(int tx, int ty)
     return ROOF_PAL[((tx / 8) * 3 + (ty / 8) * 5) & 7];
 }
 
+/* What lies under a palm or a hut: sand on the beach, grass elsewhere. */
+static int ground_of(const G6Game *g, int tx, int ty)
+{
+    int dx, dy;
+    for (dy = -1; dy <= 1; dy++)
+        for (dx = -1; dx <= 1; dx++)
+            if (map_tile(g, tx + dx, ty + dy) == T_SAND) return T_SAND;
+    for (dy = -1; dy <= 1; dy++)
+        for (dx = -1; dx <= 1; dx++)
+            if (map_tile(g, tx + dx, ty + dy) == T_PARK) return T_PARK;
+    return T_GRASS;
+}
+
+static uint32_t sand_col(const G6Game *g, int x, int y)
+{
+    uint32_t hv = thash(x, y);
+    uint32_t c = lerp(G6_COL_SAND, 0xffE0AE68, (int)(hv & 3u), 8);
+    if (map_tile(g, x, y - 1) == T_OCEAN)
+        c = lerp(c, 0xffC89A60, 3, 8);
+    else if (map_tile(g, x, y - 2) == T_OCEAN)
+        c = lerp(c, 0xffD8AC70, 1, 4);
+    return c;
+}
+
 static uint32_t tile_col(const G6Game *g, int t, int x, int y)
 {
-    int hsh = (x * 13 + y * 7) & 7;
-    int night = (t == T_NEON) || (y >= 30) || near_neon(g, x, y);
+    uint32_t hv = thash(x, y);
+    int hsh = (int)(hv & 7u);
+    int nk = (t == T_NEON || y >= 30) ? 3 : neon_glow(g, x, y);
+    int night = nk > 0;
     uint32_t c;
+    if (t == T_PALM || t == T_SHACK) {
+        int under = ground_of(g, x, y);
+        c = under == T_SAND ? sand_col(g, x, y)
+            : under == T_PARK ? 0xff2F7A3A : 0xff3D8C40;
+        t = under == T_SAND ? T_SAND : T_GRASS;
+    } else
     switch (t) {
     case T_OCEAN: c = ((g->tick_n + x + y) & 8) ? 0xff148C9A : 0xff1EC8C0; break;
-    case T_SAND: c = hsh & 1 ? G6_COL_SAND : 0xffE8B56A; break;
-    case T_GRASS: c = hsh ? 0xff4A9A4A : 0xff3D8C40; break;
+    case T_SAND: c = sand_col(g, x, y); break;
+    case T_GRASS: c = lerp(0xff3D8C40, 0xff4A9A4A, hsh & 3, 4); break;
     case T_PARK: c = 0xff2F7A3A; break;
-    case T_SWAMP: c = hsh & 1 ? 0xff234A2C : 0xff1B3A24; break;
+    case T_SWAMP: c = lerp(0xff1B3A24, 0xff234A2C, hsh & 3, 4); break;
     case T_ROAD: c = G6_COL_ASPHALT; break;
     case T_WALK: c = 0xffD4C4B0; break;
     case T_BUILD:
     case T_ROOF: c = roof_of(x, y); break;
     case T_BRIDGE: c = 0xff6A6458; break;
     case T_DOCK: c = 0xff8A6A44; break;
-    case T_PALM: c = 0xff3D8C4A; break;
     case T_NEON: c = 0xff241028; break;
-    case T_SHACK: c = 0xffC9A227; break;
     default: c = 0xff203018; break;
     }
     if (t == T_SAND || t == T_OCEAN || t == T_DOCK)
@@ -679,14 +735,14 @@ static uint32_t tile_col(const G6Game *g, int t, int x, int y)
         if (t == T_ROAD || t == T_BRIDGE) nv = 0xff1A1828;
         if (t == T_WALK) nv = 0xff2A2438;
         if (t == T_NEON) nv = 0xff1A1028;
-        c = lerp(c, nv, 3, 5);
+        c = lerp(c, nv, nk, 5);
     }
     return c | 0xff000000u;
 }
 
 static void draw_palm_top(uint32_t *fb, int w, int h, int ox, int oy)
 {
-    fillr(fb, w, h, ox + 10, oy + 12, 7, 4, 0x88141410);
+    fill_a(fb, w, h, ox + 10, oy + 12, 7, 4, 0xff141410, 110);
     fillr(fb, w, h, ox + 7, oy + 4, 3, 12, 0xff8A5A28);
     fillr(fb, w, h, ox + 6, oy + 4, 1, 12, 0xffC08040);
     fillr(fb, w, h, ox + 1, oy + 1, 14, 4, 0xff1F6A32);
@@ -697,7 +753,7 @@ static void draw_palm_top(uint32_t *fb, int w, int h, int ox, int oy)
 
 static void draw_parked(uint32_t *fb, int w, int h, int ox, int oy, uint32_t col, int horiz)
 {
-    fillr(fb, w, h, ox + 2, oy + 10, 12, 4, 0x66101018);
+    fill_a(fb, w, h, ox + 2, oy + 10, 12, 4, 0xff101018, 100);
     if (horiz) {
         fillr(fb, w, h, ox + 1, oy + 4, 14, 8, dim(col));
         fillr(fb, w, h, ox + 2, oy + 4, 12, 6, col);
@@ -718,17 +774,22 @@ static void draw_tile(const G6Game *g, uint32_t *fb, int w, int h, int tx, int t
     int t = map_tile(g, tx, ty);
     uint32_t c = tile_col(g, t, tx, ty);
     int n, south, east, west, north, facade;
+    int gt = t;
+    if (t == T_PALM || t == T_SHACK) {
+        gt = ground_of(g, tx, ty);
+        if (gt != T_SAND) gt = T_GRASS;
+    }
     if (night && t != T_NEON) {
         if (t == T_ROAD || t == T_BRIDGE) c = 0xff1C1828;
         else if (t == T_WALK) c = 0xff2C2438;
         else if (t == T_OCEAN) c = 0xff0A2840;
-        else if (t == T_SAND) c = 0xff4A3A40;
-        else if (t == T_GRASS || t == T_PARK || t == T_PALM) c = 0xff1A3020;
+        else if (gt == T_SAND) c = lerp(0xff4A3A40, c, 1, 8);
+        else if (t == T_GRASS || t == T_PARK || gt == T_GRASS) c = 0xff1A3020;
         else if (is_bldg(t)) c = dim(roof_of(tx, ty));
         else c = lerp(c, 0xff121028, 3, 5);
     }
     fillr(fb, w, h, ox, oy, G6_TILE, G6_TILE, c);
-    if (t == T_ROAD || t == T_BRIDGE) {
+    if (t == T_ROAD) {
         int hr = map_tile(g, tx - 1, ty) == t || map_tile(g, tx + 1, ty) == t;
         int vr = map_tile(g, tx, ty - 1) == t || map_tile(g, tx, ty + 1) == t;
         uint32_t edge = night ? 0xff3A3048 : 0xffC8C0B0;
@@ -760,7 +821,7 @@ static void draw_tile(const G6Game *g, uint32_t *fb, int w, int h, int tx, int t
         for (n = 4; n < 12; n += 4)
             fillr(fb, w, h, ox + 3, oy + n, 10, 1, night ? 0xff241C30 : 0xffC8B8A0);
         if (is_bldg(map_tile(g, tx, ty - 1)))
-            fillr(fb, w, h, ox, oy, G6_TILE, 3, 0x66141420);
+            fill_a(fb, w, h, ox, oy, G6_TILE, 3, 0xff141420, 100);
         if (((tx * 5 + ty * 3) % 11) == 2 &&
             (map_tile(g, tx, ty + 1) == T_ROAD || map_tile(g, tx, ty - 1) == T_ROAD))
             draw_parked(fb, w, h, ox, oy, CAR_COL[(tx + ty) % 6], 1);
@@ -770,18 +831,32 @@ static void draw_tile(const G6Game *g, uint32_t *fb, int w, int h, int tx, int t
         else if (((tx + ty * 2) % 6) == 0)
             draw_palm_top(fb, w, h, ox, oy);
     }
+    if (gt == T_SAND) {
+        uint32_t hv = thash(tx, ty);
+        uint32_t dk = night ? 0xff3A2C34 : 0xffD4A060;
+        uint32_t lt = night ? 0xff5A4A50 : 0xffF8E0B0;
+        int k;
+        for (k = 0; k < 4; k++) {
+            uint32_t q = thash(tx * 5 + k, ty * 3 + 7 * k);
+            pset(fb, w, h, ox + (int)(q & 15u), oy + (int)((q >> 4) & 15u), (q >> 9) & 1u ? dk : lt);
+        }
+        if ((hv & 7u) == 0) {
+            fillr(fb, w, h, ox + 3 + (int)((hv >> 8) & 7u), oy + 6 + (int)((hv >> 12) & 3u), 4, 1, dk);
+            fillr(fb, w, h, ox + 5 + (int)((hv >> 8) & 7u), oy + 7 + (int)((hv >> 12) & 3u), 2, 1, dk);
+        }
+    }
     if (t == T_SAND) {
-        pset(fb, w, h, ox + (tx & 7), oy + (ty & 7), 0xffD4A060);
-        pset(fb, w, h, ox + 9, oy + 4, 0xffF8E0B0);
-        if (map_tile(g, tx, ty - 1) == T_OCEAN || map_tile(g, tx, ty + 1) == T_OCEAN)
-            fillr(fb, w, h, ox, oy + ((map_tile(g, tx, ty - 1) == T_OCEAN) ? 0 : 13), G6_TILE, 3, G6_COL_FOAM);
+        if (map_tile(g, tx, ty - 1) == T_OCEAN)
+            fillr(fb, w, h, ox, oy, G6_TILE, 1, night ? 0xff6A8090 : G6_COL_FOAM);
         if (map_tile(g, tx - 1, ty) == T_OCEAN)
             fillr(fb, w, h, ox, oy, 3, G6_TILE, G6_COL_FOAM);
     }
-    if (t == T_GRASS || t == T_PARK) {
-        pset(fb, w, h, ox + 3, oy + 5, 0xff2A6A32);
-        pset(fb, w, h, ox + 11, oy + 10, 0xff6ABA50);
-        pset(fb, w, h, ox + 7, oy + 2, 0xffE8D060);
+    if (t == T_GRASS || t == T_PARK || (t == T_PALM && gt == T_GRASS)) {
+        uint32_t q = thash(tx, ty);
+        pset(fb, w, h, ox + (int)(q & 15u), oy + (int)((q >> 4) & 15u), 0xff2A6A32);
+        pset(fb, w, h, ox + (int)((q >> 8) & 15u), oy + (int)((q >> 12) & 15u), 0xff6ABA50);
+        if ((q & 0x30000u) == 0)
+            pset(fb, w, h, ox + (int)((q >> 18) & 15u), oy + (int)((q >> 22) & 15u), 0xffE8D060);
     }
     if (t == T_BUILD || t == T_ROOF || t == T_NEON) {
         uint32_t pal = roof_of(tx, ty);
@@ -846,8 +921,32 @@ static void draw_tile(const G6Game *g, uint32_t *fb, int w, int h, int tx, int t
         fillr(fb, w, h, ox + 11, oy + 14, 2, 2, 0xff5A3010);
     }
     if (t == T_BRIDGE) {
-        fillr(fb, w, h, ox, oy + 2, G6_TILE, 1, 0xffF0E8D0);
-        fillr(fb, w, h, ox, oy + 13, G6_TILE, 1, 0xffF0E8D0);
+        uint32_t plank = night ? 0xff141020 : 0xff5A5448;
+        uint32_t rail = night ? 0xff4A4058 : 0xffF0E8D0;
+        uint32_t rail_d = night ? 0xff0A0814 : 0xff2A2824;
+        uint32_t dash = night ? 0xff8A7840 : 0xffE8D060;
+        for (n = 3; n < G6_TILE; n += 4)
+            fillr(fb, w, h, ox, oy + n, G6_TILE, 1, plank);
+        if (map_tile(g, tx, ty - 1) == T_OCEAN) {
+            fillr(fb, w, h, ox, oy, G6_TILE, 2, rail);
+            fillr(fb, w, h, ox, oy + 2, G6_TILE, 1, rail_d);
+        }
+        if (map_tile(g, tx, ty + 1) == T_OCEAN) {
+            fillr(fb, w, h, ox, oy + 14, G6_TILE, 2, rail);
+            fillr(fb, w, h, ox, oy + 13, G6_TILE, 1, rail_d);
+        }
+        if (map_tile(g, tx - 1, ty) == T_OCEAN) {
+            fillr(fb, w, h, ox, oy, 2, G6_TILE, rail);
+            fillr(fb, w, h, ox + 2, oy, 1, G6_TILE, rail_d);
+        }
+        if (map_tile(g, tx + 1, ty) == T_OCEAN) {
+            fillr(fb, w, h, ox + 14, oy, 2, G6_TILE, rail);
+            fillr(fb, w, h, ox + 13, oy, 1, G6_TILE, rail_d);
+        }
+        if ((tx & 7) == 0)
+            fillr(fb, w, h, ox + 7, oy + 3, 2, 7, dash);
+        if (ty == 44 && (tx & 1) == 0)
+            fillr(fb, w, h, ox + 3, oy + 7, 7, 2, dash);
     }
 }
 
@@ -871,8 +970,8 @@ static void draw_car(uint32_t *fb, int w, int h, int x, int y, uint8_t ang, uint
     uint32_t lo = dim(col);
     uint32_t win = 0xff203848;
     uint32_t light = ((ang + x) & 8) ? G6_COL_MAGENTA : G6_COL_TEAL;
-    fillr(fb, w, h, x - 8, y + 4, 16, 4, 0x66101018);
-    if (mine) fillr(fb, w, h, x - 10, y - 9, 20, 18, 0x44FFFFFF);
+    fill_a(fb, w, h, x - 8, y + 4, 16, 4, 0xff101018, 100);
+    if (mine) fill_a(fb, w, h, x - 10, y - 9, 20, 18, 0xffFFFFFF, 56);
     if (cop) col = 0xffF4F1DE;
     if (dir == 0 || dir == 4) {
         fillr(fb, w, h, x - 10, y - 5, 20, 11, lo);
@@ -1063,6 +1162,7 @@ static void draw_hud(G6Game *g, uint32_t *fb, int w, int h)
     char *o;
     int i, stars = g->wanted, len;
     int dx, dy, r, r2, r0;
+    fill_a(fb, w, h, 0, 0, w, 27, 0xff0A0618, 120);
     o = put_s(line, "$");
     o = put_u(o, (unsigned)g->money);
     len = 0;
@@ -1075,8 +1175,10 @@ static void draw_hud(G6Game *g, uint32_t *fb, int w, int h)
     put_u(o, (unsigned)g->hp);
     g6_text5(fb, w, h, 4, 15, line, 1, g->hp > 30 ? G6_COL_WHITE : G6_COL_ORANGE);
     g6_text5(fb, w, h, 216, 5, "II", 1, G6_COL_WHITE);
-    if (g->ticker[0])
+    if (g->ticker[0]) {
+        fill_a(fb, w, h, 0, 319, w, 13, 0xff0A0618, 120);
         g6_text5(fb, w, h, 4, 322, g->ticker, 1, G6_COL_TEAL);
+    }
     r = 34;
     r2 = r * r;
     r0 = (r - 3) * (r - 3);
@@ -1118,7 +1220,7 @@ static void draw_map_view(G6Game *g, uint32_t *fb, int w, int h)
 
 static void draw_overlay_msg(uint32_t *fb, int w, int h, const char *a, const char *b)
 {
-    fillr(fb, w, h, 10, 150, w - 20, 120, 0xEE0A0618);
+    fill_a(fb, w, h, 10, 150, w - 20, 120, 0xff0A0618, 238);
     g6_text5(fb, w, h, 40, 168, a, 3, G6_COL_MAGENTA);
     g6_text5(fb, w, h, 20, 210, b, 1, G6_COL_WHITE);
 }
@@ -1151,7 +1253,7 @@ void g6_draw(G6Game *g, uint32_t *fb, int w, int h)
     else if (g->mode == G6_WASTED)
         draw_overlay_msg(fb, w, h, "WASTED", "TAP TO CONTINUE");
     else if (g->mode == G6_PAUSE) {
-        fillr(fb, w, h, 16, 120, w - 32, 180, 0xEE0A0618);
+        fill_a(fb, w, h, 16, 120, w - 32, 180, 0xff0A0618, 238);
         g6_text5(fb, w, h, 40, 136, "PAUSED", 2, G6_COL_WHITE);
         g6_text5(fb, w, h, 28, 170, "RESUME", 1, 0xff7EE0A8);
         g6_text5(fb, w, h, 28, 188, "JOB", 1, G6_COL_STAR);
