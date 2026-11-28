@@ -502,17 +502,27 @@ config BOARD_PARTITIONS_NANO7
                 "#include <pbl/bluetooth/bond.h>\n",
                 "#ifdef CONFIG_BT\n#include <pbl/bluetooth/bond.h>\n#endif\n",
             )
+            anchor = "PBL_BT_BOND_LISTENER_DEFINE(blob_db_faithful, .added = prv_bond_added);"
+            if ft.count(anchor) != 1:
+                raise SystemExit(f"{faithful}: patch anchor not found:\n{anchor}")
             ft = ft.replace(
-                "PBL_BT_BOND_LISTENER_DEFINE(blob_db_faithful, .added = prv_bond_added);",
-                "#ifdef CONFIG_BT\nPBL_BT_BOND_LISTENER_DEFINE(blob_db_faithful, .added = prv_bond_added);\n#endif",
+                """// Only one bond is kept, so a new one means a new phone.
+static void prv_bond_added(const struct pbl_bt_bond_info *info) {
+  blob_db_set_faithful(false);
+}
+
+PBL_BT_BOND_LISTENER_DEFINE(blob_db_faithful, .added = prv_bond_added);
+""",
+                """// Only one bond is kept, so a new one means a new phone.
+#ifdef CONFIG_BT
+static void prv_bond_added(const struct pbl_bt_bond_info *info) {
+  blob_db_set_faithful(false);
+}
+
+PBL_BT_BOND_LISTENER_DEFINE(blob_db_faithful, .added = prv_bond_added);
+#endif
+""",
             )
-            # the bond-added helper also uses pbl_bt types; wrap it too if still present
-            if "static void prv_bond_added" in ft and "#ifdef CONFIG_BT\n// Only one bond" not in ft and "#ifdef CONFIG_BT\nstatic void prv_bond_added" not in ft:
-                ft = ft.replace(
-                    "static void prv_bond_added(const struct pbl_bt_bond_info *info) {",
-                    "#ifdef CONFIG_BT\nstatic void prv_bond_added(const struct pbl_bt_bond_info *info) {",
-                )
-                # if we added a second ifdef around the function, close it before the listener ifdef
             faithful.write_text(ft)
 
     _replace(

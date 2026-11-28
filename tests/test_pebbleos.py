@@ -2,6 +2,7 @@
 """Checks for the hosted PebbleOS nano app (kernel host, memory screen, notices)."""
 
 from pathlib import Path
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -132,7 +133,7 @@ class TestPebbleosImage(unittest.TestCase):
             script = Path(td) / "script"
             script.write_text("1\nshot lowmem\n")
             r = subprocess.run(
-                ["python3", str(emu), str(self.hbapp), td, str(script), "--largest", "262144"],
+                [sys.executable, str(emu), str(self.hbapp), td, str(script), "--largest", "262144"],
                 check=True, capture_output=True, text=True,
             )
             png = Path(td) / "lowmem.png"
