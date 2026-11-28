@@ -83,6 +83,9 @@ In C, with the NanoApps SDK (NanoApps apps run unchanged on this launcher):
 Porting a big game: [docs/PORTING.md](docs/PORTING.md) walks through Mario 64, PvZ,
 Temple Run and Fruit Ninja.
 
+A bigger C example is Tiny LLM, a 260K-parameter story model (stories260K, MIT) that
+writes short stories on the nano: [docs/TINYLLM.md](docs/TINYLLM.md).
+
 ## PocketJS
 
 ![PocketJS apps on the nano: a counter, the home screen, Motion Lab and Notes](docs/images/pocketjs.png)

@@ -73,3 +73,6 @@ untether/artifacts/extra/Executables/*.hbapp
 !untether/artifacts/extra/Executables/JS Samples.hbapp
 !untether/artifacts/extra/Executables/Lap.hbapp
 untether/artifacts/extra/Startup/na-backup/
+
+# Tiny LLM model file, made from the pinned stories260K checkpoint (not committed)
+untether/artifacts/extra/Data/TinyLLM/

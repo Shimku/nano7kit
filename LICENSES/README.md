@@ -9,6 +9,7 @@ These are the upstream texts. See also NOTICE and CREDITS.md.
 | [Inter-OFL-1.1.txt](Inter-OFL-1.1.txt) | SIL OFL 1.1, The Inter Project Authors | pocket-nexus/pocketjs `6ca9f914` `assets/fonts/LICENSE.txt` |
 | [Font-Awesome-Free.txt](Font-Awesome-Free.txt) | Font Awesome Free 7.2.0 (see file) | Font Awesome 7.2.0 `LICENSE.txt` |
 | [dlmalloc-CC0.txt](dlmalloc-CC0.txt) | public domain / CC0, Doug Lea | malloc-2.8.6.c header |
+| [llama2.c-MIT.txt](llama2.c-MIT.txt) | MIT, Copyright (c) 2023 Andrej (Karpathy) | karpathy/llama2.c `350e04fe` `LICENSE`; Tiny LLM's engine follows it, and the stories260K weights (karpathy/tinyllamas) are MIT too |
 
 Inter OFL-1.1 is also next to the shipped font:
 

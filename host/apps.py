@@ -852,6 +852,10 @@ def _copy_port_data(ops, row: dict, expected: dict, wrote: list, already: list) 
         return
     files = data_files(row["name"])
     if not files:
+        if row["name"] == "Tiny LLM":
+            from .tinyllm import missing_help as tinyllm_help
+
+            raise Refused(f"Tiny LLM has no model file under {host_dir}. {tinyllm_help()}")
         if row.get("needs_rom") or row.get("needs_payload") or row.get("large_gl"):
             raise Refused(
                 f"{row['name']} has no staged data under {host_dir}. "

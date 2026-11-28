@@ -1,0 +1,15 @@
+Tiny LLM (nanoapps/apps/tinyllm) is nano7kit's own code, MIT (see LICENSE
+at the top of the repository).
+
+tllm.c follows the forward pass, sampler and BPE tokenizer of llama2.c by
+Andrej Karpathy, https://github.com/karpathy/llama2.c, MIT licence,
+Copyright (c) 2023 Andrej. The text is in LICENSES/llama2.c-MIT.txt. The
+code here is a rewrite for a soft-float Cortex-A5 (int8 weights, int8
+activations, fixed-point attention), not a copy of run.c.
+
+The model weights are not in this repository. They are the stories260K
+checkpoint and tok512 tokenizer from karpathy/tinyllamas on Hugging Face,
+https://huggingface.co/karpathy/tinyllamas, MIT licence, trained on the
+TinyStories dataset. host/tinyllm.py downloads them at a pinned commit,
+checks their SHA-256 sums and runs mkmodel.py on your computer to make
+/Apps/Data/TinyLLM/model.bin.

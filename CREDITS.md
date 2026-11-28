@@ -16,6 +16,7 @@ nano7kit is mostly integration work on top of these projects.
 | [PvZ-Portable](https://github.com/wszqkzqk/PvZ-Portable) | wszqkzqk | Plants vs. Zombies engine | LGPL-3.0 |
 | [ipod_theme](https://github.com/nfzerox/ipod_theme) | nfzerox | Optional theming (`./start theme`) | GPL-3.0 |
 | [LVGL](https://github.com/lvgl/lvgl) | LVGL contributors | Widgets for the NanoApps apps | MIT |
+| [tinyllamas](https://huggingface.co/karpathy/tinyllamas) stories260K | Andrej Karpathy | Weights and tokenizer for Tiny LLM, pinned at `0bd21da7` and checked by SHA-256; turned into an int8 model file on your computer | MIT |
 | [NanoApps 1.0 release](https://github.com/nfzerox/NanoApps/releases) | nfzerox | `NanoApps-2015-Model.ipsw` and `NanoApps-disk.zip`, checked by SHA-256, for the NanoApps base and `nabase flash`. Its firmware includes ninjaprawn's fix for restarts during music syncs | MIT (firmware inside is Apple's) |
 
 The Mario ports build on jnmartin84's Dreamcast ports and the n64decomp decompilations.
@@ -30,6 +31,7 @@ Credits for those are in nano7-untethered.
 | [PvZ-Portable](https://github.com/wszqkzqk/PvZ-Portable) changes | wszqkzqk, nano7kit | `games/pvz_portable` | LGPL-3.0 |
 | [Inter](https://rsms.me/inter/) | Rasmus Andersson | Font in the PocketJS Fonts sample | OFL-1.1 ([LICENSES/Inter-OFL-1.1.txt](LICENSES/Inter-OFL-1.1.txt); also `untether/artifacts/extra/Data/PocketJS/fonts/LICENSE.txt`) |
 | [Font Awesome Free](https://fontawesome.com) | Fonticons, Inc. | Home icons drawn from Font Awesome 7 Free Solid-900.otf | SIL OFL-1.1 (font), CC BY 4.0 (SVG/JS icons), MIT (code); [LICENSES/Font-Awesome-Free.txt](LICENSES/Font-Awesome-Free.txt) |
+| [llama2.c](https://github.com/karpathy/llama2.c) | Andrej Karpathy | Tiny LLM's inference engine (`nanoapps/apps/tinyllm/tllm.c`) follows its forward pass, sampler and tokenizer, rewritten for int8 and fixed point | MIT ([LICENSES/llama2.c-MIT.txt](LICENSES/llama2.c-MIT.txt)) |
 | Motion Lab studies | yui540 | Motion Lab in JS QuickJS (credit shown on screen) | as upstream |
 
 ## nano7kit's own work
@@ -45,3 +47,4 @@ Credits for those are in nano7-untethered.
 - memory changes to olievans123's Temple Run port, applied at build time
 - FAT32 conversion on a Mac, Disk Mode music sync and library restore
 - the NanoApps 1.0 base install (`host/nabase.py`) and `nabase flash` (`host/nabase_fw.py`)
+- Tiny LLM: the int8 and fixed-point inference engine, the model file format and the app

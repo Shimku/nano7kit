@@ -4,7 +4,8 @@ nano7kit licensing
 nano7kit's own code is MIT (see LICENSE). That covers host/, install,
 start, scripts/, tests/, docs/, pocketjs/, games/fruitninja/, the
 nano7kit apps under nanoapps/ (Lap, Free RAM, JS Hero, JS Samples,
-JS QuickJS, JS Hello) and the installer.
+JS QuickJS, JS Hello, Tiny LLM) and the installer. Tiny LLM's engine
+follows llama2.c (Andrej Karpathy, MIT; LICENSES/llama2.c-MIT.txt).
 
 Exceptions:
 
@@ -38,6 +39,8 @@ you install or build:
   PocketJS (pocket-nexus)          MIT
   Temple Run, Flappy Bird and Doodle Jump ports (olievans123), no licence
   stated, fetched only when you build that game
+  stories260K and tok512 (karpathy/tinyllamas), MIT, fetched when you
+  build Tiny LLM and turned into its model file on your computer
 
 nano7-untethered files are checked one by one against the sha256 list
 in upstream/lock.json.

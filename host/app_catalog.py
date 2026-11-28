@@ -151,7 +151,7 @@ CATEGORIES = {
     "cards": ("Chess", "Freecell", "Heads Up", "Mahjong", "Solitaire", "Holdem"),
     "graphics": ("Benchmark", "OpenGL", "Stress", "Widgets"),
     "diagnostic": ("BigLoad", "FPUTest", "GLBench", "Probe"),
-    "first-party": ("Lap", "JS Hello", "JS Hero", "JS Samples", "JS QuickJS", "Free RAM"),
+    "first-party": ("Lap", "JS Hello", "JS Hero", "JS Samples", "JS QuickJS", "Free RAM", "Tiny LLM"),
     "hardware-tested": ("Blocks", "Game Boy", "Probe"),
     "ports": (
         "Mario Kart",
@@ -191,6 +191,11 @@ AUTHORS = {
         "layer; dlmalloc by Doug Lea (CC0); your own PopCap PvZ GOTY files, not in git"
     ),
     "Lap": "nano7kit first-party (MIT); NanoApps SDK (MIT)",
+    "Tiny LLM": (
+        "nano7kit first-party (MIT); engine after karpathy/llama2.c (MIT); "
+        "stories260K weights from karpathy/tinyllamas (MIT), made into the model file "
+        "on your computer; NanoApps SDK (MIT)"
+    ),
     "Free RAM": "nano7kit first-party LVGL memory probe (MIT); NanoApps SDK (MIT)",
     "JS Hello": (
         "nano7kit first-party PocketJS HAL prototype (MIT); "
@@ -251,6 +256,10 @@ ALIASES = {
     "tictactoe": "Tictactoe",
     "tic-tac-toe": "Tictactoe",
     "lap": "Lap",
+    "tinyllm": "Tiny LLM",
+    "tiny-llm": "Tiny LLM",
+    "tiny llm": "Tiny LLM",
+    "llm": "Tiny LLM",
     "stopwatch": "Lap",
     "jshello": "JS Hello",
     "js-hello": "JS Hello",
@@ -353,6 +362,7 @@ _RISK_BY_NAME = {
     "Fruit Ninja": 6,
     "PvZ Portable": 6,
     "Lap": 1,
+    "Tiny LLM": 1,
     "JS Hello": 1,
     "JS Hero": 5,
     "JS Samples": 5,

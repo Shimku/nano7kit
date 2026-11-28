@@ -92,6 +92,12 @@ PORT_DATA = {
         "fat": "/Apps/Data/PvZ",
         "required": True,
     },
+    # Made on this computer from the pinned stories260K checkpoint (MIT).
+    "Tiny LLM": {
+        "host": "artifacts/extra/Data/TinyLLM",
+        "fat": "/Apps/Data/TinyLLM",
+        "required": True,
+    },
 }
 
 # PocketJS MicroTS apps (nano7g): RAW_SURFACE, but 1 to 2.2 MB with baked fonts, so slot B too.
@@ -289,6 +295,10 @@ def missing_help(name: str) -> str:
             "main.pak and properties/ as the payload; nothing from the game is in git. Sound effects, no "
             f"music. Large GL, so it goes on slot B. Check first: {PVZP_CMD} --plan. Then: {PVZP_CMD}"
         )
+    if name == "Tiny LLM":
+        from .tinyllm import missing_help as tinyllm_help
+
+        return tinyllm_help()
     return f"{name} is not built in this tree."
 
 
@@ -691,6 +701,12 @@ def prepare_for_add(
 
             build_pvzp(Path(payload))
         return {"name": name, "present": True, "built": payload is not None}
+    if name == "Tiny LLM":
+        from .tinyllm import prepare
+
+        prepare()
+        reset_catalog_cache()
+        return {"name": name, "present": True, "built": True}
     if not present:
         folder = row.get("folder") or ""
         if folder and (root() / "nanoapps" / "apps" / folder / "Makefile").is_file():
