@@ -23,9 +23,20 @@ PEBBLEOS_TITLE = "PebbleOS"
 BOARD = "nano7_emery"
 OVERLAY_MARK = ".nano7-overlay"
 
-# Known SDK / venv locations on this box; PATH is also searched.
+# Optional PebbleOS SDK toolchain in the home folder; PATH is also searched.
 SDK_ENV = Path.home() / "pebbleos-sdk-0.1.17" / "env.sh"
-VENV_PBL = Path("/workspace/pebbleos/.venv/bin")
+
+# Python packages the kernel build needs (pbl itself comes from the
+# fetched tree). Installed into build/pbl-venv by `./start pebbleos deps`.
+PBL_PACKAGES = (
+    "pillow", "freetype-py", "pypng", "svg.path", "bitarray", "polib",
+    "sh<2", "packaging", "PyYAML", "kconfiglib", "intelhex>=2.1,<3",
+    "pyelftools", "nanopb", "ninja", "cmake", "unicorn",
+)
+
+
+def venv_dir() -> Path:
+    return root() / "build" / "pbl-venv"
 
 
 def checkout() -> Path:
@@ -37,18 +48,54 @@ def kernel_build_dir() -> Path:
 
 
 def data_dir() -> Path:
-    return root() / "build" / "pebbleos-data"
+    """Staged /Apps/Data/PebbleOS tree. `./start nabase add PebbleOS` copies it."""
+    from .const import artifact
 
+    return artifact("artifacts/extra/Data/PebbleOS")
+
+
+def kernel_lib() -> Path:
+    return kernel_build_dir() / "libpebbleos.a"
+
+
+def overlay_fingerprint() -> str:
+    """Pinned commit plus a hash of the overlay, so overlay edits re-apply."""
+    import hashlib
+
+    app = root() / "nanoapps" / "apps" / "pebbleos"
+    h = hashlib.sha256()
+    files = [app / "apply_overlay.py"] + sorted(p for p in (app / "overlay").rglob("*") if p.is_file())
+    for f in files:
+        h.update(f.relative_to(app).as_posix().encode() + b"\0")
+        h.update(f.read_bytes())
+    return f"{PEBBLEOS_COMMIT} {h.hexdigest()[:16]}"
+
+
+
+def _local_mirror() -> Path | None:
+    """An existing PebbleOS clone to copy from instead of the network.
+
+    Set PEBBLEOS_MIRROR to its folder. It is only used when it holds the
+    pinned commit."""
+    env = os.environ.get("PEBBLEOS_MIRROR")
+    if not env:
+        return None
+    local = Path(env).expanduser()
+    if not (local / ".git").exists():
+        return None
+    probe = subprocess.run(
+        ["git", "-C", str(local), "cat-file", "-e", PEBBLEOS_COMMIT + "^{commit}"],
+        capture_output=True,
+    )
+    return local if probe.returncode == 0 else None
 
 
 def _ensure_submodules(dest: Path) -> None:
-    """Populate submodule trees from a local PebbleOS checkout when possible."""
-    import shutil
-
-    local = Path("/workspace/pebbleos")
+    """Populate the submodules: from PEBBLEOS_MIRROR if set, else with git."""
     cfg = dest / ".gitmodules"
     if not cfg.is_file():
         return
+    local = _local_mirror()
     paths = []
     for line in cfg.read_text().splitlines():
         line = line.strip()
@@ -56,18 +103,12 @@ def _ensure_submodules(dest: Path) -> None:
             paths.append(line.split("=", 1)[1].strip())
     missing = []
     for rel in paths:
-        src = local / rel
         dst = dest / rel
-        populated = dst.is_dir() and any(p.name != ".git" for p in dst.iterdir()) if dst.exists() else False
+        populated = dst.is_dir() and any(p.name != ".git" for p in dst.iterdir())
         if populated:
-            # Drop copied .git links; they point at another clone.
-            git = dst / ".git"
-            if git.is_dir():
-                shutil.rmtree(git)
-            elif git.is_file():
-                git.unlink()
             continue
-        if src.is_dir() and any(src.iterdir()):
+        src = local / rel if local is not None else None
+        if src is not None and src.is_dir() and any(src.iterdir()):
             if dst.exists():
                 shutil.rmtree(dst)
             print(f"+ copy submodule {rel}")
@@ -75,7 +116,7 @@ def _ensure_submodules(dest: Path) -> None:
         else:
             missing.append(rel)
     if missing:
-        cmd = ["git", "-C", str(dest), "submodule", "update", "--init", "--"] + missing
+        cmd = ["git", "-C", str(dest), "submodule", "update", "--init", "--depth", "1", "--"] + missing
         print("+", " ".join(cmd))
         subprocess.check_call(cmd)
 
@@ -83,7 +124,8 @@ def _ensure_submodules(dest: Path) -> None:
 def print_status() -> int:
     dest = checkout()
     present = (dest / ".git").is_dir() or (dest / "CMakeLists.txt").is_file()
-    lib = kernel_build_dir() / "libpebbleos.a"
+    lib = kernel_lib()
+    res = data_dir() / "flash" / "00.bin"
     print("PebbleOS hosted on this MKN52 (Helvetica NanoApps)")
     print("------------------------------------------------")
     print("Real PebbleOS, fetched at a pinned commit, hosted as one app.")
@@ -93,7 +135,8 @@ def print_status() -> int:
     print("  licence    " + PEBBLEOS_LICENSE + " (credited, not vendored)")
     print("  pinned     " + PEBBLEOS_COMMIT)
     print("  checkout   " + str(dest) + (" (present)" if present else " (fetched by ./start pebbleos fetch)"))
-    print("  kernel     " + str(lib) + (" (present)" if lib.is_file() else " (built by ./start pebbleos build)"))
+    print("  kernel     " + str(lib) + (" (present)" if lib.is_file() else " (built by ./start sdk build pebbleos)"))
+    print("  resources  " + str(res.parent) + (" (staged)" if res.is_file() else " (staged by the build)"))
     print("  app        nanoapps/apps/pebbleos")
     print("  screen     240x432, 200x228 Pebble panel centred")
     print("  buttons    Home=Back, Play/Pause=Select, Vol Up/Down=Up/Down")
@@ -102,7 +145,7 @@ def print_status() -> int:
     print("  flash      file-backed under /Apps/Data/PebbleOS")
     print()
     print("exact: ./start pebbleos fetch")
-    print("       ./start pebbleos build")
+    print("       ./start sdk build pebbleos")
     print("       ./start nabase add 'PebbleOS'")
     return 0
 
@@ -110,7 +153,7 @@ def print_status() -> int:
 def _apply_overlay(dest: Path) -> None:
     script = root() / "nanoapps" / "apps" / "pebbleos" / "apply_overlay.py"
     subprocess.check_call([sys.executable, str(script), str(dest)])
-    (dest / OVERLAY_MARK).write_text(PEBBLEOS_COMMIT + "\n")
+    (dest / OVERLAY_MARK).write_text(overlay_fingerprint() + "\n")
 
 
 def fetch(*, force: bool = False) -> Path:
@@ -128,14 +171,8 @@ def fetch(*, force: bool = False) -> Path:
         have_pin = False
     if not dest.is_dir():
         dest.parent.mkdir(parents=True, exist_ok=True)
-        local = Path("/workspace/pebbleos")
-        have_local = False
-        if (local / ".git").is_dir():
-            probe = subprocess.run(
-                ["git", "-C", str(local), "cat-file", "-e", PEBBLEOS_COMMIT + "^{commit}"],
-                capture_output=True,
-            )
-            have_local = probe.returncode == 0
+        local = _local_mirror()
+        have_local = local is not None
         if have_local:
             if dest.exists():
                 subprocess.check_call(["rm", "-rf", str(dest)])
@@ -160,7 +197,7 @@ def fetch(*, force: bool = False) -> Path:
     if head != PEBBLEOS_COMMIT:
         raise Refused(f"PebbleOS: got commit {head}, expected {PEBBLEOS_COMMIT}")
     mark = dest / OVERLAY_MARK
-    if force or not mark.is_file() or mark.read_text().strip() != PEBBLEOS_COMMIT:
+    if force or not mark.is_file() or mark.read_text().strip() != overlay_fingerprint():
         # Return the tree to the pin, then apply the overlay once.
         subprocess.check_call(["git", "-C", str(dest), "reset", "-q", "--hard", "HEAD"])
         subprocess.check_call(["git", "-C", str(dest), "clean", "-qfd", "-e", "build-nano7"])
@@ -172,11 +209,28 @@ def fetch(*, force: bool = False) -> Path:
     return dest
 
 
+def deps() -> Path:
+    """Create build/pbl-venv with pbl, ninja and cmake for the kernel build."""
+    dest = fetch()
+    venv = venv_dir()
+    py = venv / "bin" / "python3"
+    if not py.is_file():
+        print(f"+ python3 -m venv {venv}")
+        subprocess.check_call([sys.executable, "-m", "venv", str(venv)])
+    pip = [str(py), "-m", "pip", "install", "-q"]
+    print("+ pip install " + " ".join(PBL_PACKAGES))
+    subprocess.check_call(pip + list(PBL_PACKAGES))
+    print("+ pip install tools/libs/pbl-cli")
+    subprocess.check_call(pip + [str(dest / "tools" / "libs" / "pbl-cli")])
+    return venv
+
+
 def _pbl_env() -> dict[str, str]:
     env = os.environ.copy()
     paths = []
-    if VENV_PBL.is_dir():
-        paths.append(str(VENV_PBL))
+    vbin = venv_dir() / "bin"
+    if vbin.is_dir():
+        paths.append(str(vbin))
     arm = Path.home() / "pebbleos-sdk-0.1.17" / "arm-none-eabi" / "bin"
     if arm.is_dir():
         paths.append(str(arm))
@@ -193,7 +247,12 @@ def _run(argv: list[str], cwd: Path) -> None:
 
 
 def stage_resources(pbpack: Path, dest: Path) -> None:
-    """Write 64 KiB flash banks for the resource partition at offset 0."""
+    """Write 64 KiB flash banks for the resource partition at offset 0.
+
+    Only the resource banks are staged. The file system banks (2 MiB and
+    up) are the user's watch state and are never written from here."""
+    if dest.is_dir():
+        shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
     data = pbpack.read_bytes()
     bank = 0x10000
@@ -204,13 +263,22 @@ def stage_resources(pbpack: Path, dest: Path) -> None:
         if len(chunk) < bank:
             chunk = chunk + b"\xff" * (bank - len(chunk))
         (dest / f"{i:02x}.bin").write_bytes(chunk)
-    # Keep a copy of the pbpack next to the banks.
-    shutil.copy2(pbpack, dest.parent / "system_resources.pbpack")
+    # Keep a copy of the pbpack on this computer, not on the iPod.
+    shutil.copy2(pbpack, kernel_build_dir() / "nano7-system_resources.pbpack")
+    stale = dest.parent / "system_resources.pbpack"
+    if stale.is_file():
+        stale.unlink()
     print(f"Staged {n} resource flash banks in {dest}")
 
 
 def configure_kernel() -> Path:
     dest = fetch()
+    if not (venv_dir() / "bin" / "pbl").is_file() and not shutil.which("pbl"):
+        deps()
+    env = _pbl_env()
+    for tool in ("pbl", "ninja", "cmake", "arm-none-eabi-gcc"):
+        if not shutil.which(tool, path=env["PATH"]):
+            raise Refused(f"PebbleOS kernel build needs {tool} (./start pebbleos deps, ./start deps)")
     bdir = kernel_build_dir()
     _run(["pbl", "configure", "-b", str(bdir), "--board", BOARD, "--variant", "normal"], cwd=dest)
     return bdir
@@ -232,13 +300,35 @@ def build_kernel() -> Path:
     return lib
 
 
+def ensure_kernel() -> Path:
+    """Fetch and build the kernel when it is missing or the overlay changed.
+
+    Called by `./start sdk build pebbleos`, so that build never ships the
+    shim alone."""
+    lib = kernel_lib()
+    mark = checkout() / OVERLAY_MARK
+    fresh = lib.is_file() and mark.is_file() and mark.read_text().strip() == overlay_fingerprint()
+    if not fresh or not (data_dir() / "flash" / "00.bin").is_file():
+        return build_kernel()
+    return lib
+
+
+KERNEL_MARKERS = (b"pbl_nano_kernel_start", b"pbl_posix_start")
+
+
+def check_hbapp(hbapp: Path) -> None:
+    """Refuse an .hbapp that does not carry the real kernel."""
+    elf = hbapp.with_name(hbapp.stem + ".reloc.elf")
+    blob = elf.read_bytes() if elf.is_file() else b""
+    missing = [m.decode() for m in KERNEL_MARKERS if m not in blob]
+    if missing:
+        raise Refused(f"{hbapp} does not contain the PebbleOS kernel ({', '.join(missing)} missing)")
+    if hbapp.stat().st_size < 400 * 1024:
+        raise Refused(f"{hbapp} is too small to hold the PebbleOS kernel")
+
+
 def build() -> dict:
     from .sdkapp import build_app
 
-    build_kernel()
     result = build_app("pebbleos")
-    print("On a NanoApps-base iPod (Disk Mode):")
-    print("  ./start nabase add 'PebbleOS'")
-    print("  also copy build/pebbleos-data/ into /Apps/Data/PebbleOS/")
-    print("Do not use ./start apps add on that base.")
     return result

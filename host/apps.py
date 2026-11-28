@@ -852,6 +852,11 @@ def _copy_port_data(ops, row: dict, expected: dict, wrote: list, already: list) 
         return
     files = data_files(row["name"])
     if not files:
+        if row["name"] == "PebbleOS":
+            raise Refused(
+                f"PebbleOS has no staged resources under {host_dir}. "
+                "Run ./start sdk build pebbleos first."
+            )
         if row.get("needs_rom") or row.get("needs_payload") or row.get("large_gl"):
             raise Refused(
                 f"{row['name']} has no staged data under {host_dir}. "

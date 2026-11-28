@@ -7,8 +7,9 @@ file system, clock and buttons are the same hooks the NanoApps SDK uses
 on the nano 7G. Writes stay under /Apps/Data/PebbleOS/.
 
 Usage:
-  emu.py APP.hbapp OUTDIR [script] [--os-blocks 2.0,1.0,0.9] [--fs-dir DIR]
-  script lines: `frames N`, `shot NAME`
+  emu.py APP.hbapp OUTDIR [script] [--os-blocks 2.0,1.0,0.9] [--fs-dir DIR] [--save-fs DIR]
+  script lines: a frame count, `shot NAME`, `press KEY`, `release KEY`,
+  `click KEY` (KEY is back, up, select or down)
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ from pocketjs.emu import (  # noqa: E402
 )
 
 DATA_PREFIX = "/Apps/Data/PebbleOS/"
+AUX_OFFSET = 24  # hb_shared.aux_block: magic, version, touch[4]
 
 
 class PebbleEmu(Emu):
@@ -107,7 +109,12 @@ def classify_frame(raw: bytes) -> str:
         # Look for the red "NOT ENOUGH MEMORY" ink (0xff5555).
         if bytes((0x55, 0x55, 0xFF, 0xFF)) in raw:
             return "low-memory"
-        return "low-memory-plain"
+        # Amber 0xffaa00: no resources. Blue 0x55aaff: kernel stopped.
+        if bytes((0x00, 0xAA, 0xFF, 0xFF)) in raw:
+            return "no-resources"
+        if bytes((0xFF, 0xAA, 0x55, 0xFF)) in raw:
+            return "stopped"
+        return "message-plain"
     # Stub status fill is 0x0a0a0a; orange title 0xff4700.
     if bg == bytes((0x0A, 0x0A, 0x0A, 0xFF)) and bytes((0x00, 0x47, 0xFF, 0xFF)) in raw:
         return "stub"
@@ -144,6 +151,7 @@ def main(argv=None) -> int:
         help="OS free blocks in MiB, for example 2.0,1.0,0.9 (3.9 free / 2.0 largest)",
     )
     ap.add_argument("--fs-dir", default=None, help="host tree copied to /Apps/Data/PebbleOS/")
+    ap.add_argument("--save-fs", default=None, help="write /Apps/Data/PebbleOS/ back to this host folder")
     ap.add_argument("--heartbeat-us", type=int, default=20000)
     a = ap.parse_args(argv)
 
@@ -183,6 +191,11 @@ def main(argv=None) -> int:
             print(f"{words[1]}: frame {frames} ({kind})")
             (out / f"{words[1]}.kind").write_text(kind + "\n")
             continue
+        if words[0] == "relaunch":
+            # The app is opened again without the launcher freeing its
+            # aux block first (the worst case): payload_entry runs again.
+            frame_fn = emu.call(BASE + emu.entry, [0, FB, W, H, SHARED])
+            continue
         if words[0] == "press":
             emu.button(words[1], True)
             continue
@@ -204,12 +217,25 @@ def main(argv=None) -> int:
             emu.call(frame_fn, [])
             frames += 1
 
+    if a.save_fs:
+        import shutil as _sh
+        dest = Path(a.save_fs)
+        if dest.exists():
+            _sh.rmtree(dest)
+        dest.mkdir(parents=True)
+        for path, body in emu.data.items():
+            if path.startswith(DATA_PREFIX):
+                f = dest / path[len(DATA_PREFIX):]
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_bytes(bytes(body))
     if emu.writes or emu.data:
         print(
             f"data.fs: {emu.writes} files written ({emu.bytes_written:,} bytes); "
             f"{len(emu.data)} paths under {DATA_PREFIX}"
         )
     print(f"OS heap: blocks held {len(emu.heap.blocks)} ({sum(emu.heap.blocks.values()):,} bytes)")
+    aux = struct.unpack("<I", bytes(emu.uc.mem_read(SHARED + AUX_OFFSET, 4)))[0]
+    print(f"aux block: {'set' if aux else 'none'}")
     return 0
 
 

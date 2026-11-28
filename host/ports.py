@@ -92,11 +92,21 @@ PORT_DATA = {
         "fat": "/Apps/Data/PvZ",
         "required": True,
     },
+    # Resource flash banks built from the fetched PebbleOS tree. Only the
+    # resource banks are staged; the watch's own file system banks on the
+    # iPod are left alone.
+    "PebbleOS": {
+        "host": "artifacts/extra/Data/PebbleOS",
+        "fat": "/Apps/Data/PebbleOS",
+        "required": True,
+    },
 }
 
 # PocketJS MicroTS apps (nano7g): RAW_SURFACE, but 1 to 2.2 MB with baked fonts, so slot B too.
 POCKETJS_APPS = frozenset({"JS Hero", "JS Samples", "JS QuickJS"})
-LARGE_GL = frozenset({"Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "PvZ Portable"}) | POCKETJS_APPS
+# PebbleOS: RAW_SURFACE with the kernel linked in, about 0.85 MB, so slot B too.
+LARGE_GL = (frozenset({"Mario 64", "Mario Kart", "Temple Run", "Fruit Ninja", "PvZ Portable", "PebbleOS"})
+            | POCKETJS_APPS)
 NEEDS_PAYLOAD = frozenset({"Temple Run", "Flappy Bird", "Doodle Jump", "Fruit Ninja", "PvZ Portable"})
 NEEDS_ROM = frozenset({"Mario 64", "Mario Kart"})
 
@@ -288,6 +298,11 @@ def missing_help(name: str) -> str:
             "with nano7kit's device layer (games/pvz_portable). Pass the folder holding your own PvZ GOTY "
             "main.pak and properties/ as the payload; nothing from the game is in git. Sound effects, no "
             f"music. Large GL, so it goes on slot B. Check first: {PVZP_CMD} --plan. Then: {PVZP_CMD}"
+        )
+    if name == "PebbleOS":
+        return (
+            "PebbleOS is built on this computer from the pinned coredevices/PebbleOS "
+            "tree: ./start pebbleos fetch, then ./start sdk build pebbleos."
         )
     return f"{name} is not built in this tree."
 

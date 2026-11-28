@@ -1,7 +1,8 @@
 /* Relocatable link of the hosted PebbleOS NanoApps image (base 0).
  * Iterable sections keep their names so GNU ld defines __start_i_* /
  * __stop_i_*. ARM unwinder tables are dropped: the device layout does
- * not use a host libc unwinder.
+ * not use a host libc unwinder. Writable data after the iterable sections
+ * is snapshotted on first launch (see __pristine_start__ below).
  */
 ENTRY(payload_entry)
 SECTIONS {
@@ -10,7 +11,8 @@ SECTIONS {
         *(.text.entry)
         *(.text*)
         *(.rodata*)
-        *(.data*)
+        . = ALIGN(16);
+        __snap_start__ = .;
     }
     i_analytics : {
         PROVIDE(__start_i_analytics = .);
@@ -132,12 +134,25 @@ SECTIONS {
         KEEP(*(i_usbd_listeners))
         PROVIDE(__stop_i_usbd_listeners = .);
     }
+    .data : {
+        *(.data*)
+        . = ALIGN(16);
+        __snap_end__ = .;
+    }
     .bss : {
         __bss_start__ = .;
         *(.bss*)
         *(COMMON)
         . = ALIGN(8);
         __bss_end__ = .;
+        /* A copy of everything from __snap_start__ to __snap_end__ (the
+         * iterable sections and .data), taken on the first launch. It sits
+         * after __bss_end__ so the per-launch .bss clear leaves it alone.
+         * If the launcher reuses the loaded image, the app puts .data back
+         * from here before starting the kernel again. */
+        __pristine_start__ = .;
+        . += (__snap_end__ - __snap_start__);
+        __pristine_end__ = .;
     }
     /DISCARD/ : {
         *(.ARM.exidx*)

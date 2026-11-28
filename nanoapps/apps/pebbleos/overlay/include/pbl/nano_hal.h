@@ -1,8 +1,9 @@
-/* SPDX-FileCopyrightText: 2026 Nikita Shimkus */
+/* SPDX-FileCopyrightText: 2026 nano7kit contributors */
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -25,6 +26,8 @@ void pbl_nano_memory_init(void *base, size_t size);
 
 int pbl_nano_kernel_start(void);
 void pbl_nano_kernel_run(void);
+/* True once the kernel asked for a reboot; the host stops running it. */
+bool pbl_nano_wants_reboot(void);
 void pbl_nano_timer_poll(void);
 void pbl_nano_button(int key, int down);
 const uint16_t *pbl_nano_fb_rgb565(void);

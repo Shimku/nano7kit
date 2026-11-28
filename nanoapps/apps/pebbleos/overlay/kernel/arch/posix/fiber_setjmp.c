@@ -1,4 +1,4 @@
-/* SPDX-FileCopyrightText: 2026 Nikita Shimkus */
+/* SPDX-FileCopyrightText: 2026 nano7kit contributors */
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /* Single-thread fiber backend for a hosted NanoApps build. Kernel threads
@@ -128,7 +128,7 @@ static void prv_init_thunk(void) {
    * longjmp. s_initing and pbl_cur are not stable: the boot fiber is
    * not a pbl_thread, and later thread creates overwrite s_initing. */
   volatile struct posix_thread *pt = s_initing;
-  if (nano_setjmp(&pt->env) == 0) {
+  if (nano_setjmp((struct nano_jmp *)&pt->env) == 0) {
     nano_longjmp(&s_init_parent, 1);
   }
   pt->entry((void *)pt->arg);

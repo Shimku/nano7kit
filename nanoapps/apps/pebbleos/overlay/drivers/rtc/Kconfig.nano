@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2026 Nikita Shimkus
+# SPDX-FileCopyrightText: 2026 nano7kit contributors
 # SPDX-License-Identifier: Apache-2.0
 
 config RTC_NANO

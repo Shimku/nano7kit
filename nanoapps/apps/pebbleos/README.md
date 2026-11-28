@@ -20,34 +20,30 @@ The app must fit and run under both memory levels the launcher sees: about
 largest block is too small, it shows a clean NOT ENOUGH MEMORY screen and
 does not start the kernel.
 
-The real kernel is linked (setjmp fibers on one NanoApps thread, a
-framebuffer and button HAL, file-backed flash under `/Apps/Data/PebbleOS`).
-A Unicorn run of the device `.hbapp` covers: no host libc unwinder,
-`mkrelocapp` layout, Cortex-A5 VFPv4-D16, both memory levels, no save
-and a corrupt save, a clean NOT ENOUGH MEMORY screen, and a 240x432
-TicToc watchface still (`screenshots/watchface-tictoc-240x432.png`).
-That is a host dry run, not a pass on an iPod.
+Files here:
 
-## Build and install (friend-pod, Disk Mode)
+- `pebbleos.c`: the NanoApps side (screen, buttons, memory check, the plain
+  error screens, putting .data back on a relaunch)
+- `host_hal.c`: time, the file-backed flash under `/Apps/Data/PebbleOS`, and
+  starting the kernel
+- `overlay/`, `apply_overlay.py`: the nano7_emery board and the patches
+  applied to the fetched PebbleOS tree
+- `pebbleos.ld`: the relocatable link for `mkrelocapp`
+- `emu.py`: the Unicorn run used by `tests/test_pebbleos.py`
+
+Details, test coverage and what is not known yet: `docs/PEBBLEOS.md`.
+The emulator stills are in `screenshots/`. That is a host dry run, not a
+pass on an iPod.
+
+## Build and install (NanoApps base, Disk Mode)
 
 ```
+./start pebbleos fetch
 ./start sdk build pebbleos
 ./start nabase add "PebbleOS"
 ```
 
-Or `./start pebbleos build`, which fetches the pinned PebbleOS tree and
-then runs the same SDK build. On a NanoApps-base iPod, only use
+`./start sdk build pebbleos` fetches the pinned tree if needed and always
+links the real kernel. `nabase add` also copies the resource banks to
+`/Apps/Data/PebbleOS/flash`. On a NanoApps-base iPod, only use
 `./start nabase add`, not `./start apps add`.
-
-## Build
-
-```
-./start pebbleos fetch
-./start pebbleos build
-./start nabase add "PebbleOS"
-```
-
-`./start pebbleos build` links the real PebbleOS kernel (Cortex-A5
-VFPv4-D16, `mkrelocapp` `.hbapp`). Copy `build/pebbleos-data/` to
-`/Apps/Data/PebbleOS/` so the first boot has system resources. Do not
-use `./start apps add` on a NanoApps base.

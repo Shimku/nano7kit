@@ -145,6 +145,11 @@ def build_app(folder: str, *, quiet: bool = False) -> dict:
         raise Refused(f"nanoapps/apps/{name} is missing (./start sdk new {name})")
     if not which("arm-none-eabi-gcc"):
         raise Refused("arm-none-eabi-gcc is missing (run ./start deps)")
+    if name == "pebbleos":
+        # The real kernel has to be in the image, never the shim alone.
+        from .pebbleos import ensure_kernel
+
+        ensure_kernel()
     log = root() / "build" / f"sdk-{name}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     if not quiet:
@@ -159,6 +164,10 @@ def build_app(folder: str, *, quiet: bool = False) -> dict:
     if rc != 0 or not hbapp.is_file():
         tail = log.read_text(encoding="utf-8", errors="replace")[-2000:]
         raise Refused(f"sdk build {name} failed; see {log}\n{tail}")
+    if name == "pebbleos":
+        from .pebbleos import check_hbapp
+
+        check_hbapp(hbapp)
     reset_catalog_cache()
     if quiet:
         import contextlib
@@ -171,9 +180,14 @@ def build_app(folder: str, *, quiet: bool = False) -> dict:
     info = budget_for(path=hbapp, name=staged.get("title"))
     print(f"  hbapp  {hbapp}  {hbapp.stat().st_size} bytes")
     print(f"  slot   {info['slot']}  {info['advice']}")
-    print("Disk Mode, one extra per reboot:")
     title = staged.get("title") or name
     quoted = f"'{title}'" if " " in str(title) else title
+    if name == "pebbleos":
+        print("On a NanoApps-base iPod (Disk Mode):")
+        print(f"  ./start nabase add {quoted}")
+        print("  (also copies the PebbleOS resources to /Apps/Data/PebbleOS)")
+        return {"folder": name, "hbapp": str(hbapp), "staged": staged, "budget": info}
+    print("Disk Mode, one extra per reboot:")
     print(f"  ./start apps add {quoted}")
     return {"folder": name, "hbapp": str(hbapp), "staged": staged, "budget": info}
 

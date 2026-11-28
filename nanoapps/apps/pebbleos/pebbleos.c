@@ -1,4 +1,4 @@
-/* SPDX-FileCopyrightText: 2026 Nikita Shimkus */
+/* SPDX-FileCopyrightText: 2026 nano7kit contributors */
 /* SPDX-License-Identifier: MIT */
 
 /*
@@ -18,9 +18,12 @@
  * heavy is allocated.
  *
  * The real PebbleOS kernel is fetched at build time and linked through
- * pebbleos_host_*. If the library is missing, the panel shows a status
- * screen so the host, buttons and memory check can still be tested.
+ * pebbleos_host_*. ./start sdk build pebbleos always links it; the status
+ * screen below is only for a bare `make` without the kernel library.
+ * Missing resources and a stopped kernel get their own plain screens.
  */
+#include <string.h>
+
 #include "hb_raw_surface.h"
 #include "hb_sdk.h"
 #include "hb_heap.h"
@@ -29,16 +32,18 @@
 #define SCREEN_W 240
 #define SCREEN_H 432
 
-/* Tight nano (music on, more apps): about 3.9 MB free, 2 MB largest.
- * Until the hosted kernel is linked, the shim itself is small; keep a
- * modest floor so a badly fragmented heap still gets a clean screen. */
-/* Kernel heap (384 KiB) plus a 64 KiB flash bank and a little slack. */
+/* The loader has already placed the image (code, and .bss with the 64 KiB
+ * flash bank and the fiber stacks). At run time only the 384 KiB kernel
+ * heap comes from the OS heap. Ask for 512 KiB so the OS keeps a little
+ * room for itself. */
 #define PBL_NEED_LARGEST (512u * 1024u)
 
 static uint32_t *s_fb;
 static int s_w, s_h;
 static uint32_t s_free, s_largest;
 static int s_low_mem;
+static int s_no_res;
+static int s_stopped;
 static int s_host_on;
 static int s_prev_btn[4];
 static int s_dirty = 1;
@@ -111,18 +116,44 @@ static void draw_low_memory(void)
     char *o;
     fill(0x101418);
     text(16, 80, "PEBBLEOS", 3, 0xffffff);
-    text(16, 130, "NOT ENOUGH MEMORY", 2, 0xff5555);
+    text(16, 130, "NOT ENOUGH", 2, 0xff5555);
+    text(16, 152, "MEMORY", 2, 0xff5555);
     o = put_s(line, "FREE ");
     o = put_u(o, s_free / 1024u);
     o = put_s(o, " KB");
-    text(16, 180, line, 2, 0xd0d4d8);
-    o = put_s(line, "LARGEST ");
+    text(16, 190, line, 2, 0xd0d4d8);
+    o = put_s(line, "BLOCK ");
     o = put_u(o, s_largest / 1024u);
     o = put_s(o, " KB");
-    text(16, 208, line, 2, 0xd0d4d8);
-    text(16, 260, "PAUSE MUSIC", 2, 0xe8c547);
-    text(16, 288, "OR CLOSE APPS", 2, 0xe8c547);
-    text(16, 340, "THEN OPEN AGAIN", 1, 0x8a93a8);
+    text(16, 218, line, 2, 0xd0d4d8);
+    text(16, 270, "PAUSE MUSIC", 2, 0xe8c547);
+    text(16, 298, "OR CLOSE APPS", 2, 0xe8c547);
+    text(16, 350, "THEN OPEN AGAIN", 1, 0x8a93a8);
+}
+
+/* Plain screens for when the kernel cannot run. The title colour tells
+ * the tests which one it is. */
+static void draw_message(const char *title, uint32_t ink, const char *l1, const char *l2,
+                         const char *l3)
+{
+    fill(0x101418);
+    text(16, 80, "PEBBLEOS", 3, 0xffffff);
+    text(16, 130, title, 2, ink);
+    text(16, 200, l1, 2, 0xd0d4d8);
+    text(16, 228, l2, 2, 0xd0d4d8);
+    text(16, 290, l3, 1, 0x8a93a8);
+}
+
+static void draw_no_resources(void)
+{
+    draw_message("NO RESOURCES", 0xffaa00, "COPY THEM IN", "FROM THE MAC",
+                 "./start nabase add PebbleOS");
+}
+
+static void draw_stopped(void)
+{
+    draw_message("STOPPED", 0x55aaff, "PRESS HOME", "TO LEAVE",
+                 "THEN OPEN IT AGAIN");
 }
 
 static void blit_host_fb(void)
@@ -180,8 +211,27 @@ static void poll_buttons(void)
     }
 }
 
+/* The launcher can open the app again in the same loaded image (it keeps
+ * arenas for a quick relaunch). .bss is cleared on every launch, but .data
+ * is not, and the kernel changes it while it runs. Keep a copy from the
+ * first launch and put it back on later ones, so the kernel always starts
+ * from the state it was linked with. */
+extern char __snap_start__[], __snap_end__[], __pristine_start__[];
+static volatile uint32_t s_launched __attribute__((section(".data.pebbleos_launched"))) = 0;
+
+static void restore_data(void)
+{
+    uint32_t n = (uint32_t)(__snap_end__ - __snap_start__);
+    if (s_launched)
+        memcpy(__snap_start__, __pristine_start__, n);
+    else
+        memcpy(__pristine_start__, __snap_start__, n);
+    s_launched = 1;
+}
+
 void hb_raw_init(int w, int h)
 {
+    restore_data();
     s_fb = hb_raw_fb();
     s_w = w;
     s_h = h;
@@ -192,12 +242,24 @@ void hb_raw_init(int w, int h)
         draw_low_memory();
         return;
     }
-    if (pebbleos_host_available())
-        s_host_on = pebbleos_host_start();
-    if (!s_host_on && pebbleos_host_available()) {
-        s_low_mem = 1;
-        draw_low_memory();
+    if (pebbleos_host_available() && !pebbleos_host_resources_ok()) {
+        s_no_res = 1;
+        draw_no_resources();
         return;
+    }
+    if (pebbleos_host_available()) {
+        int rc = pebbleos_host_start();
+        s_host_on = (rc > 0);
+        if (rc < 0) {
+            s_stopped = 1;
+            draw_stopped();
+            return;
+        }
+        if (rc == 0) {
+            s_low_mem = 1;
+            draw_low_memory();
+            return;
+        }
     }
     draw_status();
 }
@@ -205,11 +267,16 @@ void hb_raw_init(int w, int h)
 void hb_raw_frame(const hb_spoint_t *t)
 {
     (void)t;
-    if (s_low_mem)
+    if (s_low_mem || s_no_res || s_stopped)
         return;
     poll_buttons();
     if (s_host_on) {
         pebbleos_host_tick();
+        if (pebbleos_host_stopped()) {
+            s_stopped = 1;
+            draw_stopped();
+            return;
+        }
         blit_host_fb();
         return;
     }

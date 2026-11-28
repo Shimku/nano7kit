@@ -1068,11 +1068,14 @@ def cmd_pocketjs(args) -> int:
 
 
 def cmd_pebbleos(args) -> int:
-    from .pebbleos import build, fetch, print_status
+    from .pebbleos import build, deps, fetch, print_status
 
     sub = getattr(args, "pebbleos_cmd", None) or "status"
     if sub == "status":
         return print_status()
+    if sub == "deps":
+        deps()
+        return 0
     if sub == "fetch":
         fetch(force=bool(getattr(args, "force", False)))
         return 0
@@ -2578,6 +2581,7 @@ def build_parser() -> argparse.ArgumentParser:
     pbl_sub.add_parser("status")
     pbl_f = pbl_sub.add_parser("fetch", help="fetch coredevices/PebbleOS at the pinned commit")
     pbl_f.add_argument("--force", action="store_true")
+    pbl_sub.add_parser("deps", help="python tools for the kernel build, in build/pbl-venv")
     pbl_sub.add_parser("build", help="fetch if needed, then ./start sdk build pebbleos")
 
     res = sub.add_parser(
