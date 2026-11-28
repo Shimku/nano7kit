@@ -31,6 +31,7 @@ Credits for those are in nano7-untethered.
 | [Inter](https://rsms.me/inter/) | Rasmus Andersson | Font in the PocketJS Fonts sample | OFL-1.1 ([LICENSES/Inter-OFL-1.1.txt](LICENSES/Inter-OFL-1.1.txt); also `untether/artifacts/extra/Data/PocketJS/fonts/LICENSE.txt`) |
 | [Font Awesome Free](https://fontawesome.com) | Fonticons, Inc. | Home icons drawn from Font Awesome 7 Free Solid-900.otf | SIL OFL-1.1 (font), CC BY 4.0 (SVG/JS icons), MIT (code); [LICENSES/Font-Awesome-Free.txt](LICENSES/Font-Awesome-Free.txt) |
 | Motion Lab studies | yui540 | Motion Lab in JS QuickJS (credit shown on screen) | as upstream |
+| [PebbleOS](https://github.com/coredevices/PebbleOS) | Core Devices LLC and contributors | Hosted as a NanoApps app (`nanoapps/apps/pebbleos`); fetched at a pinned commit, not vendored | Apache-2.0 |
 
 ## nano7kit's own work
 
@@ -40,6 +41,7 @@ Credits for those are in nano7-untethered.
   is read on refresh, and only re-reading the catalog after USB marked the disk
   dirty) and `.nanoapp` packaging for Paint and Free RAM
 - the PocketJS nano 7G target, JS QuickJS, JS Hero, JS Samples and Free RAM
+- the PebbleOS host shim (the kernel is fetched at build time)
 - the PvZ Portable port and the Fruit Ninja recompile (the approach follows
   olievans123's Temple Run port; none of its code is used)
 - memory changes to olievans123's Temple Run port, applied at build time

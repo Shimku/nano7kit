@@ -1,0 +1,7 @@
+PebbleOS is Apache License 2.0 (Core Devices LLC and contributors).
+This folder is the NanoApps host shim (MIT, same as other first-party
+nano7kit apps). It fetches PebbleOS at build time and does not vendor
+that tree. Keep the Apache-2.0 NOTICE from the fetched checkout when
+shipping a build that includes it.
+
+  https://github.com/coredevices/PebbleOS

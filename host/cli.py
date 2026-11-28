@@ -1067,6 +1067,22 @@ def cmd_pocketjs(args) -> int:
     raise Refused(f"unknown pocketjs command {sub}")
 
 
+def cmd_pebbleos(args) -> int:
+    from .pebbleos import build, fetch, print_status
+
+    sub = getattr(args, "pebbleos_cmd", None) or "status"
+    if sub == "status":
+        return print_status()
+    if sub == "fetch":
+        fetch(force=bool(getattr(args, "force", False)))
+        return 0
+    if sub == "build":
+        fetch()
+        build()
+        return 0
+    raise Refused(f"unknown pebbleos command {sub}")
+
+
 
 def cmd_resident(args) -> int:
     """Disk Mode install/restore of the NanoApps-1.0-based heavy resident."""
@@ -2554,6 +2570,15 @@ def build_parser() -> argparse.ArgumentParser:
     pj_p.add_argument("--watch", action="store_true")
     pj_l = pj_sub.add_parser("log", help="paste-able PocketJS log: /Apps/Data/PocketJS/logs/*.txt and /Apps/Startup/lasttrace.bin")
     pj_l.add_argument("file", nargs="?", default=None, help="a copied log .txt or lasttrace.bin (default: read the iPod)")
+    pbl = sub.add_parser(
+        "pebbleos",
+        help="PebbleOS (Apache-2.0): hosted as one NanoApps app; fetched at a pinned commit, not vendored",
+    )
+    pbl_sub = pbl.add_subparsers(dest="pebbleos_cmd")
+    pbl_sub.add_parser("status")
+    pbl_f = pbl_sub.add_parser("fetch", help="fetch coredevices/PebbleOS at the pinned commit")
+    pbl_f.add_argument("--force", action="store_true")
+    pbl_sub.add_parser("build", help="fetch if needed, then ./start sdk build pebbleos")
 
     res = sub.add_parser(
         "resident",
@@ -3042,6 +3067,7 @@ def main(argv=None) -> int:
             "port": cmd_port,
             "sdk": cmd_sdk,
             "pocketjs": cmd_pocketjs,
+            "pebbleos": cmd_pebbleos,
             "resident": cmd_resident,
             "package": cmd_package,
             "nanoapp": cmd_nanoapp,
